@@ -24,6 +24,9 @@ can reject excessive RGBA change or insufficient silhouette overlap. Accepted
 measurements are embedded in `visual-projection.json`, making the decision
 auditable and reproducible without floating-point tolerance drift.
 
+Authored material, normal, depth, emissive, effects, and collision channels use
+the typed validation and package contracts in `CHANNEL_MAP_ARCHITECTURE.md`.
+
 `compile_sprite_sheet` composes trimming, packing, alpha/outline mask generation,
 and canonical metadata. The visual package overload publishes its atlas and
 masks as PNG plus `atlas.json` inside the same recoverable staging transaction

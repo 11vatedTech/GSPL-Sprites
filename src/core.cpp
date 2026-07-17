@@ -282,21 +282,21 @@ std::string render_svg(const SpriteIr& ir) {
   return out.str();
 }
 
-static void build_package_internal(const SpriteSeed& seed, std::span<const FrameSource> frames, const SpriteSheetOptions& options, std::string_view visual_metadata, const std::filesystem::path& output);
+static void build_package_internal(const SpriteSeed& seed, std::span<const FrameSource> frames, const SpriteSheetOptions& options, std::string_view visual_metadata, std::span<const ChannelMap> channel_maps, std::string_view channel_metadata, const std::filesystem::path& output);
 
 void build_package(const SpriteSeed& seed, const std::filesystem::path& output) {
-  build_package_internal(seed, {}, {}, {}, output);
+  build_package_internal(seed, {}, {}, {}, {}, {}, output);
 }
 
 void build_package(const SpriteSeed& seed, std::span<const FrameSource> frames, const SpriteSheetOptions& options, const std::filesystem::path& output) {
-  build_package_internal(seed, frames, options, {}, output);
+  build_package_internal(seed, frames, options, {}, {}, {}, output);
 }
 
 void build_package(const SpriteSeed& seed, const AuthoredVisualSet& visual_set, const std::filesystem::path& output) {
-  if(visual_set.canonical_metadata.empty())throw std::invalid_argument("authored visual set lacks canonical projection metadata");build_package_internal(seed,visual_set.frames,visual_set.sheet,visual_set.canonical_metadata,output);
+  if(visual_set.canonical_metadata.empty()||visual_set.canonical_channel_metadata.empty())throw std::invalid_argument("authored visual set lacks canonical projection metadata");build_package_internal(seed,visual_set.frames,visual_set.sheet,visual_set.canonical_metadata,visual_set.channel_maps,visual_set.canonical_channel_metadata,output);
 }
 
-static void build_package_internal(const SpriteSeed& seed, std::span<const FrameSource> frames, const SpriteSheetOptions& options, std::string_view visual_metadata, const std::filesystem::path& output) {
+static void build_package_internal(const SpriteSeed& seed, std::span<const FrameSource> frames, const SpriteSheetOptions& options, std::string_view visual_metadata, std::span<const ChannelMap> channel_maps, std::string_view channel_metadata, const std::filesystem::path& output) {
   const auto ir = compile(seed); const auto canonical = canonicalize(seed); const auto svg = render_svg(ir);
   const auto rights = evaluate_rights(seed.rights, AssetUsage::commercial_export);
   if (!rights.allowed) throw std::runtime_error(rights.code + ": " + rights.explanation);
@@ -323,15 +323,21 @@ static void build_package_internal(const SpriteSeed& seed, std::span<const Frame
       if(ir.animation_graph)add_semantic_artifact("animation-state-graph.json","application/vnd.gspl.sprite-animation-graph+json","lower-animation-graph/1",graph_json,"portable",{seed_artifact});
       add_semantic_artifact("collisions.json","application/vnd.gspl.sprite-collision+json","lower-collision/1",collisions_json,"portable",{seed_artifact});
     }
+    std::map<std::string,std::string,std::less<>> frame_artifact_by_id;
     if(!frames.empty()){
       std::vector<std::string> frame_artifacts;frame_artifacts.reserve(frames.size());
-      for(const auto&frame:frames){if(frame.id.empty()||!frame.image.invariant())throw std::invalid_argument("visual source frame is invalid");std::ostringstream header;header<<"{\"alphaMode\":"<<static_cast<int>(frame.image.alpha_mode)<<",\"colorSpace\":"<<static_cast<int>(frame.image.color_space)<<",\"durationTicks\":"<<frame.duration_ticks<<",\"height\":"<<frame.image.height<<",\"id\":\""<<escape_json(frame.id)<<"\",\"pivotX\":"<<frame.pivot_x<<",\"pivotY\":"<<frame.pivot_y<<",\"width\":"<<frame.image.width<<"}\n";std::string bytes=header.str();bytes.append(reinterpret_cast<const char*>(frame.image.pixels.data()),frame.image.pixels.size());const auto hash=sha256(bytes);const ProvenanceRecord provenance{"prov-frame-source-"+hash,ProvenanceActor::user,"user","ingest-frame/1",{},hash};const auto artifact=graph.add("application/vnd.gspl.sprite-frame+rgba8",bytes,{},"ingest-frame/1",provenance.id,"canonical-2d",ArtifactValidation::valid);provenance_records.push_back(provenance);frame_artifacts.push_back(artifact);}
+      for(const auto&frame:frames){if(frame.id.empty()||!frame.image.invariant())throw std::invalid_argument("visual source frame is invalid");std::ostringstream header;header<<"{\"alphaMode\":"<<static_cast<int>(frame.image.alpha_mode)<<",\"colorSpace\":"<<static_cast<int>(frame.image.color_space)<<",\"durationTicks\":"<<frame.duration_ticks<<",\"height\":"<<frame.image.height<<",\"id\":\""<<escape_json(frame.id)<<"\",\"pivotX\":"<<frame.pivot_x<<",\"pivotY\":"<<frame.pivot_y<<",\"width\":"<<frame.image.width<<"}\n";std::string bytes=header.str();bytes.append(reinterpret_cast<const char*>(frame.image.pixels.data()),frame.image.pixels.size());const auto hash=sha256(bytes);const ProvenanceRecord provenance{"prov-frame-source-"+hash,ProvenanceActor::user,"user","ingest-frame/1",{},hash};const auto artifact=graph.add("application/vnd.gspl.sprite-frame+rgba8",bytes,{},"ingest-frame/1",provenance.id,"canonical-2d",ArtifactValidation::valid);provenance_records.push_back(provenance);frame_artifacts.push_back(artifact);frame_artifact_by_id.emplace(frame.id,artifact);}
       auto dependencies=frame_artifacts;dependencies.push_back(seed_artifact);std::ranges::sort(dependencies);const auto sheet=compile_sprite_sheet(frames,options);const auto atlas_png=encode_png(sheet.atlas.image);const auto alpha_png=encode_png(sheet.alpha);const auto outline_png=encode_png(sheet.outline);const auto view=[](const std::vector<std::byte>& bytes){return std::string_view(reinterpret_cast<const char*>(bytes.data()),bytes.size());};
       add_semantic_artifact("assets/sprite-atlas.png","image/png","compile-atlas/1",view(atlas_png),"png",dependencies);
       add_semantic_artifact("assets/sprite-alpha-mask.png","image/png","compile-alpha-mask/1",view(alpha_png),"png",dependencies);
       add_semantic_artifact("assets/sprite-outline-mask.png","image/png","compile-outline-mask/1",view(outline_png),"png",dependencies);
       add_semantic_artifact("atlas.json","application/vnd.gspl.sprite-atlas+json","emit-atlas-metadata/1",sheet.metadata,"portable",dependencies);
       if(!visual_metadata.empty())add_semantic_artifact("visual-projection.json","application/vnd.gspl.sprite-visual-projection+json","emit-visual-projection/1",visual_metadata,"portable",dependencies);
+    }
+    if(!channel_maps.empty()){
+      std::filesystem::create_directories(staging/"assets"/"channels");std::vector<std::string> map_artifacts;map_artifacts.reserve(channel_maps.size());
+      for(const auto&map:channel_maps){const auto target=std::ranges::find(frames,map.target_frame_id,&FrameSource::id);if(target==frames.end())throw std::invalid_argument("channel map target is absent");const auto validation=validate_channel_map(map,*target);if(!validation.ok())throw std::invalid_argument(validation.diagnostics.front().code+": "+validation.diagnostics.front().message);std::ostringstream header;header<<"{\"colorSpace\":"<<static_cast<int>(map.image.color_space)<<",\"height\":"<<map.image.height<<",\"id\":\""<<escape_json(map.id)<<"\",\"kind\":"<<static_cast<int>(map.kind)<<",\"target\":\""<<escape_json(map.target_frame_id)<<"\",\"width\":"<<map.image.width<<"}\n";std::string source_bytes=header.str();source_bytes.append(reinterpret_cast<const char*>(map.image.pixels.data()),map.image.pixels.size());const auto source_hash=sha256(source_bytes);const ProvenanceRecord source_provenance{"prov-channel-source-"+source_hash,ProvenanceActor::user,"user","ingest-channel-map/1",{},source_hash};const auto source_artifact=graph.add("application/vnd.gspl.sprite-channel-map+rgba8",source_bytes,{},"ingest-channel-map/1",source_provenance.id,"canonical-2d",ArtifactValidation::valid);provenance_records.push_back(source_provenance);map_artifacts.push_back(source_artifact);const auto png=encode_png(map.image);const auto bytes=std::string_view(reinterpret_cast<const char*>(png.data()),png.size());std::vector dependencies{seed_artifact,source_artifact,frame_artifact_by_id.at(map.target_frame_id)};std::ranges::sort(dependencies);add_semantic_artifact("assets/channels/"+map.id+".png","image/png","encode-channel-map/1",bytes,"png",dependencies);}
+      auto dependencies=map_artifacts;dependencies.push_back(seed_artifact);std::ranges::sort(dependencies);add_semantic_artifact("channel-maps.json","application/vnd.gspl.sprite-channel-maps+json","emit-channel-maps/1",channel_metadata,"portable",dependencies);
     }
     const auto asset_graph_json=graph.canonical_manifest();write(staging / "asset-graph.json",asset_graph_json);manifest_artifacts.emplace_back("asset-graph.json",sha256(asset_graph_json));
     std::ranges::sort(provenance_records,{},&ProvenanceRecord::id);std::ostringstream provenance_json;provenance_json<<"{\"records\":[";for(std::size_t i=0;i<provenance_records.size();++i){if(i)provenance_json<<',';provenance_json<<canonical_provenance(provenance_records[i]);}provenance_json<<"]}";write(staging / "provenance.json",provenance_json.str());manifest_artifacts.emplace_back("provenance.json",sha256(provenance_json.str()));

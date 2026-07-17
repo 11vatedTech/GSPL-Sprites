@@ -50,11 +50,11 @@ ImageRgba8 decode_png(std::span<const std::byte> encoded,const ImageLimits& limi
 
 std::vector<std::byte> encode_png(const ImageRgba8& image){
   if(!image.invariant())throw std::invalid_argument("invalid image for PNG encoding");
-  if(image.color_space!=ColorSpace::srgb)throw std::invalid_argument("PNG encoder currently requires explicit sRGB input");
+  if(image.color_space!=ColorSpace::srgb&&image.color_space!=ColorSpace::data)throw std::invalid_argument("PNG encoder requires explicit sRGB color or data-texture semantics");
   Context context(spng_ctx_new(SPNG_CTX_ENCODER),&spng_ctx_free);if(!context)throw std::runtime_error("failed to allocate PNG encoder");
   require(spng_set_option(context.get(),SPNG_ENCODE_TO_BUFFER,1),"enable PNG buffer encoding");
   spng_ihdr header{};header.width=image.width;header.height=image.height;header.bit_depth=8;header.color_type=SPNG_COLOR_TYPE_TRUECOLOR_ALPHA;header.compression_method=0;header.filter_method=0;header.interlace_method=0;
-  require(spng_set_ihdr(context.get(),&header),"set PNG header");require(spng_set_srgb(context.get(),0),"set PNG sRGB intent");
+  require(spng_set_ihdr(context.get(),&header),"set PNG header");if(image.color_space==ColorSpace::srgb)require(spng_set_srgb(context.get(),0),"set PNG sRGB intent");
   require(spng_encode_image(context.get(),image.pixels.data(),image.pixels.size(),SPNG_FMT_PNG,SPNG_ENCODE_FINALIZE),"encode PNG pixels");
   std::size_t size{};int error{};void* buffer=spng_get_png_buffer(context.get(),&size,&error);if(buffer==nullptr)require(error,"retrieve encoded PNG");std::unique_ptr<void,decltype(&std::free)> owned(buffer,&std::free);if(size==0)throw std::runtime_error("PNG encoder returned empty output");
   const auto* bytes=static_cast<const std::byte*>(buffer);return{bytes,bytes+size};

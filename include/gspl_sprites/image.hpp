@@ -8,7 +8,7 @@
 
 namespace gspl::sprites {
 
-enum class ColorSpace { srgb, linear_srgb, acescg, unknown };
+enum class ColorSpace { srgb, linear_srgb, acescg, data, unknown };
 enum class AlphaMode { opaque, straight, premultiplied };
 
 struct ImageLimits {

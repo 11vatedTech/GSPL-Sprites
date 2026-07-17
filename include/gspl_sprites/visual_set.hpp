@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gspl_sprites/sprite2d.hpp"
+#include "gspl_sprites/channel_map.hpp"
 
 #include <filesystem>
 
@@ -27,6 +28,8 @@ struct AuthoredVisualSet {
   std::uint32_t temporal_max_changed_per_million{1'000'000};
   std::uint32_t temporal_min_silhouette_iou_per_million{};
   std::vector<TemporalTransitionMetrics> temporal_metrics;
+  std::vector<ChannelMap> channel_maps;
+  std::string canonical_channel_metadata;
   std::string canonical_metadata;
 };
 
@@ -36,6 +39,7 @@ struct VisualSetLimits {
   std::uint64_t max_total_encoded_bytes{512ULL * 1024ULL * 1024ULL};
   std::uint64_t max_total_decoded_bytes{512ULL * 1024ULL * 1024ULL};
   std::uint32_t max_frames{4096};
+  std::uint32_t max_channel_maps{24576};
 };
 
 [[nodiscard]] AuthoredVisualSet load_authored_visual_set(const std::filesystem::path& manifest_path,

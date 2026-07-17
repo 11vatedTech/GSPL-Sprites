@@ -32,6 +32,7 @@ layer=effects
 frame=idle|south|shadow|0|frames/idle-south-shadow-0.png|32|58|6
 frame=idle|south|body|0|frames/idle-south-body-0.png|32|58|6
 frame=idle|south|effects|0|frames/idle-south-effects-0.png|32|58|6
+map=collision|idle|south|body|0|maps/idle-south-body-0-collision.png
 ```
 
 Frame fields are:
@@ -64,6 +65,21 @@ bounds exact RGBA changes; `temporal_min_silhouette_iou_per_million` bounds
 foreground silhouette overlap. Both use integer parts-per-million values in
 `0..1000000`. Every transition's measured values are preserved in
 `visual-projection.json` even when thresholds are permissive.
+
+Optional channel maps use:
+
+```text
+map=kind|animation|direction|layer|ordinal|relative_png_path
+```
+
+Kinds are `material_id`, `tangent_normal`, `depth`, `emissive`, `effects`, and
+`collision`. Every map targets an existing semantic frame and must share its
+dimensions. Material IDs store an integer in R with G/B zero. Tangent normals
+must face outward and have near-unit length. Depth and effects are grayscale;
+collision is binary grayscale. All use opaque storage alpha. Emissive maps are
+explicit sRGB color textures. Every other kind is an explicitly declared data
+texture and its PNG must omit the sRGB chunk. Valid maps are packaged under
+`assets/channels/` with canonical `channel-maps.json` and provenance.
 
 Paths are relative to the manifest directory. Absolute paths, drive syntax,
 backslashes, empty/dot/parent components, control/non-ASCII bytes, missing
