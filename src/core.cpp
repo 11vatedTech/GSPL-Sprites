@@ -300,7 +300,7 @@ void build_package(const SpriteSeed& seed, const std::filesystem::path& output) 
     (void)graph.add("image/svg+xml", svg, {seed_artifact}, "render-svg/1", svg_provenance.id, "svg", ArtifactValidation::valid);
     write(staging / "seed.canonical.json", canonical); write(staging / "assets" / "entity.svg", svg);
     std::vector<ProvenanceRecord> provenance_records{seed_provenance,svg_provenance};
-    std::vector<std::pair<std::string,std::string>> manifest_artifacts{{"assets/entity.svg",sha256(svg)}};
+    std::vector<std::pair<std::string,std::string>> manifest_artifacts{{"assets/entity.svg",sha256(svg)},{"seed.canonical.json",sha256(canonical)}};
     if(ir.rig){
       const auto rig_json=canonicalize_rig(*ir.rig);const auto clips_json=canonicalize_clips(ir.clips);const auto graph_json=ir.animation_graph?canonicalize_state_graph(*ir.animation_graph):"null";const auto collisions_json=canonicalize_collisions(ir.collision_shapes,ir.collision_windows);
       const auto add_semantic_artifact=[&](std::string path,std::string type,std::string pass,const std::string& bytes){const auto hash=sha256(bytes);const ProvenanceRecord provenance{"prov-"+pass+"-"+hash,ProvenanceActor::compiler,"gspl-sprites/0.1.0",pass,{seed_artifact},hash};(void)graph.add(std::move(type),bytes,{seed_artifact},pass,provenance.id,"portable",ArtifactValidation::valid);write(staging/path,bytes);provenance_records.push_back(provenance);manifest_artifacts.emplace_back(std::move(path),hash);};
@@ -309,9 +309,9 @@ void build_package(const SpriteSeed& seed, const std::filesystem::path& output) 
       if(ir.animation_graph)add_semantic_artifact("animation-state-graph.json","application/vnd.gspl.sprite-animation-graph+json","lower-animation-graph/1",graph_json);
       add_semantic_artifact("collisions.json","application/vnd.gspl.sprite-collision+json","lower-collision/1",collisions_json);
     }
-    write(staging / "asset-graph.json", graph.canonical_manifest());
-    std::ranges::sort(provenance_records,{},&ProvenanceRecord::id);std::ostringstream provenance_json;provenance_json<<"{\"records\":[";for(std::size_t i=0;i<provenance_records.size();++i){if(i)provenance_json<<',';provenance_json<<canonical_provenance(provenance_records[i]);}provenance_json<<"]}";write(staging / "provenance.json",provenance_json.str());
-    write(staging / "rights.json", "{\"classification\":\"" + rights_text(seed.rights) + "\",\"commercialExport\":true,\"decisionCode\":\"" + rights.code + "\"}");
+    const auto asset_graph_json=graph.canonical_manifest();write(staging / "asset-graph.json",asset_graph_json);manifest_artifacts.emplace_back("asset-graph.json",sha256(asset_graph_json));
+    std::ranges::sort(provenance_records,{},&ProvenanceRecord::id);std::ostringstream provenance_json;provenance_json<<"{\"records\":[";for(std::size_t i=0;i<provenance_records.size();++i){if(i)provenance_json<<',';provenance_json<<canonical_provenance(provenance_records[i]);}provenance_json<<"]}";write(staging / "provenance.json",provenance_json.str());manifest_artifacts.emplace_back("provenance.json",sha256(provenance_json.str()));
+    const auto rights_json="{\"classification\":\"" + rights_text(seed.rights) + "\",\"commercialExport\":true,\"decisionCode\":\"" + rights.code + "\"}";write(staging / "rights.json",rights_json);manifest_artifacts.emplace_back("rights.json",sha256(rights_json));
     std::ranges::sort(manifest_artifacts);std::ostringstream manifest; manifest << "{\"artifacts\":[";for(std::size_t i=0;i<manifest_artifacts.size();++i){if(i)manifest<<',';manifest<<"{\"path\":\""<<manifest_artifacts[i].first<<"\",\"sha256\":\""<<manifest_artifacts[i].second<<"\"}";}manifest << "],\"assetGraph\":\"asset-graph.json\",\"entityId\":\"" << ir.entity_id << "\",\"format\":\"gspl.sprite-package/0.1\",\"provenance\":\"provenance.json\",\"rights\":\"rights.json\",\"seedIdentity\":\"" << ir.seed_identity << "\"}";
     write(staging / "manifest.json", manifest.str());
     std::filesystem::rename(staging, output);

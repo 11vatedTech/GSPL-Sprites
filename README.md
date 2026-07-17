@@ -25,5 +25,6 @@ platform; the remaining gates are governed by `docs/IMPLEMENTATION_ROADMAP.md`.
 cmake --preset windows-msvc
 cmake --build --preset windows-msvc-debug
 ctest --preset windows-msvc-debug
-./build/windows-msvc/Debug/gspl-sprites.exe build examples/voltfox.sprite outputs/voltfox
+./build/windows-msvc/gspl-sprites.exe build examples/voltfox.sprite outputs/voltfox
+./build/windows-msvc/gspl-sprites.exe verify outputs/voltfox
 ```
