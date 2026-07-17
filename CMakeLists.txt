@@ -63,6 +63,7 @@ add_library(gspl_sprites_core
   src/channel_map.cpp
   src/living_runtime.cpp
   src/runtime_persistence.cpp
+  src/runtime_event_router.cpp
 )
 target_include_directories(gspl_sprites_core PUBLIC include)
 if(MSVC)
@@ -140,3 +141,7 @@ add_test(NAME gspl_sprites_living_runtime_tests COMMAND gspl_sprites_living_runt
 add_executable(gspl_sprites_runtime_persistence_tests tests/runtime_persistence_tests.cpp)
 target_link_libraries(gspl_sprites_runtime_persistence_tests PRIVATE gspl_sprites_core)
 add_test(NAME gspl_sprites_runtime_persistence_tests COMMAND gspl_sprites_runtime_persistence_tests)
+
+add_executable(gspl_sprites_runtime_event_router_tests tests/runtime_event_router_tests.cpp)
+target_link_libraries(gspl_sprites_runtime_event_router_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_runtime_event_router_tests COMMAND gspl_sprites_runtime_event_router_tests)
