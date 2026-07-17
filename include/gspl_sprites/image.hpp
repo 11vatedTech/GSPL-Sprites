@@ -17,6 +17,8 @@ struct ImageLimits {
   std::uint64_t max_pixels{64ULL * 1024ULL * 1024ULL};
   std::uint64_t max_decoded_bytes{256ULL * 1024ULL * 1024ULL};
   std::uint64_t max_input_bytes{256ULL * 1024ULL * 1024ULL};
+  std::uint64_t max_metadata_bytes{16ULL * 1024ULL * 1024ULL};
+  std::uint32_t max_chunk_count{1000};
 };
 
 struct ImageRgba8 {
@@ -31,6 +33,9 @@ struct ImageRgba8 {
 [[nodiscard]] ImageRgba8 decode_ppm_p6(std::span<const std::byte> encoded,
                                        const ImageLimits& limits = {});
 [[nodiscard]] std::vector<std::byte> encode_ppm_p6(const ImageRgba8& image);
+[[nodiscard]] ImageRgba8 decode_png(std::span<const std::byte> encoded,
+                                   const ImageLimits& limits = {});
+[[nodiscard]] std::vector<std::byte> encode_png(const ImageRgba8& image);
 
 struct FrameSource {
   std::string id;

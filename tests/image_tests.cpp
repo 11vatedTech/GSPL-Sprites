@@ -1,5 +1,6 @@
 #include "gspl_sprites/image.hpp"
 
+#include <algorithm>
 #include <array>
 #include <iostream>
 #include <stdexcept>
@@ -23,9 +24,18 @@ int main() {
     bool overflow = false; try { (void)pack_atlas(frames, 2, 2, 1); } catch (const std::runtime_error&) { overflow = true; } check(overflow, "atlas overflow accepted");
     bool huge = false; try { (void)pack_atlas(frames, 65535, 65535, 1); } catch (const std::invalid_argument&) { huge = true; } check(huge, "hostile atlas dimensions accepted");
 
+    const auto png=encode_png(red);const auto decoded_png=decode_png(png);check(decoded_png.width==red.width&&decoded_png.height==red.height&&decoded_png.pixels==red.pixels&&decoded_png.color_space==ColorSpace::srgb,"PNG roundtrip failed");
+    bool png_limited=false;try{auto limits=ImageLimits{};limits.max_pixels=3;(void)decode_png(png,limits);}catch(const std::runtime_error&){png_limited=true;}check(png_limited,"PNG decoded-pixel limit ignored");
+    bool chunk_limited=false;try{auto limits=ImageLimits{};limits.max_chunk_count=2;(void)decode_png(png,limits);}catch(const std::runtime_error&){chunk_limited=true;}check(chunk_limited,"PNG chunk-count limit ignored");
+    bool png_truncated=false;try{(void)decode_png(std::span<const std::byte>(png).first(png.size()-1));}catch(const std::runtime_error&){png_truncated=true;}check(png_truncated,"truncated PNG accepted");
+    bool bad_signature=false;try{auto invalid=png;invalid[0]=std::byte{0};(void)decode_png(invalid);}catch(const std::runtime_error&){bad_signature=true;}check(bad_signature,"invalid PNG signature accepted");
+    bool trailing_data=false;try{auto invalid=png;invalid.push_back(std::byte{0});(void)decode_png(invalid);}catch(const std::runtime_error&){trailing_data=true;}check(trailing_data,"PNG trailing data accepted");
+    bool corrupt_critical=false;try{auto invalid=png;const std::array idat_type{std::byte{'I'},std::byte{'D'},std::byte{'A'},std::byte{'T'}};const auto idat=std::search(invalid.begin(),invalid.end(),idat_type.begin(),idat_type.end());check(idat!=invalid.end(),"encoded PNG omitted IDAT chunk");*(idat+4)^=std::byte{1};(void)decode_png(invalid);}catch(const std::runtime_error&){corrupt_critical=true;}check(corrupt_critical,"corrupt critical PNG chunk accepted");
+    auto untagged_png=png;const std::array signature{std::byte{'s'},std::byte{'R'},std::byte{'G'},std::byte{'B'}};const auto srgb=std::search(untagged_png.begin(),untagged_png.end(),signature.begin(),signature.end());check(srgb!=untagged_png.end(),"encoded PNG omitted sRGB chunk");const auto chunk_begin=srgb-4;untagged_png.erase(chunk_begin,chunk_begin+13);const auto untagged=decode_png(untagged_png);check(untagged.color_space==ColorSpace::unknown,"untagged PNG silently assumed a color space");bool untagged_atlas=false;try{const std::array untagged_frames{FrameSource{"untagged",untagged,0,0,1}};(void)pack_atlas(untagged_frames,8,8);}catch(const std::invalid_argument&){untagged_atlas=true;}check(untagged_atlas,"untagged image entered atlas");
+    bool unknown_encode=false;try{auto unknown=red;unknown.color_space=ColorSpace::unknown;(void)encode_png(unknown);}catch(const std::invalid_argument&){unknown_encode=true;}check(unknown_encode,"untagged image encoded as sRGB");
+
     const AnimationClip clip{"idle",{"idle.0","idle.1"},{2,3},{{"blink",4}},true}; check(validate_animation(clip, atlas.placements).ok(), "valid animation rejected");
     auto bad = clip; bad.frame_ids[1]="missing"; bad.events[0].tick=5; check(!validate_animation(bad, atlas.placements).ok(), "invalid animation accepted");
     std::cout << "all gspl sprites image tests passed\n"; return 0;
   } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }
-

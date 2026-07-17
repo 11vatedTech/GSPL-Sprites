@@ -48,7 +48,7 @@ std::uint32_t decimal(std::string_view token, std::string_view field) {
 }
 
 bool ImageRgba8::invariant() const noexcept {
-  if (width == 0 || height == 0 || color_space == ColorSpace::unknown) return false;
+  if (width == 0 || height == 0) return false;
   const auto required = static_cast<std::uint64_t>(width) * height * 4ULL;
   return required <= std::numeric_limits<std::size_t>::max() && pixels.size() == static_cast<std::size_t>(required);
 }
@@ -75,6 +75,7 @@ ImageRgba8 decode_ppm_p6(std::span<const std::byte> encoded, const ImageLimits& 
 
 std::vector<std::byte> encode_ppm_p6(const ImageRgba8& image) {
   if (!image.invariant()) throw std::invalid_argument("invalid RGBA image");
+  if (image.color_space != ColorSpace::srgb) throw std::invalid_argument("PPM encoder requires explicit sRGB input");
   if (image.alpha_mode != AlphaMode::opaque) {
     for (std::size_t index = 3; index < image.pixels.size(); index += 4)
       if (image.pixels[index] != 255) throw std::invalid_argument("PPM cannot represent transparency");
@@ -94,7 +95,7 @@ AtlasResult pack_atlas(std::span<const FrameSource> frames, std::uint32_t max_wi
     throw std::invalid_argument("atlas dimensions exceed resource limits");
   std::vector<const FrameSource*> ordered; ordered.reserve(frames.size()); std::set<std::string> ids;
   for (const auto& frame : frames) {
-    if (frame.id.empty() || !frame.image.invariant() || frame.duration_ticks == 0 || !ids.insert(frame.id).second) throw std::invalid_argument("invalid or duplicate atlas frame");
+    if (frame.id.empty() || !frame.image.invariant() || frame.image.color_space == ColorSpace::unknown || frame.duration_ticks == 0 || !ids.insert(frame.id).second) throw std::invalid_argument("invalid, untagged, or duplicate atlas frame");
     if (frame.image.color_space != frames.front().image.color_space || frame.image.alpha_mode != frames.front().image.alpha_mode) throw std::invalid_argument("atlas frames must share color and alpha semantics");
     ordered.push_back(&frame);
   }
