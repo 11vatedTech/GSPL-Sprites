@@ -1,5 +1,8 @@
 #pragma once
 
+#include "gspl_sprites/animation.hpp"
+#include "gspl_sprites/common.hpp"
+
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -29,10 +32,12 @@ struct SpriteSeed {
   std::string primary_color;
   std::string accent_color;
   std::vector<AbilitySeed> abilities;
+  std::optional<RigDefinition> rig;
+  std::vector<SkeletalClip> clips;
+  std::optional<AnimationStateGraph> animation_graph;
+  std::vector<CollisionShape> collision_shapes;
+  std::vector<CollisionWindow> collision_windows;
 };
-
-struct Diagnostic { std::string code; std::string message; };
-struct ValidationResult { std::vector<Diagnostic> diagnostics; [[nodiscard]] bool ok() const noexcept { return diagnostics.empty(); } };
 
 struct SpriteIr {
   std::string seed_identity;
@@ -40,6 +45,11 @@ struct SpriteIr {
   std::vector<AbilitySeed> abilities;
   std::string primary_color;
   std::string accent_color;
+  std::optional<RigDefinition> rig;
+  std::vector<SkeletalClip> clips;
+  std::optional<AnimationStateGraph> animation_graph;
+  std::vector<CollisionShape> collision_shapes;
+  std::vector<CollisionWindow> collision_windows;
 };
 
 struct RuntimeEntity {
@@ -60,4 +70,3 @@ void tick(RuntimeEntity& entity) noexcept;
 void build_package(const SpriteSeed& seed, const std::filesystem::path& output);
 
 } // namespace gspl::sprites
-

@@ -1,10 +1,15 @@
 #include "gspl_sprites/animation.hpp"
 
 #include <algorithm>
+#include <array>
+#include <charconv>
 #include <cmath>
 #include <deque>
 #include <map>
 #include <set>
+#include <sstream>
+#include <stdexcept>
+#include <tuple>
 
 namespace gspl::sprites {
 namespace {
@@ -29,6 +34,33 @@ bool compare(double value, Comparison comparison, double threshold) {
     case Comparison::greater_equal: return value >= threshold;
   }
   return false;
+}
+
+std::string escape_json(std::string_view value) {
+  std::string out;
+  for (const unsigned char c : value) {
+    switch (c) { case '\\': out += "\\\\"; break; case '"': out += "\\\""; break; case '\n': out += "\\n"; break; case '\r': out += "\\r"; break; case '\t': out += "\\t"; break; default: if (c < 0x20) throw std::invalid_argument("control character in animation value"); out += static_cast<char>(c); }
+  }
+  return out;
+}
+
+std::string number(double value) {
+  if (!std::isfinite(value)) throw std::invalid_argument("non-finite canonical number");
+  std::array<char, 64> buffer{};
+  const auto [end, error] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value, std::chars_format::general);
+  if (error != std::errc{}) throw std::runtime_error("failed to canonicalize number");
+  auto result = std::string(buffer.data(), end);
+  if (result == "-0") result = "0";
+  return result;
+}
+
+std::string transform_json(const Transform2d& transform) {
+  return "{\"rotationDegrees\":" + number(transform.rotation_degrees) + ",\"scaleX\":" + number(transform.scale_x) + ",\"scaleY\":" + number(transform.scale_y) + ",\"x\":" + number(transform.x) + ",\"y\":" + number(transform.y) + "}";
+}
+
+std::string comparison_text(Comparison value) {
+  switch (value) { case Comparison::equal: return "EQUAL"; case Comparison::not_equal: return "NOT_EQUAL"; case Comparison::less: return "LESS"; case Comparison::less_equal: return "LESS_EQUAL"; case Comparison::greater: return "GREATER"; case Comparison::greater_equal: return "GREATER_EQUAL"; }
+  throw std::logic_error("unreachable comparison");
 }
 }
 
@@ -124,5 +156,33 @@ ValidationResult validate_collision_contract(std::span<const CollisionShape> sha
   for (const auto& shape : shapes) if (shape.id.empty() || !shape_ids.insert(shape.id).second || !attachments.contains(shape.bone_id) || !std::isfinite(shape.offset_x) || !std::isfinite(shape.offset_y) || !std::isfinite(shape.extent_x) || !std::isfinite(shape.extent_y) || shape.extent_x <= 0.0 || shape.extent_y <= 0.0 || (shape.kind == CollisionKind::circle && shape.extent_x != shape.extent_y)) add("SPRITE_COLLISION_SHAPE_INVALID", "collision shape is malformed, duplicate, or references an absent bone/socket");
   for (const auto& window : windows) if (!shape_ids.contains(window.shape_id) || window.start_tick >= window.end_tick || window.end_tick > ability_active_ticks) add("SPRITE_COLLISION_WINDOW_INVALID", "collision window references absent shape or exceeds ability timing");
   return result;
+}
+
+std::string canonicalize_rig(const RigDefinition& rig) {
+  const auto validation = validate_rig(rig); if (!validation.ok()) throw std::invalid_argument(validation.diagnostics.front().code + ": " + validation.diagnostics.front().message);
+  auto bones = rig.bones; auto sockets = rig.sockets;
+  std::ranges::sort(bones, {}, &BoneDefinition::id); std::ranges::sort(sockets, {}, &SocketDefinition::id);
+  std::ostringstream out; out << "{\"bones\":[";
+  for (std::size_t i=0;i<bones.size();++i) { if(i) out << ','; const auto& bone=bones[i]; out << "{\"id\":\"" << escape_json(bone.id) << "\",\"length\":" << number(bone.length) << ",\"limit\":{\"maximumDegrees\":" << number(bone.limit.maximum_degrees) << ",\"minimumDegrees\":" << number(bone.limit.minimum_degrees) << "},\"parentId\":"; if(bone.parent_id) out << "\"" << escape_json(*bone.parent_id) << "\""; else out << "null"; out << ",\"rest\":" << transform_json(bone.rest) << '}'; }
+  out << "],\"id\":\"" << escape_json(rig.id) << "\",\"sockets\":[";
+  for (std::size_t i=0;i<sockets.size();++i) { if(i) out << ','; const auto& socket=sockets[i]; out << "{\"boneId\":\"" << escape_json(socket.bone_id) << "\",\"id\":\"" << escape_json(socket.id) << "\",\"local\":" << transform_json(socket.local) << '}'; }
+  out << "]}"; return out.str();
+}
+
+std::string canonicalize_clips(std::span<const SkeletalClip> clips) {
+  auto ordered = std::vector<SkeletalClip>(clips.begin(), clips.end()); std::ranges::sort(ordered, {}, &SkeletalClip::id);
+  std::ostringstream out; out << "{\"clips\":[";
+  for (std::size_t ci=0;ci<ordered.size();++ci) { if(ci) out << ','; auto clip=ordered[ci]; std::ranges::sort(clip.tracks, {}, &BoneTrack::bone_id); std::ranges::sort(clip.events); out << "{\"durationTicks\":" << clip.duration_ticks << ",\"events\":["; for(std::size_t ei=0;ei<clip.events.size();++ei){if(ei)out<<',';out<<"{\"id\":\""<<escape_json(clip.events[ei].first)<<"\",\"tick\":"<<clip.events[ei].second<<'}';} out << "],\"id\":\"" << escape_json(clip.id) << "\",\"looping\":" << (clip.looping?"true":"false") << ",\"tracks\":["; for(std::size_t ti=0;ti<clip.tracks.size();++ti){if(ti)out<<',';const auto& track=clip.tracks[ti];out<<"{\"boneId\":\""<<escape_json(track.bone_id)<<"\",\"keys\":[";for(std::size_t ki=0;ki<track.keys.size();++ki){if(ki)out<<',';out<<"{\"tick\":"<<track.keys[ki].tick<<",\"transform\":"<<transform_json(track.keys[ki].transform)<<'}';}out<<"]}";} out << "]}"; }
+  out << "]}"; return out.str();
+}
+
+std::string canonicalize_state_graph(const AnimationStateGraph& graph) {
+  auto states=graph.states; std::ranges::sort(states, {}, &AnimationState::id); std::ostringstream out; out << "{\"initialState\":\"" << escape_json(graph.initial_state) << "\",\"states\":[";
+  for(std::size_t si=0;si<states.size();++si){if(si)out<<',';auto state=states[si];std::ranges::sort(state.transitions,{},&AnimationTransition::priority);out<<"{\"clipId\":\""<<escape_json(state.clip_id)<<"\",\"id\":\""<<escape_json(state.id)<<"\",\"transitions\":[";for(std::size_t ti=0;ti<state.transitions.size();++ti){if(ti)out<<',';const auto& t=state.transitions[ti];out<<"{\"blendTicks\":"<<t.blend_ticks<<",\"comparison\":\""<<comparison_text(t.comparison)<<"\",\"minimumStateTicks\":"<<t.minimum_state_ticks<<",\"parameter\":\""<<escape_json(t.parameter)<<"\",\"priority\":"<<t.priority<<",\"targetState\":\""<<escape_json(t.target_state)<<"\",\"threshold\":"<<number(t.threshold)<<'}';}out<<"]}";} out<<"]}";return out.str();
+}
+
+std::string canonicalize_collisions(std::span<const CollisionShape> shapes, std::span<const CollisionWindow> windows) {
+  auto ordered_shapes=std::vector<CollisionShape>(shapes.begin(),shapes.end());auto ordered_windows=std::vector<CollisionWindow>(windows.begin(),windows.end());std::ranges::sort(ordered_shapes,{},&CollisionShape::id);std::ranges::sort(ordered_windows,[](const auto& a,const auto& b){return std::tie(a.ability_id,a.shape_id,a.start_tick,a.end_tick,a.deals_damage)<std::tie(b.ability_id,b.shape_id,b.start_tick,b.end_tick,b.deals_damage);});
+  std::ostringstream out;out<<"{\"shapes\":[";for(std::size_t i=0;i<ordered_shapes.size();++i){if(i)out<<',';const auto&s=ordered_shapes[i];out<<"{\"attachmentId\":\""<<escape_json(s.bone_id)<<"\",\"extentX\":"<<number(s.extent_x)<<",\"extentY\":"<<number(s.extent_y)<<",\"id\":\""<<escape_json(s.id)<<"\",\"kind\":\""<<(s.kind==CollisionKind::circle?"CIRCLE":"AXIS_ALIGNED_BOX")<<"\",\"offsetX\":"<<number(s.offset_x)<<",\"offsetY\":"<<number(s.offset_y)<<'}';}out<<"],\"windows\":[";for(std::size_t i=0;i<ordered_windows.size();++i){if(i)out<<',';const auto&w=ordered_windows[i];out<<"{\"abilityId\":\""<<escape_json(w.ability_id)<<"\",\"dealsDamage\":"<<(w.deals_damage?"true":"false")<<",\"endTick\":"<<w.end_tick<<",\"shapeId\":\""<<escape_json(w.shape_id)<<"\",\"startTick\":"<<w.start_tick<<'}';}out<<"]}";return out.str();
 }
 } // namespace gspl::sprites

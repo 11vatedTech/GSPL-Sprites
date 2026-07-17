@@ -14,7 +14,9 @@ The first production vertical compiles an original rights-safe electric fox
 entity through typed seed and gene validation, IR lowering, a deterministic
 runtime ability transition, deterministic SVG projection, an immutable asset
 graph, end-to-end provenance, an explicit rights decision, and a checksummed
-transactional package. It is deliberately not described as the complete
+transactional package. The governed Voltfox entity also authors and packages a
+bone rig, sockets, skeletal clips, an animation state graph, and ability-owned
+collision timing. It is deliberately not described as the complete
 platform; the remaining gates are governed by `docs/IMPLEMENTATION_ROADMAP.md`.
 
 ## Build on Windows

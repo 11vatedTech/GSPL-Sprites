@@ -1,9 +1,14 @@
 #pragma once
 
-#include "gspl_sprites/core.hpp"
+#include "gspl_sprites/common.hpp"
 
+#include <cstdint>
 #include <optional>
 #include <span>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 namespace gspl::sprites {
 
@@ -74,11 +79,16 @@ struct CollisionShape {
   double extent_x{};
   double extent_y{};
 };
-struct CollisionWindow { std::string shape_id; std::uint32_t start_tick{}; std::uint32_t end_tick{}; bool deals_damage{}; };
+struct CollisionWindow { std::string shape_id; std::uint32_t start_tick{}; std::uint32_t end_tick{}; bool deals_damage{}; std::string ability_id; };
 [[nodiscard]] ValidationResult validate_collision_contract(std::span<const CollisionShape> shapes,
                                                            std::span<const CollisionWindow> windows,
                                                            const RigDefinition& rig,
                                                            std::uint32_t ability_active_ticks);
 
-} // namespace gspl::sprites
+[[nodiscard]] std::string canonicalize_rig(const RigDefinition& rig);
+[[nodiscard]] std::string canonicalize_clips(std::span<const SkeletalClip> clips);
+[[nodiscard]] std::string canonicalize_state_graph(const AnimationStateGraph& graph);
+[[nodiscard]] std::string canonicalize_collisions(std::span<const CollisionShape> shapes,
+                                                  std::span<const CollisionWindow> windows);
 
+} // namespace gspl::sprites

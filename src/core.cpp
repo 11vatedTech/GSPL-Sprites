@@ -4,9 +4,11 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <cmath>
 #include <fstream>
 #include <iomanip>
 #include <map>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 
@@ -43,6 +45,31 @@ std::uint64_t parse_u64(std::string_view value, std::string_view field) {
   const auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), result);
   if (ec != std::errc{} || ptr != value.data() + value.size()) throw std::runtime_error("invalid unsigned integer for " + std::string(field));
   return result;
+}
+
+double parse_double(std::string_view value, std::string_view field) {
+  double result{};
+  const auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), result, std::chars_format::general);
+  if (ec != std::errc{} || ptr != value.data() + value.size() || !std::isfinite(result)) throw std::runtime_error("invalid finite number for " + std::string(field));
+  return result;
+}
+
+bool parse_bool(std::string_view value, std::string_view field) {
+  if (value == "true") return true;
+  if (value == "false") return false;
+  throw std::runtime_error("invalid boolean for " + std::string(field));
+}
+
+Comparison parse_comparison(std::string_view value) {
+  if (value == "EQUAL") return Comparison::equal; if (value == "NOT_EQUAL") return Comparison::not_equal;
+  if (value == "LESS") return Comparison::less; if (value == "LESS_EQUAL") return Comparison::less_equal;
+  if (value == "GREATER") return Comparison::greater; if (value == "GREATER_EQUAL") return Comparison::greater_equal;
+  throw std::runtime_error("invalid transition comparison");
+}
+
+bool repeatable_field(std::string_view key) {
+  static constexpr std::array values{"ability", "bone", "socket", "clip", "track", "clip_event", "state", "transition", "collision", "collision_window"};
+  return std::ranges::find(values, key) != values.end();
 }
 
 RightsClass parse_rights(std::string_view value) {
@@ -105,7 +132,7 @@ SpriteSeed parse_seed(std::string_view source) {
     if (equals == std::string::npos) throw std::runtime_error("line " + std::to_string(line_number) + ": expected key=value");
     const auto key = trim(line.substr(0, equals));
     const auto value = trim(line.substr(equals + 1));
-    if (key != "ability" && !seen.emplace(key, true).second) throw std::runtime_error("line " + std::to_string(line_number) + ": duplicate field " + key);
+    if (!repeatable_field(key) && !seen.emplace(key, true).second) throw std::runtime_error("line " + std::to_string(line_number) + ": duplicate field " + key);
     if (key == "schema") seed.schema = value;
     else if (key == "id") seed.stable_id = value;
     else if (key == "name") seed.name = value;
@@ -119,6 +146,41 @@ SpriteSeed parse_seed(std::string_view source) {
       const auto parts = split(value, '|');
       if (parts.size() != 5) throw std::runtime_error("line " + std::to_string(line_number) + ": ability requires id|effect|cost|cooldown|active");
       seed.abilities.push_back({parts[0], parts[1], parse_u32(parts[2], "ability.cost"), parse_u32(parts[3], "ability.cooldown"), parse_u32(parts[4], "ability.active")});
+    } else if (key == "rig") {
+      seed.rig = RigDefinition{value, {}, {}};
+    } else if (key == "bone") {
+      if (!seed.rig) throw std::runtime_error("line " + std::to_string(line_number) + ": rig must precede bones");
+      if (seed.rig->bones.size() >= 256) throw std::runtime_error("bone count exceeds 256");
+      const auto p=split(value,'|'); if(p.size()!=10) throw std::runtime_error("line " + std::to_string(line_number) + ": bone requires id|parent|-transform-|length|limits");
+      seed.rig->bones.push_back({p[0],p[1]=="-"?std::nullopt:std::optional<std::string>{p[1]},{parse_double(p[2],"bone.x"),parse_double(p[3],"bone.y"),parse_double(p[4],"bone.rotation"),parse_double(p[5],"bone.scale_x"),parse_double(p[6],"bone.scale_y")},parse_double(p[7],"bone.length"),{parse_double(p[8],"bone.minimum"),parse_double(p[9],"bone.maximum")}});
+    } else if (key == "socket") {
+      if (!seed.rig) throw std::runtime_error("line " + std::to_string(line_number) + ": rig must precede sockets");
+      if (seed.rig->sockets.size() >= 256) throw std::runtime_error("socket count exceeds 256");
+      const auto p=split(value,'|'); if(p.size()!=7) throw std::runtime_error("line " + std::to_string(line_number) + ": socket requires id|bone|transform");
+      seed.rig->sockets.push_back({p[0],p[1],{parse_double(p[2],"socket.x"),parse_double(p[3],"socket.y"),parse_double(p[4],"socket.rotation"),parse_double(p[5],"socket.scale_x"),parse_double(p[6],"socket.scale_y")}});
+    } else if (key == "clip") {
+      if (seed.clips.size() >= 256) throw std::runtime_error("clip count exceeds 256");
+      const auto p=split(value,'|'); if(p.size()!=3) throw std::runtime_error("line " + std::to_string(line_number) + ": clip requires id|duration|looping");
+      seed.clips.push_back({p[0],parse_u32(p[1],"clip.duration"),parse_bool(p[2],"clip.looping"),{}, {}});
+    } else if (key == "track") {
+      const auto p=split(value,'|'); if(p.size()!=3) throw std::runtime_error("line " + std::to_string(line_number) + ": track requires clip|bone|key-list");
+      const auto clip=std::ranges::find(seed.clips,p[0],&SkeletalClip::id); if(clip==seed.clips.end()) throw std::runtime_error("line " + std::to_string(line_number) + ": clip must precede track");
+      BoneTrack track{p[1],{}}; const auto keys=split(p[2],';'); if(keys.size()>65536) throw std::runtime_error("track key count exceeds 65536");
+      for(const auto& encoded_key:keys){const auto v=split(encoded_key,',');if(v.size()!=6)throw std::runtime_error("line " + std::to_string(line_number) + ": key requires tick,x,y,rotation,scale_x,scale_y");track.keys.push_back({parse_u32(v[0],"key.tick"),{parse_double(v[1],"key.x"),parse_double(v[2],"key.y"),parse_double(v[3],"key.rotation"),parse_double(v[4],"key.scale_x"),parse_double(v[5],"key.scale_y")}});} clip->tracks.push_back(std::move(track));
+    } else if (key == "clip_event") {
+      const auto p=split(value,'|');if(p.size()!=3)throw std::runtime_error("line " + std::to_string(line_number) + ": clip_event requires clip|id|tick");const auto clip=std::ranges::find(seed.clips,p[0],&SkeletalClip::id);if(clip==seed.clips.end())throw std::runtime_error("line " + std::to_string(line_number) + ": clip must precede event");clip->events.emplace_back(p[1],parse_u32(p[2],"event.tick"));
+    } else if (key == "initial_state") {
+      if (!seed.animation_graph) seed.animation_graph=AnimationStateGraph{};
+      seed.animation_graph->initial_state=value;
+    } else if (key == "state") {
+      if (!seed.animation_graph) seed.animation_graph=AnimationStateGraph{};
+      const auto p=split(value,'|');if(p.size()!=2)throw std::runtime_error("line " + std::to_string(line_number) + ": state requires id|clip");seed.animation_graph->states.push_back({p[0],p[1],{}});
+    } else if (key == "transition") {
+      if (!seed.animation_graph) throw std::runtime_error("line " + std::to_string(line_number) + ": states must precede transitions");const auto p=split(value,'|');if(p.size()!=8)throw std::runtime_error("line " + std::to_string(line_number) + ": transition requires source|target|parameter|comparison|threshold|min|blend|priority");const auto state=std::ranges::find(seed.animation_graph->states,p[0],&AnimationState::id);if(state==seed.animation_graph->states.end())throw std::runtime_error("line " + std::to_string(line_number) + ": source state must precede transition");state->transitions.push_back({p[1],p[2],parse_comparison(p[3]),parse_double(p[4],"transition.threshold"),parse_u32(p[5],"transition.minimum"),parse_u32(p[6],"transition.blend"),parse_u32(p[7],"transition.priority")});
+    } else if (key == "collision") {
+      if(seed.collision_shapes.size()>=512)throw std::runtime_error("collision shape count exceeds 512");const auto p=split(value,'|');if(p.size()!=7)throw std::runtime_error("line " + std::to_string(line_number) + ": collision requires id|kind|attachment|offset|extents");const auto kind=p[1]=="CIRCLE"?CollisionKind::circle:p[1]=="AXIS_ALIGNED_BOX"?CollisionKind::axis_aligned_box:throw std::runtime_error("invalid collision kind");seed.collision_shapes.push_back({p[0],kind,p[2],parse_double(p[3],"collision.offset_x"),parse_double(p[4],"collision.offset_y"),parse_double(p[5],"collision.extent_x"),parse_double(p[6],"collision.extent_y")});
+    } else if (key == "collision_window") {
+      if(seed.collision_windows.size()>=2048)throw std::runtime_error("collision window count exceeds 2048");const auto p=split(value,'|');if(p.size()!=5)throw std::runtime_error("line " + std::to_string(line_number) + ": collision_window requires ability|shape|start|end|deals_damage");seed.collision_windows.push_back({p[1],parse_u32(p[2],"window.start"),parse_u32(p[3],"window.end"),parse_bool(p[4],"window.deals_damage"),p[0]});
     } else throw std::runtime_error("line " + std::to_string(line_number) + ": unknown field " + key);
   }
   return seed;
@@ -135,9 +197,20 @@ ValidationResult validate(const SpriteSeed& seed) {
   const auto color_ok = [](const std::string& c) { return c.size() == 7 && c[0] == '#' && std::all_of(c.begin() + 1, c.end(), [](unsigned char x){ return std::isxdigit(x) != 0; }); };
   require(color_ok(seed.primary_color) && color_ok(seed.accent_color), "SPRITE_COLOR_INVALID", "colors must use #RRGGBB");
   require(!seed.abilities.empty() && seed.abilities.size() <= 64, "SPRITE_ABILITIES_INVALID", "entity requires 1..64 abilities");
+  std::set<std::string> ability_ids;
   for (const auto& ability : seed.abilities) {
     require(!ability.id.empty() && !ability.effect.empty(), "SPRITE_ABILITY_INVALID", "ability id and semantic effect are required");
     require(ability.cost <= 100 && ability.active_ticks > 0 && ability.active_ticks <= 600 && ability.cooldown_ticks <= 36000, "SPRITE_ABILITY_BOUNDS", "ability cost or timing exceeds bounds");
+    require(ability_ids.insert(ability.id).second, "SPRITE_ABILITY_DUPLICATE", "ability ids must be unique");
+  }
+  const bool has_animation_domain = seed.rig || !seed.clips.empty() || seed.animation_graph || !seed.collision_shapes.empty() || !seed.collision_windows.empty();
+  require(!has_animation_domain || seed.rig.has_value(), "SPRITE_RIG_REQUIRED", "rig is required when animation or collision semantics are present");
+  if (seed.rig) {
+    const auto rig_validation=validate_rig(*seed.rig); result.diagnostics.insert(result.diagnostics.end(),rig_validation.diagnostics.begin(),rig_validation.diagnostics.end());
+    for(const auto& clip:seed.clips){const auto clip_validation=validate_skeletal_clip(clip,*seed.rig);result.diagnostics.insert(result.diagnostics.end(),clip_validation.diagnostics.begin(),clip_validation.diagnostics.end());}
+    if(seed.animation_graph){const auto graph_validation=validate_state_graph(*seed.animation_graph,seed.clips);result.diagnostics.insert(result.diagnostics.end(),graph_validation.diagnostics.begin(),graph_validation.diagnostics.end());}
+    const auto shape_validation=validate_collision_contract(seed.collision_shapes,{},*seed.rig,0);result.diagnostics.insert(result.diagnostics.end(),shape_validation.diagnostics.begin(),shape_validation.diagnostics.end());
+    for(const auto& window:seed.collision_windows){const auto ability=std::ranges::find(seed.abilities,window.ability_id,&AbilitySeed::id);if(ability==seed.abilities.end()){result.diagnostics.push_back({"SPRITE_COLLISION_ABILITY_MISSING","collision window references absent ability: "+window.ability_id});continue;}const std::array one{window};const auto collision_validation=validate_collision_contract(seed.collision_shapes,one,*seed.rig,ability->active_ticks);result.diagnostics.insert(result.diagnostics.end(),collision_validation.diagnostics.begin(),collision_validation.diagnostics.end());}
   }
   return result;
 }
@@ -152,7 +225,11 @@ std::string canonicalize(const SpriteSeed& seed) {
     const auto& a = abilities[i];
     out << "{\"activeTicks\":" << a.active_ticks << ",\"cooldownTicks\":" << a.cooldown_ticks << ",\"cost\":" << a.cost << ",\"effect\":\"" << escape_json(a.effect) << "\",\"id\":\"" << escape_json(a.id) << "\"}";
   }
-  out << "],\"classification\":\"" << escape_json(seed.classification) << "\",\"colors\":{\"accent\":\"" << seed.accent_color << "\",\"primary\":\"" << seed.primary_color << "\"},\"entropyRoot\":" << seed.entropy_root << ",\"id\":\"" << escape_json(seed.stable_id) << "\",\"name\":\"" << escape_json(seed.name) << "\",\"rights\":\"" << rights_text(seed.rights) << "\",\"schema\":\"" << seed.schema << "\"}";
+  out << "],\"animationClips\":" << canonicalize_clips(seed.clips) << ",\"animationStateGraph\":";
+  if(seed.animation_graph) out << canonicalize_state_graph(*seed.animation_graph); else out << "null";
+  out << ",\"classification\":\"" << escape_json(seed.classification) << "\",\"collisions\":" << canonicalize_collisions(seed.collision_shapes,seed.collision_windows) << ",\"colors\":{\"accent\":\"" << seed.accent_color << "\",\"primary\":\"" << seed.primary_color << "\"},\"entropyRoot\":" << seed.entropy_root << ",\"id\":\"" << escape_json(seed.stable_id) << "\",\"name\":\"" << escape_json(seed.name) << "\",\"rig\":";
+  if(seed.rig) out << canonicalize_rig(*seed.rig); else out << "null";
+  out << ",\"rights\":\"" << rights_text(seed.rights) << "\",\"schema\":\"" << seed.schema << "\"}";
   return out.str();
 }
 
@@ -181,7 +258,7 @@ SpriteIr compile(const SpriteSeed& seed) {
   const auto genes = genes_from_seed(seed);
   const auto gene_validation = registry.validate(genes);
   if (!gene_validation.ok()) throw std::runtime_error(gene_validation.diagnostics.front().code + ": " + gene_validation.diagnostics.front().message);
-  return {sha256(canonicalize(seed)), seed.stable_id, seed.abilities, seed.primary_color, seed.accent_color};
+  return {sha256(canonicalize(seed)), seed.stable_id, seed.abilities, seed.primary_color, seed.accent_color, seed.rig, seed.clips, seed.animation_graph, seed.collision_shapes, seed.collision_windows};
 }
 
 bool activate(RuntimeEntity& entity, const AbilitySeed& ability) {
@@ -222,10 +299,20 @@ void build_package(const SpriteSeed& seed, const std::filesystem::path& output) 
     const ProvenanceRecord svg_provenance{"prov-svg-" + sha256(svg), ProvenanceActor::compiler, "gspl-sprites/0.1.0", "render-svg/1", {seed_artifact}, sha256(svg)};
     (void)graph.add("image/svg+xml", svg, {seed_artifact}, "render-svg/1", svg_provenance.id, "svg", ArtifactValidation::valid);
     write(staging / "seed.canonical.json", canonical); write(staging / "assets" / "entity.svg", svg);
+    std::vector<ProvenanceRecord> provenance_records{seed_provenance,svg_provenance};
+    std::vector<std::pair<std::string,std::string>> manifest_artifacts{{"assets/entity.svg",sha256(svg)}};
+    if(ir.rig){
+      const auto rig_json=canonicalize_rig(*ir.rig);const auto clips_json=canonicalize_clips(ir.clips);const auto graph_json=ir.animation_graph?canonicalize_state_graph(*ir.animation_graph):"null";const auto collisions_json=canonicalize_collisions(ir.collision_shapes,ir.collision_windows);
+      const auto add_semantic_artifact=[&](std::string path,std::string type,std::string pass,const std::string& bytes){const auto hash=sha256(bytes);const ProvenanceRecord provenance{"prov-"+pass+"-"+hash,ProvenanceActor::compiler,"gspl-sprites/0.1.0",pass,{seed_artifact},hash};(void)graph.add(std::move(type),bytes,{seed_artifact},pass,provenance.id,"portable",ArtifactValidation::valid);write(staging/path,bytes);provenance_records.push_back(provenance);manifest_artifacts.emplace_back(std::move(path),hash);};
+      add_semantic_artifact("rig.json","application/vnd.gspl.sprite-rig+json","lower-rig/1",rig_json);
+      add_semantic_artifact("animations.json","application/vnd.gspl.sprite-animation+json","lower-animation/1",clips_json);
+      if(ir.animation_graph)add_semantic_artifact("animation-state-graph.json","application/vnd.gspl.sprite-animation-graph+json","lower-animation-graph/1",graph_json);
+      add_semantic_artifact("collisions.json","application/vnd.gspl.sprite-collision+json","lower-collision/1",collisions_json);
+    }
     write(staging / "asset-graph.json", graph.canonical_manifest());
-    write(staging / "provenance.json", "{\"records\":[" + canonical_provenance(seed_provenance) + "," + canonical_provenance(svg_provenance) + "]}");
+    std::ranges::sort(provenance_records,{},&ProvenanceRecord::id);std::ostringstream provenance_json;provenance_json<<"{\"records\":[";for(std::size_t i=0;i<provenance_records.size();++i){if(i)provenance_json<<',';provenance_json<<canonical_provenance(provenance_records[i]);}provenance_json<<"]}";write(staging / "provenance.json",provenance_json.str());
     write(staging / "rights.json", "{\"classification\":\"" + rights_text(seed.rights) + "\",\"commercialExport\":true,\"decisionCode\":\"" + rights.code + "\"}");
-    std::ostringstream manifest; manifest << "{\"entityId\":\"" << ir.entity_id << "\",\"format\":\"gspl.sprite-package/0.1\",\"seedIdentity\":\"" << ir.seed_identity << "\",\"artifacts\":[{\"path\":\"assets/entity.svg\",\"sha256\":\"" << sha256(svg) << "\"}],\"assetGraph\":\"asset-graph.json\",\"provenance\":\"provenance.json\",\"rights\":\"rights.json\"}";
+    std::ranges::sort(manifest_artifacts);std::ostringstream manifest; manifest << "{\"artifacts\":[";for(std::size_t i=0;i<manifest_artifacts.size();++i){if(i)manifest<<',';manifest<<"{\"path\":\""<<manifest_artifacts[i].first<<"\",\"sha256\":\""<<manifest_artifacts[i].second<<"\"}";}manifest << "],\"assetGraph\":\"asset-graph.json\",\"entityId\":\"" << ir.entity_id << "\",\"format\":\"gspl.sprite-package/0.1\",\"provenance\":\"provenance.json\",\"rights\":\"rights.json\",\"seedIdentity\":\"" << ir.seed_identity << "\"}";
     write(staging / "manifest.json", manifest.str());
     std::filesystem::rename(staging, output);
   } catch (...) {

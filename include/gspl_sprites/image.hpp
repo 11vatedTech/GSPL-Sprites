@@ -1,6 +1,6 @@
 #pragma once
 
-#include "gspl_sprites/core.hpp"
+#include "gspl_sprites/common.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -69,4 +69,3 @@ struct AnimationClip {
                                                   std::span<const AtlasPlacement> frames);
 
 } // namespace gspl::sprites
-
