@@ -24,6 +24,9 @@ struct AuthoredVisualSet {
   std::vector<std::string> layer_order;
   bool pixel_art{};
   PixelArtPolicy pixel_policy;
+  std::uint32_t temporal_max_changed_per_million{1'000'000};
+  std::uint32_t temporal_min_silhouette_iou_per_million{};
+  std::vector<TemporalTransitionMetrics> temporal_metrics;
   std::string canonical_metadata;
 };
 

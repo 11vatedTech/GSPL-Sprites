@@ -15,6 +15,15 @@ bounds. Pixel-art validation admits at most 256 colors, checks declared grid
 alignment, and can forbid fractional alpha without allocating per-pixel
 diagnostics.
 
+Temporal stability is measured between consecutive semantic frames per
+animation, direction, and layer. The analyzer forms an overflow-checked union
+canvas in pivot-relative coordinates, canonicalizes pixels below the alpha
+threshold as transparent, and reports exact changed-pixel and silhouette
+intersection-over-union values as integer parts per million. Visual-set policy
+can reject excessive RGBA change or insufficient silhouette overlap. Accepted
+measurements are embedded in `visual-projection.json`, making the decision
+auditable and reproducible without floating-point tolerance drift.
+
 `compile_sprite_sheet` composes trimming, packing, alpha/outline mask generation,
 and canonical metadata. The visual package overload publishes its atlas and
 masks as PNG plus `atlas.json` inside the same recoverable staging transaction

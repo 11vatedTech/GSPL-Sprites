@@ -24,6 +24,8 @@ grid_width=1
 grid_height=1
 maximum_colors=16
 binary_alpha=true
+temporal_max_changed_per_million=350000
+temporal_min_silhouette_iou_per_million=700000
 layer=shadow
 layer=body
 layer=effects
@@ -54,6 +56,14 @@ When `pixel_art=true`, every source must satisfy the declared grid, palette, and
 binary-alpha policy. The union of colors across all layers, directions, and
 frames must also fit `maximum_colors`, preventing individually valid images from
 silently violating the set's fixed palette.
+
+Temporal analysis compares consecutive ordinals independently for each
+animation, direction, and layer. Pixels are aligned in pivot-relative space, so
+trimmed dimensions do not create false motion. `temporal_max_changed_per_million`
+bounds exact RGBA changes; `temporal_min_silhouette_iou_per_million` bounds
+foreground silhouette overlap. Both use integer parts-per-million values in
+`0..1000000`. Every transition's measured values are preserved in
+`visual-projection.json` even when thresholds are permissive.
 
 Paths are relative to the manifest directory. Absolute paths, drive syntax,
 backslashes, empty/dot/parent components, control/non-ASCII bytes, missing
