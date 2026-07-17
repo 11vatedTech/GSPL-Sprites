@@ -27,8 +27,9 @@ SHA-256 of canonical `manifest.json`), so a visual change preserves authored
 semantic identity while producing a distinct compiled package identity.
 
 Frame identifiers are semantic inputs, not inferred filenames. Direction,
-animation, and ordinal naming conventions will be enforced by the authored
-visual-set schema in the next integration layer. This pass library does not yet
+animation, layer, and ordinal naming conventions are enforced by
+`VISUAL_SET_SPECIFICATION.md`, whose bounded loader backs the public
+`build-visual` CLI path. This pass library does not yet
 claim segmentation, matting, temporal stability, layered composition,
 mesh-deformation, or normal/depth/emissive map generation.
 Those remain explicit gates in the master roadmap.

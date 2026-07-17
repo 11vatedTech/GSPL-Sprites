@@ -1,5 +1,7 @@
 #include "gspl_sprites/core.hpp"
 #include "gspl_sprites/package.hpp"
+#include "gspl_sprites/visual_set.hpp"
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -11,15 +13,19 @@ int main(int argc, char** argv) {
       if(!verification.ok()){for(const auto& diagnostic:verification.validation.diagnostics)std::cerr<<diagnostic.code<<": "<<diagnostic.message<<'\n';return 1;}
       std::cout<<"verified "<<verification.entity_id<<" seed="<<verification.seed_identity<<" package="<<verification.package_identity<<" artifacts="<<verification.artifact_count<<" bytes="<<verification.total_artifact_bytes<<'\n';return 0;
     }
-    if (argc != 4 || std::string_view(argv[1]) != "build") { std::cerr << "usage:\n  gspl-sprites build <seed.sprite> <output-directory>\n  gspl-sprites verify <package-directory>\n"; return 2; }
+    const bool seed_only=argc==4&&std::string_view(argv[1])=="build";const bool visual=argc==5&&std::string_view(argv[1])=="build-visual";
+    if (!seed_only&&!visual) { std::cerr << "usage:\n  gspl-sprites build <seed.sprite> <output-directory>\n  gspl-sprites build-visual <seed.sprite> <visual-set.txt> <output-directory>\n  gspl-sprites verify <package-directory>\n"; return 2; }
     std::ifstream input(argv[2], std::ios::binary);
     if (!input) { std::cerr << "cannot open input seed\n"; return 2; }
     const std::string source{std::istreambuf_iterator<char>(input), {}};
     const auto seed = gspl::sprites::parse_seed(source);
     const auto result = gspl::sprites::validate(seed);
     if (!result.ok()) { for (const auto& d : result.diagnostics) std::cerr << d.code << ": " << d.message << '\n'; return 1; }
-    gspl::sprites::build_package(seed, argv[3]);
-    std::cout << "built " << seed.stable_id << " identity=" << gspl::sprites::sha256(gspl::sprites::canonicalize(seed)) << '\n';
+    const std::filesystem::path output=visual?argv[4]:argv[3];
+    if(visual){const auto visual_set=gspl::sprites::load_authored_visual_set(argv[3]);gspl::sprites::build_package(seed,visual_set.frames,visual_set.sheet,output);}
+    else gspl::sprites::build_package(seed,output);
+    const auto verification=gspl::sprites::verify_package(output);if(!verification.ok())throw std::runtime_error("published package failed self-verification: "+verification.validation.diagnostics.front().code+": "+verification.validation.diagnostics.front().message);
+    std::cout << "built " << seed.stable_id << " seed=" << verification.seed_identity << " package=" << verification.package_identity << '\n';
     return 0;
   } catch (const std::exception& error) { std::cerr << "GSPL_SPRITES_FATAL: " << error.what() << '\n'; return 1; }
 }

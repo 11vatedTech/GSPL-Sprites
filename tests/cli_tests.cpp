@@ -1,0 +1,13 @@
+#include "gspl_sprites/image.hpp"
+#include "gspl_sprites/package.hpp"
+
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <stdexcept>
+
+using namespace gspl::sprites;
+namespace{void check(bool value,const char*message){if(!value)throw std::runtime_error(message);}void text(const std::filesystem::path&path,std::string_view value){std::ofstream output(path,std::ios::binary);output.write(value.data(),static_cast<std::streamsize>(value.size()));if(!output)throw std::runtime_error("CLI fixture write failed");}void binary(const std::filesystem::path&path,std::span<const std::byte> value){std::ofstream output(path,std::ios::binary);output.write(reinterpret_cast<const char*>(value.data()),static_cast<std::streamsize>(value.size()));if(!output)throw std::runtime_error("CLI binary fixture write failed");}std::string quote(const std::filesystem::path&path){return'"'+path.string()+'"';}int run(std::string_view command){const auto wrapped='"'+std::string(command)+'"';return std::system(wrapped.c_str());}}
+
+int main(int argc,char**argv){if(argc!=2){std::cerr<<"CLI executable argument missing\n";return 2;}const auto root=std::filesystem::temp_directory_path()/"gspl-sprites-cli-tests";try{std::filesystem::remove_all(root);std::filesystem::create_directories(root);text(root/"seed.sprite","schema=gspl.sprite-seed/0.1\nid=original.cli-test\nname=CLI Test\nclassification=fictional\nrights=ORIGINAL_USER_CREATION\nentropy_root=17\nprimary_color=#112233\naccent_color=#AABBCC\nability=arc|electric.projectile|20|4|2\n");ImageRgba8 image{2,2,ColorSpace::srgb,AlphaMode::straight,{255,0,0,255,0,0,0,0,0,0,0,0,0,0,0,0}};binary(root/"frame.png",encode_png(image));text(root/"visual.txt","schema=gspl.visual-set/0.1\nrights=ORIGINAL_USER_CREATION\nmax_width=16\nmax_height=16\npadding=1\ntrim=true\nalpha_threshold=0\nframe=idle|south|body|0|frame.png|1|1|3\n");const auto command=quote(argv[1])+" build-visual "+quote(root/"seed.sprite")+' '+quote(root/"visual.txt")+' '+quote(root/"package");check(run(command)==0,"build-visual CLI failed");const auto verification=verify_package(root/"package");check(verification.ok()&&verification.artifact_count==9&&verification.package_identity.size()==64,"CLI package failed independent verification");const auto verify_command=quote(argv[1])+" verify "+quote(root/"package");check(run(verify_command)==0,"verify CLI failed");std::filesystem::remove_all(root);std::cout<<"all gspl sprites CLI tests passed\n";return 0;}catch(const std::exception&error){std::filesystem::remove_all(root);std::cerr<<error.what()<<'\n';return 1;}}

@@ -59,6 +59,7 @@ add_library(gspl_sprites_core
   src/image_png.cpp
   src/inference_onnx.cpp
   src/sprite2d.cpp
+  src/visual_set.cpp
 )
 target_include_directories(gspl_sprites_core PUBLIC include)
 if(MSVC)
@@ -116,3 +117,11 @@ add_test(NAME gspl_sprites_inference_tests COMMAND gspl_sprites_inference_tests)
 add_executable(gspl_sprites_2d_tests tests/sprite2d_tests.cpp)
 target_link_libraries(gspl_sprites_2d_tests PRIVATE gspl_sprites_core)
 add_test(NAME gspl_sprites_2d_tests COMMAND gspl_sprites_2d_tests)
+
+add_executable(gspl_sprites_visual_set_tests tests/visual_set_tests.cpp)
+target_link_libraries(gspl_sprites_visual_set_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_visual_set_tests COMMAND gspl_sprites_visual_set_tests)
+
+add_executable(gspl_sprites_cli_tests tests/cli_tests.cpp)
+target_link_libraries(gspl_sprites_cli_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_cli_tests COMMAND gspl_sprites_cli_tests $<TARGET_FILE:gspl-sprites>)
