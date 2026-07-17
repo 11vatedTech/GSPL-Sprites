@@ -15,9 +15,20 @@ bounds. Pixel-art validation admits at most 256 colors, checks declared grid
 alignment, and can forbid fractional alpha without allocating per-pixel
 diagnostics.
 
+`compile_sprite_sheet` composes trimming, packing, alpha/outline mask generation,
+and canonical metadata. The visual package overload publishes its atlas and
+masks as PNG plus `atlas.json` inside the same recoverable staging transaction
+as the canonical seed and governance artifacts. Every source frame contributes
+its ID, dimensions, pivot, duration, color/alpha semantics, and pixels to a
+content-addressed source node. Derived visual artifacts depend on those nodes
+and the seed node, and carry compiler provenance into the closed package.
+The verifier reports seed identity separately from package identity (the
+SHA-256 of canonical `manifest.json`), so a visual change preserves authored
+semantic identity while producing a distinct compiled package identity.
+
 Frame identifiers are semantic inputs, not inferred filenames. Direction,
 animation, and ordinal naming conventions will be enforced by the authored
 visual-set schema in the next integration layer. This pass library does not yet
 claim segmentation, matting, temporal stability, layered composition,
-mesh-deformation, normal/depth/emissive map generation, or package integration.
+mesh-deformation, or normal/depth/emissive map generation.
 Those remain explicit gates in the master roadmap.

@@ -2,9 +2,11 @@
 
 #include "gspl_sprites/animation.hpp"
 #include "gspl_sprites/common.hpp"
+#include "gspl_sprites/sprite2d.hpp"
 
 #include <cstdint>
 #include <filesystem>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -68,5 +70,8 @@ struct RuntimeEntity {
 void tick(RuntimeEntity& entity) noexcept;
 [[nodiscard]] std::string render_svg(const SpriteIr& ir);
 void build_package(const SpriteSeed& seed, const std::filesystem::path& output);
+void build_package(const SpriteSeed& seed, std::span<const FrameSource> frames,
+                   const SpriteSheetOptions& options,
+                   const std::filesystem::path& output);
 
 } // namespace gspl::sprites

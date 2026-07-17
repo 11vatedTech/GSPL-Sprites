@@ -24,6 +24,21 @@ struct PixelArtPolicy {
   bool binary_alpha{true};
 };
 
+struct SpriteSheetOptions {
+  std::uint32_t maximum_width{4096};
+  std::uint32_t maximum_height{4096};
+  std::uint32_t padding{1};
+  bool trim_frames{true};
+  std::uint8_t alpha_threshold{};
+};
+
+struct SpriteSheetArtifacts {
+  AtlasResult atlas;
+  ImageRgba8 alpha;
+  ImageRgba8 outline;
+  std::string metadata;
+};
+
 [[nodiscard]] TrimmedFrame trim_transparent(const FrameSource& source,
                                             std::uint8_t alpha_threshold = 0);
 [[nodiscard]] FrameSource scale_nearest(const FrameSource& source,
@@ -40,5 +55,7 @@ struct PixelArtPolicy {
 [[nodiscard]] ValidationResult validate_pixel_art(const ImageRgba8& image,
                                                   const PixelArtPolicy& policy);
 [[nodiscard]] std::string canonicalize_atlas_metadata(const AtlasResult& atlas);
+[[nodiscard]] SpriteSheetArtifacts compile_sprite_sheet(std::span<const FrameSource> frames,
+                                                        const SpriteSheetOptions& options = {});
 
 } // namespace gspl::sprites

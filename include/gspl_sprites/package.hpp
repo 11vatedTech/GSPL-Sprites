@@ -20,6 +20,7 @@ struct PackageVerification {
   ValidationResult validation;
   std::string entity_id;
   std::string seed_identity;
+  std::string package_identity;
   std::uint32_t artifact_count{};
   std::uint64_t total_artifact_bytes{};
   [[nodiscard]] bool ok() const noexcept { return validation.ok(); }

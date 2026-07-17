@@ -91,4 +91,11 @@ ValidationResult validate_pixel_art(const ImageRgba8& image, const PixelArtPolic
 std::string canonicalize_atlas_metadata(const AtlasResult& atlas) {
   require_image(atlas.image);auto placements=atlas.placements;std::ranges::sort(placements,{},&AtlasPlacement::frame_id);std::set<std::string> ids;std::ostringstream out;out<<"{\"frames\":[";for(std::size_t i=0;i<placements.size();++i){const auto&p=placements[i];if(p.frame_id.empty()||!ids.insert(p.frame_id).second||p.width==0||p.height==0||p.x>atlas.image.width||p.y>atlas.image.height||p.width>atlas.image.width-p.x||p.height>atlas.image.height-p.y||p.duration_ticks==0)throw std::invalid_argument("atlas placement is invalid");if(i)out<<',';out<<"{\"durationTicks\":"<<p.duration_ticks<<",\"height\":"<<p.height<<",\"id\":\""<<escape_json(p.frame_id)<<"\",\"pivotX\":"<<p.pivot_x<<",\"pivotY\":"<<p.pivot_y<<",\"width\":"<<p.width<<",\"x\":"<<p.x<<",\"y\":"<<p.y<<'}';}out<<"],\"height\":"<<atlas.image.height<<",\"schema\":\"gspl.sprite-atlas/0.1\",\"width\":"<<atlas.image.width<<'}';return out.str();
 }
+
+SpriteSheetArtifacts compile_sprite_sheet(std::span<const FrameSource> frames, const SpriteSheetOptions& options) {
+  if(frames.empty()||frames.size()>4096||options.maximum_width==0||options.maximum_height==0||options.maximum_width>16384||options.maximum_height>16384||options.padding>64)throw std::invalid_argument("sprite-sheet options or frame count are invalid");
+  std::vector<FrameSource> prepared;prepared.reserve(frames.size());
+  for(const auto&frame:frames){if(options.trim_frames)prepared.push_back(trim_transparent(frame,options.alpha_threshold).frame);else{require_image(frame.image);prepared.push_back(frame);}}
+  auto atlas=pack_atlas(prepared,options.maximum_width,options.maximum_height,options.padding);auto metadata=canonicalize_atlas_metadata(atlas);auto alpha=alpha_mask(atlas.image,options.alpha_threshold);auto outline=outline_mask(atlas.image,options.alpha_threshold);return{std::move(atlas),std::move(alpha),std::move(outline),std::move(metadata)};
+}
 } // namespace gspl::sprites

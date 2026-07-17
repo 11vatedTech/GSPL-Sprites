@@ -283,6 +283,10 @@ std::string render_svg(const SpriteIr& ir) {
 }
 
 void build_package(const SpriteSeed& seed, const std::filesystem::path& output) {
+  build_package(seed, {}, {}, output);
+}
+
+void build_package(const SpriteSeed& seed, std::span<const FrameSource> frames, const SpriteSheetOptions& options, const std::filesystem::path& output) {
   const auto ir = compile(seed); const auto canonical = canonicalize(seed); const auto svg = render_svg(ir);
   const auto rights = evaluate_rights(seed.rights, AssetUsage::commercial_export);
   if (!rights.allowed) throw std::runtime_error(rights.code + ": " + rights.explanation);
@@ -301,13 +305,22 @@ void build_package(const SpriteSeed& seed, const std::filesystem::path& output) 
     write(staging / "seed.canonical.json", canonical); write(staging / "assets" / "entity.svg", svg);
     std::vector<ProvenanceRecord> provenance_records{seed_provenance,svg_provenance};
     std::vector<std::pair<std::string,std::string>> manifest_artifacts{{"assets/entity.svg",sha256(svg)},{"seed.canonical.json",sha256(canonical)}};
+    const auto add_semantic_artifact=[&](std::string path,std::string type,std::string pass,std::string_view bytes,std::string target,std::vector<std::string> dependencies){const auto hash=sha256(bytes);const ProvenanceRecord provenance{"prov-"+pass+"-"+hash,ProvenanceActor::compiler,"gspl-sprites/0.1.0",pass,dependencies,hash};(void)graph.add(std::move(type),bytes,dependencies,pass,provenance.id,std::move(target),ArtifactValidation::valid);write(staging/path,bytes);provenance_records.push_back(provenance);manifest_artifacts.emplace_back(std::move(path),hash);};
     if(ir.rig){
       const auto rig_json=canonicalize_rig(*ir.rig);const auto clips_json=canonicalize_clips(ir.clips);const auto graph_json=ir.animation_graph?canonicalize_state_graph(*ir.animation_graph):"null";const auto collisions_json=canonicalize_collisions(ir.collision_shapes,ir.collision_windows);
-      const auto add_semantic_artifact=[&](std::string path,std::string type,std::string pass,const std::string& bytes){const auto hash=sha256(bytes);const ProvenanceRecord provenance{"prov-"+pass+"-"+hash,ProvenanceActor::compiler,"gspl-sprites/0.1.0",pass,{seed_artifact},hash};(void)graph.add(std::move(type),bytes,{seed_artifact},pass,provenance.id,"portable",ArtifactValidation::valid);write(staging/path,bytes);provenance_records.push_back(provenance);manifest_artifacts.emplace_back(std::move(path),hash);};
-      add_semantic_artifact("rig.json","application/vnd.gspl.sprite-rig+json","lower-rig/1",rig_json);
-      add_semantic_artifact("animations.json","application/vnd.gspl.sprite-animation+json","lower-animation/1",clips_json);
-      if(ir.animation_graph)add_semantic_artifact("animation-state-graph.json","application/vnd.gspl.sprite-animation-graph+json","lower-animation-graph/1",graph_json);
-      add_semantic_artifact("collisions.json","application/vnd.gspl.sprite-collision+json","lower-collision/1",collisions_json);
+      add_semantic_artifact("rig.json","application/vnd.gspl.sprite-rig+json","lower-rig/1",rig_json,"portable",{seed_artifact});
+      add_semantic_artifact("animations.json","application/vnd.gspl.sprite-animation+json","lower-animation/1",clips_json,"portable",{seed_artifact});
+      if(ir.animation_graph)add_semantic_artifact("animation-state-graph.json","application/vnd.gspl.sprite-animation-graph+json","lower-animation-graph/1",graph_json,"portable",{seed_artifact});
+      add_semantic_artifact("collisions.json","application/vnd.gspl.sprite-collision+json","lower-collision/1",collisions_json,"portable",{seed_artifact});
+    }
+    if(!frames.empty()){
+      std::vector<std::string> frame_artifacts;frame_artifacts.reserve(frames.size());
+      for(const auto&frame:frames){if(frame.id.empty()||!frame.image.invariant())throw std::invalid_argument("visual source frame is invalid");std::ostringstream header;header<<"{\"alphaMode\":"<<static_cast<int>(frame.image.alpha_mode)<<",\"colorSpace\":"<<static_cast<int>(frame.image.color_space)<<",\"durationTicks\":"<<frame.duration_ticks<<",\"height\":"<<frame.image.height<<",\"id\":\""<<escape_json(frame.id)<<"\",\"pivotX\":"<<frame.pivot_x<<",\"pivotY\":"<<frame.pivot_y<<",\"width\":"<<frame.image.width<<"}\n";std::string bytes=header.str();bytes.append(reinterpret_cast<const char*>(frame.image.pixels.data()),frame.image.pixels.size());const auto hash=sha256(bytes);const ProvenanceRecord provenance{"prov-frame-source-"+hash,ProvenanceActor::user,"user","ingest-frame/1",{},hash};const auto artifact=graph.add("application/vnd.gspl.sprite-frame+rgba8",bytes,{},"ingest-frame/1",provenance.id,"canonical-2d",ArtifactValidation::valid);provenance_records.push_back(provenance);frame_artifacts.push_back(artifact);}
+      auto dependencies=frame_artifacts;dependencies.push_back(seed_artifact);std::ranges::sort(dependencies);const auto sheet=compile_sprite_sheet(frames,options);const auto atlas_png=encode_png(sheet.atlas.image);const auto alpha_png=encode_png(sheet.alpha);const auto outline_png=encode_png(sheet.outline);const auto view=[](const std::vector<std::byte>& bytes){return std::string_view(reinterpret_cast<const char*>(bytes.data()),bytes.size());};
+      add_semantic_artifact("assets/sprite-atlas.png","image/png","compile-atlas/1",view(atlas_png),"png",dependencies);
+      add_semantic_artifact("assets/sprite-alpha-mask.png","image/png","compile-alpha-mask/1",view(alpha_png),"png",dependencies);
+      add_semantic_artifact("assets/sprite-outline-mask.png","image/png","compile-outline-mask/1",view(outline_png),"png",dependencies);
+      add_semantic_artifact("atlas.json","application/vnd.gspl.sprite-atlas+json","emit-atlas-metadata/1",sheet.metadata,"portable",dependencies);
     }
     const auto asset_graph_json=graph.canonical_manifest();write(staging / "asset-graph.json",asset_graph_json);manifest_artifacts.emplace_back("asset-graph.json",sha256(asset_graph_json));
     std::ranges::sort(provenance_records,{},&ProvenanceRecord::id);std::ostringstream provenance_json;provenance_json<<"{\"records\":[";for(std::size_t i=0;i<provenance_records.size();++i){if(i)provenance_json<<',';provenance_json<<canonical_provenance(provenance_records[i]);}provenance_json<<"]}";write(staging / "provenance.json",provenance_json.str());manifest_artifacts.emplace_back("provenance.json",sha256(provenance_json.str()));
