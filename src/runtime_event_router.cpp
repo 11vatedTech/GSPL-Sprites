@@ -28,6 +28,19 @@ bool matches(const RuntimeEventBinding &binding, const RuntimeEvent &event) {
          binding.action_id == event.action_id &&
          binding.marker_id == event.marker_id;
 }
+bool operation_matches_consumer(const RuntimeEventBinding &binding) {
+  switch (binding.consumer) {
+  case RuntimeConsumerKind::animation:
+    return binding.operation_id.starts_with("animation.");
+  case RuntimeConsumerKind::combat:
+    return binding.operation_id.starts_with("ability.");
+  case RuntimeConsumerKind::effect:
+    return binding.operation_id.starts_with("effect.");
+  case RuntimeConsumerKind::audio:
+    return binding.operation_id.starts_with("audio.");
+  }
+  return false;
+}
 } // namespace
 
 ValidationResult validate_runtime_event_routing_program(
@@ -56,6 +69,7 @@ ValidationResult validate_runtime_event_routing_program(
                           &RuntimeActionDefinition::id);
     if (action == runtime_program.actions.end() ||
         !stable_id(binding.operation_id) ||
+        !operation_matches_consumer(binding) ||
         binding.event_kind == RuntimeEventKind::diagnostic)
       diagnostic(result, "SPRITE_ROUTER_BINDING_INVALID",
                  "routing binding references invalid semantics");
@@ -113,6 +127,7 @@ std::vector<RuntimeConsumerCommand> route_runtime_events(
   std::ranges::sort(bindings, {}, binding_key);
   std::vector<RuntimeConsumerCommand> commands;
   auto next_event_sequence = state.next_event_sequence;
+  auto next_command_sequence = state.next_command_sequence;
   for (const auto &event : events) {
     if (event.sequence != next_event_sequence)
       throw std::invalid_argument("runtime event sequence is not contiguous");
@@ -122,14 +137,18 @@ std::vector<RuntimeConsumerCommand> route_runtime_events(
         if (++emitted > program.maximum_commands_per_event ||
             commands.size() >= maximum_commands)
           throw std::runtime_error("runtime event command limit exceeded");
-        commands.push_back({event.tick, event.sequence, binding.consumer,
-                            binding.operation_id, binding.value});
+        if (next_command_sequence == std::numeric_limits<std::uint64_t>::max())
+          throw std::overflow_error("runtime command sequence overflow");
+        commands.push_back({next_command_sequence++, event.tick, event.sequence,
+                            binding.consumer, binding.operation_id,
+                            binding.value});
       }
     if (next_event_sequence == std::numeric_limits<std::uint64_t>::max())
       throw std::overflow_error("runtime event sequence overflow");
     ++next_event_sequence;
   }
   state.next_event_sequence = next_event_sequence;
+  state.next_command_sequence = next_command_sequence;
   return commands;
 }
 } // namespace gspl::sprites

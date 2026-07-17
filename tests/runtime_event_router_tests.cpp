@@ -62,12 +62,17 @@ int main() try {
   } catch (const std::runtime_error &) {
     limited = true;
   }
-  check(limited && transactional.next_event_sequence == 0,
+  check(limited && transactional.next_event_sequence == 0 &&
+            transactional.next_command_sequence == 0,
         "failed routing batch advanced its cursor");
   auto unknown = routing;
   unknown.bindings[1].marker_id = "missing";
   check(!validate_runtime_event_routing_program(unknown, runtime).ok(),
         "unknown marker accepted");
+  auto crossed = routing;
+  crossed.bindings[0].operation_id = "audio.slash";
+  check(!validate_runtime_event_routing_program(crossed, runtime).ok(),
+        "cross-consumer operation accepted");
   std::cout << "all gspl sprites runtime event router tests passed\n";
   return 0;
 } catch (const std::exception &error) {

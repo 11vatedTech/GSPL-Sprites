@@ -5,6 +5,8 @@ typed animation, combat, effect, and audio commands. Bindings reference a
 validated action and, for marker events, a declared semantic marker. Consumer
 operation identifiers remain engine-neutral; target adapters translate them to
 their native animation graphs, hit-resolution systems, effect pools, or mixers.
+Operation namespaces are consumer-specific: `animation.*`, `ability.*`,
+`effect.*`, and `audio.*`. Cross-consumer bindings fail validation.
 
 Routing is deterministic. Bindings are canonically ordered, events must have a
 contiguous sequence, and each output retains its source tick and sequence.
@@ -17,3 +19,11 @@ particles, and audio never decide whether damage occurred. Idempotent external
 consumers should checkpoint the source event sequence alongside their own
 state. Concrete animation playback, combat resolution, effect pooling, spatial
 audio, and preview UI are subsequent adapter layers.
+
+The engine-neutral preview consumer retains current animation state and bounded
+pending combat, effect, and audio emissions. Routed commands have their own
+contiguous sequence because one source event may fan out to several consumers.
+Application is transactional: ordering, overflow, or queue-limit failure leaves
+the entire preview state unchanged. Draining queues and performing real target
+side effects belongs to target adapters, which must checkpoint command sequence
+with their durable state.

@@ -24,6 +24,7 @@ struct RuntimeEventRoutingProgram {
 };
 
 struct RuntimeConsumerCommand {
+  std::uint64_t command_sequence{};
   std::uint64_t tick{};
   std::uint64_t event_sequence{};
   RuntimeConsumerKind consumer{};
@@ -33,6 +34,7 @@ struct RuntimeConsumerCommand {
 
 struct RuntimeEventRouterState {
   std::uint64_t next_event_sequence{};
+  std::uint64_t next_command_sequence{};
 };
 
 [[nodiscard]] ValidationResult validate_runtime_event_routing_program(
