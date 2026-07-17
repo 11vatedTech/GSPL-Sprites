@@ -58,6 +58,7 @@ add_library(gspl_sprites_core
   src/jobs.cpp
   src/image_png.cpp
   src/inference_onnx.cpp
+  src/sprite2d.cpp
 )
 target_include_directories(gspl_sprites_core PUBLIC include)
 if(MSVC)
@@ -111,3 +112,7 @@ add_executable(gspl_sprites_inference_tests tests/inference_tests.cpp)
 target_link_libraries(gspl_sprites_inference_tests PRIVATE gspl_sprites_core)
 gspl_stage_onnxruntime(gspl_sprites_inference_tests)
 add_test(NAME gspl_sprites_inference_tests COMMAND gspl_sprites_inference_tests)
+
+add_executable(gspl_sprites_2d_tests tests/sprite2d_tests.cpp)
+target_link_libraries(gspl_sprites_2d_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_2d_tests COMMAND gspl_sprites_2d_tests)
