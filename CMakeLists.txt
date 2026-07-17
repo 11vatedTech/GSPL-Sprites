@@ -12,6 +12,7 @@ add_library(gspl_sprites_core
   src/animation.cpp
   src/package.cpp
   src/model.cpp
+  src/jobs.cpp
 )
 target_include_directories(gspl_sprites_core PUBLIC include)
 if(MSVC)
@@ -47,3 +48,7 @@ add_test(NAME gspl_sprites_package_tests COMMAND gspl_sprites_package_tests)
 add_executable(gspl_sprites_model_tests tests/model_tests.cpp)
 target_link_libraries(gspl_sprites_model_tests PRIVATE gspl_sprites_core)
 add_test(NAME gspl_sprites_model_tests COMMAND gspl_sprites_model_tests)
+
+add_executable(gspl_sprites_job_tests tests/job_tests.cpp)
+target_link_libraries(gspl_sprites_job_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_job_tests COMMAND gspl_sprites_job_tests)
