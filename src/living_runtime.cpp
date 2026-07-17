@@ -87,12 +87,15 @@ void require_state(const LivingRuntimeProgram &program,
       throw std::invalid_argument(
           "living runtime state contains an invalid variable");
   }
+  std::set<std::uint64_t> memory_sequences;
   for (const auto &record : state.memory)
     if (!stable_id(record.observation.key) ||
         !stable_id(record.observation.source_entity) ||
         record.observation.confidence_per_million > 1'000'000 ||
         record.observation.lifetime_ticks == 0 ||
-        record.observation.observed_tick > state.tick)
+        record.observation.observed_tick > state.tick ||
+        record.sequence >= state.next_sequence ||
+        !memory_sequences.insert(record.sequence).second)
       throw std::invalid_argument("living runtime memory is invalid");
   for (const auto &[id, remaining] : state.cooldowns) {
     const auto *definition = action(program, id);
@@ -102,7 +105,9 @@ void require_state(const LivingRuntimeProgram &program,
   }
   if (state.active_action) {
     const auto *definition = action(program, state.active_action->action_id);
-    if (definition == nullptr || state.active_action->remaining_ticks == 0 ||
+    if (definition == nullptr ||
+        state.active_action->started_tick > state.tick ||
+        state.active_action->remaining_ticks == 0 ||
         state.active_action->remaining_ticks > definition->duration_ticks ||
         state.active_action->elapsed_ticks >= definition->duration_ticks ||
         state.active_action->elapsed_ticks +
@@ -164,6 +169,25 @@ validate_living_runtime_program(const LivingRuntimeProgram &program) {
           !markers.emplace(marker.tick_offset, marker.id).second)
         add("SPRITE_RUNTIME_MARKER_INVALID",
             "action marker is invalid or duplicate");
+  }
+  return result;
+}
+
+ValidationResult
+validate_living_runtime_state(const LivingRuntimeProgram &program,
+                              const LivingRuntimeState &state) {
+  ValidationResult result;
+  const auto program_validation = validate_living_runtime_program(program);
+  result.diagnostics.insert(result.diagnostics.end(),
+                            program_validation.diagnostics.begin(),
+                            program_validation.diagnostics.end());
+  if (!program_validation.ok())
+    return result;
+  try {
+    require_state(program, state);
+  } catch (const std::exception &error) {
+    result.diagnostics.push_back(
+        {"SPRITE_RUNTIME_STATE_INVALID", error.what()});
   }
   return result;
 }

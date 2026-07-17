@@ -8,11 +8,27 @@
 
 namespace gspl::sprites {
 
-enum class RuntimeEventKind { action_started, action_marker, action_completed, action_interrupted, diagnostic };
+enum class RuntimeEventKind {
+  action_started,
+  action_marker,
+  action_completed,
+  action_interrupted,
+  diagnostic
+};
 
-struct RuntimeCondition { std::string variable; Comparison comparison{Comparison::equal}; std::int32_t threshold{}; };
-struct UtilityTerm { std::string variable; std::int32_t weight_per_million{}; };
-struct ActionMarker { std::string id; std::uint32_t tick_offset{}; };
+struct RuntimeCondition {
+  std::string variable;
+  Comparison comparison{Comparison::equal};
+  std::int32_t threshold{};
+};
+struct UtilityTerm {
+  std::string variable;
+  std::int32_t weight_per_million{};
+};
+struct ActionMarker {
+  std::string id;
+  std::uint32_t tick_offset{};
+};
 
 struct RuntimeGoalDefinition {
   std::string id;
@@ -66,9 +82,9 @@ struct LivingRuntimeState {
   std::uint64_t tick{};
   std::uint64_t next_sequence{};
   std::uint32_t energy{100};
-  std::map<std::string,std::int32_t,std::less<>> variables;
+  std::map<std::string, std::int32_t, std::less<>> variables;
   std::vector<RuntimeMemoryRecord> memory;
-  std::map<std::string,std::uint32_t,std::less<>> cooldowns;
+  std::map<std::string, std::uint32_t, std::less<>> cooldowns;
   std::optional<ActiveRuntimeAction> active_action;
 };
 
@@ -85,11 +101,20 @@ struct RuntimeStepResult {
   std::optional<std::string> selected_action;
 };
 
-[[nodiscard]] ValidationResult validate_living_runtime_program(const LivingRuntimeProgram& program);
-void set_runtime_variable(LivingRuntimeState& state,std::string key,std::int32_t value);
-void observe(LivingRuntimeState& state,const LivingRuntimeProgram& program,PerceptionObservation observation);
-[[nodiscard]] RuntimeStepResult step_living_runtime(const LivingRuntimeProgram& program,LivingRuntimeState& state);
-[[nodiscard]] bool interrupt_living_action(const LivingRuntimeProgram& program,LivingRuntimeState& state,
-                                           std::vector<RuntimeEvent>& events);
+[[nodiscard]] ValidationResult
+validate_living_runtime_program(const LivingRuntimeProgram &program);
+[[nodiscard]] ValidationResult
+validate_living_runtime_state(const LivingRuntimeProgram &program,
+                              const LivingRuntimeState &state);
+void set_runtime_variable(LivingRuntimeState &state, std::string key,
+                          std::int32_t value);
+void observe(LivingRuntimeState &state, const LivingRuntimeProgram &program,
+             PerceptionObservation observation);
+[[nodiscard]] RuntimeStepResult
+step_living_runtime(const LivingRuntimeProgram &program,
+                    LivingRuntimeState &state);
+[[nodiscard]] bool interrupt_living_action(const LivingRuntimeProgram &program,
+                                           LivingRuntimeState &state,
+                                           std::vector<RuntimeEvent> &events);
 
 } // namespace gspl::sprites
