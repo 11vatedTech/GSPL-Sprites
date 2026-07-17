@@ -22,3 +22,6 @@ implement learned synthesis. Its SVG projection is a real deterministic target
 adapter used to prove identity, validation, runtime, packaging, and rebuild
 semantics before GPU/model complexity is admitted.
 
+Normative subsystem contracts are defined in `SPRITE_GENE_SPECIFICATION.md`,
+`ASSET_GRAPH_SPECIFICATION.md`, and `RIGHTS_AND_PROVENANCE.md`. Major choices
+are governed by records under `docs/decisions/`.

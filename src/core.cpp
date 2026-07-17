@@ -1,4 +1,5 @@
 #include "gspl_sprites/core.hpp"
+#include "gspl_sprites/domain.hpp"
 
 #include <algorithm>
 #include <array>
@@ -176,6 +177,10 @@ std::string sha256(std::string_view input) {
 SpriteIr compile(const SpriteSeed& seed) {
   const auto validation = validate(seed);
   if (!validation.ok()) throw std::runtime_error(validation.diagnostics.front().code + ": " + validation.diagnostics.front().message);
+  const GeneRegistry registry;
+  const auto genes = genes_from_seed(seed);
+  const auto gene_validation = registry.validate(genes);
+  if (!gene_validation.ok()) throw std::runtime_error(gene_validation.diagnostics.front().code + ": " + gene_validation.diagnostics.front().message);
   return {sha256(canonicalize(seed)), seed.stable_id, seed.abilities, seed.primary_color, seed.accent_color};
 }
 
@@ -202,10 +207,29 @@ std::string render_svg(const SpriteIr& ir) {
 
 void build_package(const SpriteSeed& seed, const std::filesystem::path& output) {
   const auto ir = compile(seed); const auto canonical = canonicalize(seed); const auto svg = render_svg(ir);
-  std::filesystem::create_directories(output / "assets");
+  const auto rights = evaluate_rights(seed.rights, AssetUsage::commercial_export);
+  if (!rights.allowed) throw std::runtime_error(rights.code + ": " + rights.explanation);
+  if (output.empty()) throw std::invalid_argument("output path must not be empty");
+  if (std::filesystem::exists(output)) throw std::runtime_error("output already exists; refusing to overwrite: " + output.string());
+  auto staging = output; staging += ".staging";
+  if (std::filesystem::exists(staging)) throw std::runtime_error("staging path already exists: " + staging.string());
+  std::filesystem::create_directories(staging / "assets");
   auto write = [](const auto& path, std::string_view bytes) { std::ofstream file(path, std::ios::binary); if (!file) throw std::runtime_error("cannot write " + path.string()); file.write(bytes.data(), static_cast<std::streamsize>(bytes.size())); if (!file) throw std::runtime_error("failed writing " + path.string()); };
-  write(output / "seed.canonical.json", canonical); write(output / "assets" / "entity.svg", svg);
-  std::ostringstream manifest; manifest << "{\"entityId\":\"" << ir.entity_id << "\",\"format\":\"gspl.sprite-package/0.1\",\"seedIdentity\":\"" << ir.seed_identity << "\",\"artifacts\":[{\"path\":\"assets/entity.svg\",\"sha256\":\"" << sha256(svg) << "\"}]}";
-  write(output / "manifest.json", manifest.str());
+  try {
+    const ProvenanceRecord seed_provenance{"prov-seed-" + ir.seed_identity, ProvenanceActor::user, "user", "author-seed/1", {}, ir.seed_identity};
+    AssetGraph graph;
+    const auto seed_artifact = graph.add("application/vnd.gspl.sprite-seed+json", canonical, {}, "canonicalize-seed/1", seed_provenance.id, "portable", ArtifactValidation::valid);
+    const ProvenanceRecord svg_provenance{"prov-svg-" + sha256(svg), ProvenanceActor::compiler, "gspl-sprites/0.1.0", "render-svg/1", {seed_artifact}, sha256(svg)};
+    (void)graph.add("image/svg+xml", svg, {seed_artifact}, "render-svg/1", svg_provenance.id, "svg", ArtifactValidation::valid);
+    write(staging / "seed.canonical.json", canonical); write(staging / "assets" / "entity.svg", svg);
+    write(staging / "asset-graph.json", graph.canonical_manifest());
+    write(staging / "provenance.json", "{\"records\":[" + canonical_provenance(seed_provenance) + "," + canonical_provenance(svg_provenance) + "]}");
+    write(staging / "rights.json", "{\"classification\":\"" + rights_text(seed.rights) + "\",\"commercialExport\":true,\"decisionCode\":\"" + rights.code + "\"}");
+    std::ostringstream manifest; manifest << "{\"entityId\":\"" << ir.entity_id << "\",\"format\":\"gspl.sprite-package/0.1\",\"seedIdentity\":\"" << ir.seed_identity << "\",\"artifacts\":[{\"path\":\"assets/entity.svg\",\"sha256\":\"" << sha256(svg) << "\"}],\"assetGraph\":\"asset-graph.json\",\"provenance\":\"provenance.json\",\"rights\":\"rights.json\"}";
+    write(staging / "manifest.json", manifest.str());
+    std::filesystem::rename(staging, output);
+  } catch (...) {
+    std::error_code ignored; std::filesystem::remove_all(staging, ignored); throw;
+  }
 }
 } // namespace gspl::sprites

@@ -11,10 +11,11 @@ repository. Those repositories informed concepts only.
 ## Current verified boundary
 
 The first production vertical compiles an original rights-safe electric fox
-entity through typed seed validation, IR lowering, a deterministic runtime
-ability transition, deterministic SVG projection, and a checksummed package
-manifest. It is deliberately not described as the complete platform; the
-remaining gates are governed by `docs/IMPLEMENTATION_ROADMAP.md`.
+entity through typed seed and gene validation, IR lowering, a deterministic
+runtime ability transition, deterministic SVG projection, an immutable asset
+graph, end-to-end provenance, an explicit rights decision, and a checksummed
+transactional package. It is deliberately not described as the complete
+platform; the remaining gates are governed by `docs/IMPLEMENTATION_ROADMAP.md`.
 
 ## Build on Windows
 
@@ -24,4 +25,3 @@ cmake --build --preset windows-msvc-debug
 ctest --preset windows-msvc-debug
 ./build/windows-msvc/Debug/gspl-sprites.exe build examples/voltfox.sprite outputs/voltfox
 ```
-

@@ -20,8 +20,8 @@ int main() {
     auto prohibited = seed; prohibited.rights = RightsClass::prohibited; check(!validate(prohibited).ok(), "prohibited rights exported");
     bool duplicate_rejected = false; try { (void)parse_seed(text + "name=Again\n"); } catch (const std::runtime_error&) { duplicate_rejected = true; } check(duplicate_rejected, "duplicate field accepted");
     bool oversized_rejected = false; try { (void)parse_seed(std::string((1U << 20) + 1, 'x')); } catch (const std::runtime_error&) { oversized_rejected = true; } check(oversized_rejected, "oversized source accepted");
-    const auto output = std::filesystem::temp_directory_path() / "gspl-sprites-core-test"; std::filesystem::remove_all(output); build_package(seed, output); check(std::filesystem::exists(output / "manifest.json"), "manifest missing"); check(std::filesystem::exists(output / "assets" / "entity.svg"), "projection missing"); std::filesystem::remove_all(output);
+    const auto output = std::filesystem::temp_directory_path() / "gspl-sprites-core-test"; std::filesystem::remove_all(output); std::filesystem::remove_all(output.string() + ".staging"); build_package(seed, output); check(std::filesystem::exists(output / "manifest.json"), "manifest missing"); check(std::filesystem::exists(output / "assets" / "entity.svg"), "projection missing"); check(std::filesystem::exists(output / "asset-graph.json"), "asset graph missing"); check(std::filesystem::exists(output / "provenance.json"), "provenance missing"); check(std::filesystem::exists(output / "rights.json"), "rights decision missing");
+    bool overwrite_rejected = false; try { build_package(seed, output); } catch (const std::runtime_error&) { overwrite_rejected = true; } check(overwrite_rejected, "existing package overwritten"); std::filesystem::remove_all(output);
     std::cout << "all gspl sprites core tests passed\n"; return 0;
   } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }
-

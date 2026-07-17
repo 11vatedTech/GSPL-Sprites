@@ -7,6 +7,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(gspl_sprites_core
   src/core.cpp
+  src/domain.cpp
 )
 target_include_directories(gspl_sprites_core PUBLIC include)
 if(MSVC)
@@ -23,3 +24,6 @@ add_executable(gspl_sprites_tests tests/core_tests.cpp)
 target_link_libraries(gspl_sprites_tests PRIVATE gspl_sprites_core)
 add_test(NAME gspl_sprites_tests COMMAND gspl_sprites_tests)
 
+add_executable(gspl_sprites_domain_tests tests/domain_tests.cpp)
+target_link_libraries(gspl_sprites_domain_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_domain_tests COMMAND gspl_sprites_domain_tests)
