@@ -22,7 +22,7 @@ int main(int argc, char** argv) {
     const auto result = gspl::sprites::validate(seed);
     if (!result.ok()) { for (const auto& d : result.diagnostics) std::cerr << d.code << ": " << d.message << '\n'; return 1; }
     const std::filesystem::path output=visual?argv[4]:argv[3];
-    if(visual){const auto visual_set=gspl::sprites::load_authored_visual_set(argv[3]);gspl::sprites::build_package(seed,visual_set.frames,visual_set.sheet,output);}
+    if(visual){const auto visual_set=gspl::sprites::load_authored_visual_set(argv[3]);gspl::sprites::build_package(seed,visual_set,output);}
     else gspl::sprites::build_package(seed,output);
     const auto verification=gspl::sprites::verify_package(output);if(!verification.ok())throw std::runtime_error("published package failed self-verification: "+verification.validation.diagnostics.front().code+": "+verification.validation.diagnostics.front().message);
     std::cout << "built " << seed.stable_id << " seed=" << verification.seed_identity << " package=" << verification.package_identity << '\n';

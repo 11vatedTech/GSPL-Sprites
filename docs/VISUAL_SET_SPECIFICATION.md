@@ -19,8 +19,17 @@ max_height=2048
 padding=2
 trim=true
 alpha_threshold=0
-frame=idle|south|body|0|frames/idle-south-0.png|32|58|6
-frame=idle|south|body|1|frames/idle-south-1.png|32|58|6
+pixel_art=true
+grid_width=1
+grid_height=1
+maximum_colors=16
+binary_alpha=true
+layer=shadow
+layer=body
+layer=effects
+frame=idle|south|shadow|0|frames/idle-south-shadow-0.png|32|58|6
+frame=idle|south|body|0|frames/idle-south-body-0.png|32|58|6
+frame=idle|south|effects|0|frames/idle-south-effects-0.png|32|58|6
 ```
 
 Frame fields are:
@@ -34,6 +43,17 @@ Animation and layer identifiers use lowercase ASCII letters, digits, `_`, and
 forms such as `north_east`. Ordinals are `0..9999`. The compiler derives a
 canonical identifier such as `idle.south.body.0000`; duplicate semantic
 identities are rejected.
+
+`layer` declarations define back-to-front ordering and are repeatable. Every
+animation/direction/ordinal tuple must contain each declared layer exactly once.
+Layers in that tuple must share source canvas dimensions, pivot, and duration;
+ordinals for each animation/direction sequence must be contiguous from zero.
+The package records this typed structure in canonical `visual-projection.json`.
+
+When `pixel_art=true`, every source must satisfy the declared grid, palette, and
+binary-alpha policy. The union of colors across all layers, directions, and
+frames must also fit `maximum_colors`, preventing individually valid images from
+silently violating the set's fixed palette.
 
 Paths are relative to the manifest directory. Absolute paths, drive syntax,
 backslashes, empty/dot/parent components, control/non-ASCII bytes, missing

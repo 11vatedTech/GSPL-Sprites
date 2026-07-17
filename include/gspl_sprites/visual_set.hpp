@@ -6,10 +6,25 @@
 
 namespace gspl::sprites {
 
+enum class Direction2d { none, north, north_east, east, south_east, south, south_west, west, north_west };
+
+struct VisualFrameSemantic {
+  std::string animation;
+  Direction2d direction{Direction2d::none};
+  std::string layer;
+  std::uint32_t ordinal{};
+  std::string frame_id;
+};
+
 struct AuthoredVisualSet {
   std::string schema;
   SpriteSheetOptions sheet;
   std::vector<FrameSource> frames;
+  std::vector<VisualFrameSemantic> semantics;
+  std::vector<std::string> layer_order;
+  bool pixel_art{};
+  PixelArtPolicy pixel_policy;
+  std::string canonical_metadata;
 };
 
 struct VisualSetLimits {

@@ -282,11 +282,21 @@ std::string render_svg(const SpriteIr& ir) {
   return out.str();
 }
 
+static void build_package_internal(const SpriteSeed& seed, std::span<const FrameSource> frames, const SpriteSheetOptions& options, std::string_view visual_metadata, const std::filesystem::path& output);
+
 void build_package(const SpriteSeed& seed, const std::filesystem::path& output) {
-  build_package(seed, {}, {}, output);
+  build_package_internal(seed, {}, {}, {}, output);
 }
 
 void build_package(const SpriteSeed& seed, std::span<const FrameSource> frames, const SpriteSheetOptions& options, const std::filesystem::path& output) {
+  build_package_internal(seed, frames, options, {}, output);
+}
+
+void build_package(const SpriteSeed& seed, const AuthoredVisualSet& visual_set, const std::filesystem::path& output) {
+  if(visual_set.canonical_metadata.empty())throw std::invalid_argument("authored visual set lacks canonical projection metadata");build_package_internal(seed,visual_set.frames,visual_set.sheet,visual_set.canonical_metadata,output);
+}
+
+static void build_package_internal(const SpriteSeed& seed, std::span<const FrameSource> frames, const SpriteSheetOptions& options, std::string_view visual_metadata, const std::filesystem::path& output) {
   const auto ir = compile(seed); const auto canonical = canonicalize(seed); const auto svg = render_svg(ir);
   const auto rights = evaluate_rights(seed.rights, AssetUsage::commercial_export);
   if (!rights.allowed) throw std::runtime_error(rights.code + ": " + rights.explanation);
@@ -321,6 +331,7 @@ void build_package(const SpriteSeed& seed, std::span<const FrameSource> frames, 
       add_semantic_artifact("assets/sprite-alpha-mask.png","image/png","compile-alpha-mask/1",view(alpha_png),"png",dependencies);
       add_semantic_artifact("assets/sprite-outline-mask.png","image/png","compile-outline-mask/1",view(outline_png),"png",dependencies);
       add_semantic_artifact("atlas.json","application/vnd.gspl.sprite-atlas+json","emit-atlas-metadata/1",sheet.metadata,"portable",dependencies);
+      if(!visual_metadata.empty())add_semantic_artifact("visual-projection.json","application/vnd.gspl.sprite-visual-projection+json","emit-visual-projection/1",visual_metadata,"portable",dependencies);
     }
     const auto asset_graph_json=graph.canonical_manifest();write(staging / "asset-graph.json",asset_graph_json);manifest_artifacts.emplace_back("asset-graph.json",sha256(asset_graph_json));
     std::ranges::sort(provenance_records,{},&ProvenanceRecord::id);std::ostringstream provenance_json;provenance_json<<"{\"records\":[";for(std::size_t i=0;i<provenance_records.size();++i){if(i)provenance_json<<',';provenance_json<<canonical_provenance(provenance_records[i]);}provenance_json<<"]}";write(staging / "provenance.json",provenance_json.str());manifest_artifacts.emplace_back("provenance.json",sha256(provenance_json.str()));

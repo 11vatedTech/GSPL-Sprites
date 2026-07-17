@@ -3,6 +3,7 @@
 #include "gspl_sprites/animation.hpp"
 #include "gspl_sprites/common.hpp"
 #include "gspl_sprites/sprite2d.hpp"
+#include "gspl_sprites/visual_set.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -72,6 +73,8 @@ void tick(RuntimeEntity& entity) noexcept;
 void build_package(const SpriteSeed& seed, const std::filesystem::path& output);
 void build_package(const SpriteSeed& seed, std::span<const FrameSource> frames,
                    const SpriteSheetOptions& options,
+                   const std::filesystem::path& output);
+void build_package(const SpriteSeed& seed, const AuthoredVisualSet& visual_set,
                    const std::filesystem::path& output);
 
 } // namespace gspl::sprites
