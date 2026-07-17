@@ -12,8 +12,9 @@ preferences; stable model identity/version break ties. No fallback is silent:
 absence of a compatible descriptor returns no selection and the synthesis plan
 must emit a diagnostic.
 
-The provider direction is ONNX Runtime CPU as the portable baseline, CUDA for
-the primary NVIDIA path, TensorRT only as a derived optimized cache, WinML for
+The first governed provider is ONNX Runtime 1.26.0 CPU/FP32 on Windows x64 and
+performs verified local inference under `INFERENCE_PROVIDER_ARCHITECTURE.md`.
+CUDA is the primary NVIDIA acceleration direction, TensorRT remains only a derived optimized cache, WinML provides
 portable Windows acceleration, OpenVINO where validated for Intel hardware, and
 CoreML for future directly tested Apple support. Descriptor support does not
 claim that a backend or model is installed; provider discovery and model-file
@@ -23,4 +24,3 @@ No production model has been selected by this specification. Admission requires
 license review, reproducible file acquisition, local hash verification, quality
 evaluation on governed rights-safe fixtures, measured RAM/VRAM/latency, and
 failure/determinism characterization.
-

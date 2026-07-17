@@ -27,6 +27,23 @@ target_include_directories(gspl_spng PUBLIC ${gspl_libspng_SOURCE_DIR}/spng)
 target_compile_definitions(gspl_spng PUBLIC SPNG_STATIC)
 target_link_libraries(gspl_spng PRIVATE ZLIB::ZLIBSTATIC)
 
+if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+  message(FATAL_ERROR "The initial governed ONNX Runtime provider currently supports Windows x64 only")
+endif()
+FetchContent_Declare(gspl_onnxruntime
+  URL https://github.com/microsoft/onnxruntime/releases/download/v1.26.0/onnxruntime-win-x64-1.26.0.zip
+  URL_HASH SHA256=6ebe99b5564bf4d029b6e93eac9ff423682b6212eade769e9ca3f685eaf500b4
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+  SOURCE_SUBDIR __gspl_prebuilt_distribution__
+)
+FetchContent_MakeAvailable(gspl_onnxruntime)
+add_library(gspl_onnxruntime_cpu SHARED IMPORTED GLOBAL)
+set_target_properties(gspl_onnxruntime_cpu PROPERTIES
+  IMPORTED_IMPLIB "${gspl_onnxruntime_SOURCE_DIR}/lib/onnxruntime.lib"
+  IMPORTED_LOCATION "${gspl_onnxruntime_SOURCE_DIR}/lib/onnxruntime.dll"
+  INTERFACE_INCLUDE_DIRECTORIES "${gspl_onnxruntime_SOURCE_DIR}/include"
+)
+
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -40,6 +57,7 @@ add_library(gspl_sprites_core
   src/model.cpp
   src/jobs.cpp
   src/image_png.cpp
+  src/inference_onnx.cpp
 )
 target_include_directories(gspl_sprites_core PUBLIC include)
 if(MSVC)
@@ -47,10 +65,18 @@ if(MSVC)
 else()
   target_compile_options(gspl_sprites_core PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
-target_link_libraries(gspl_sprites_core PRIVATE gspl_spng)
+target_link_libraries(gspl_sprites_core PRIVATE gspl_spng gspl_onnxruntime_cpu)
+
+function(gspl_stage_onnxruntime target)
+  add_custom_command(TARGET ${target} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "$<TARGET_FILE:gspl_onnxruntime_cpu>" "$<TARGET_FILE_DIR:${target}>"
+  )
+endfunction()
 
 add_executable(gspl-sprites src/main.cpp)
 target_link_libraries(gspl-sprites PRIVATE gspl_sprites_core)
+gspl_stage_onnxruntime(gspl-sprites)
 
 enable_testing()
 add_executable(gspl_sprites_tests tests/core_tests.cpp)
@@ -80,3 +106,8 @@ add_test(NAME gspl_sprites_model_tests COMMAND gspl_sprites_model_tests)
 add_executable(gspl_sprites_job_tests tests/job_tests.cpp)
 target_link_libraries(gspl_sprites_job_tests PRIVATE gspl_sprites_core)
 add_test(NAME gspl_sprites_job_tests COMMAND gspl_sprites_job_tests)
+
+add_executable(gspl_sprites_inference_tests tests/inference_tests.cpp)
+target_link_libraries(gspl_sprites_inference_tests PRIVATE gspl_sprites_core)
+gspl_stage_onnxruntime(gspl_sprites_inference_tests)
+add_test(NAME gspl_sprites_inference_tests COMMAND gspl_sprites_inference_tests)
