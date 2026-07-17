@@ -1,0 +1,10 @@
+schema=gspl.sprite-seed/0.1
+id=original.voltfox
+name=Voltfox
+classification=biological.fictional.electric-fox
+rights=ORIGINAL_USER_CREATION
+entropy_root=11072026
+primary_color=#242038
+accent_color=#56F1FF
+ability=directional-lightning|electric.projectile.directional|25|8|2
+
