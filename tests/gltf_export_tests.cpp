@@ -1,5 +1,6 @@
 #include "gspl_sprites/core.hpp"
 #include "gspl_sprites/gltf_export.hpp"
+#include "gspl_sprites/gltf_verify.hpp"
 
 #include <cstring>
 #include <filesystem>
@@ -98,6 +99,36 @@ int main(int argc, char **argv) try {
   check(governed_json.find(source.package_identity()) != std::string::npos &&
             governed_json.find("gsplSourceEvidence") != std::string::npos,
         "GLB did not preserve verified source package evidence");
+  const auto governed_verification = verify_projection3d_glb(governed_glb);
+  check(governed_verification.ok() &&
+            governed_verification.glb_identity.size() == 64,
+        "standalone GLB verifier rejected governed output");
+  auto forged_report = governed_glb;
+  const std::string_view original_adapter{"glb-2.0"};
+  const auto adapter =
+      std::search(forged_report.begin(), forged_report.end(),
+                  reinterpret_cast<const std::byte *>(original_adapter.data()),
+                  reinterpret_cast<const std::byte *>(original_adapter.data() +
+                                                      original_adapter.size()));
+  check(adapter != forged_report.end(), "GLB target report fixture is absent");
+  const std::string_view forged_adapter{"bad-2.0"};
+  std::copy(reinterpret_cast<const std::byte *>(forged_adapter.data()),
+            reinterpret_cast<const std::byte *>(forged_adapter.data() +
+                                                forged_adapter.size()),
+            adapter);
+  check(!verify_projection3d_glb(forged_report).ok(),
+        "forged embedded GLB target report was accepted");
+  auto missing_mesh_claim = governed_glb;
+  const std::string_view mesh_key{"\"meshes\":["};
+  const auto mesh = std::search(
+      missing_mesh_claim.begin(), missing_mesh_claim.end(),
+      reinterpret_cast<const std::byte *>(mesh_key.data()),
+      reinterpret_cast<const std::byte *>(mesh_key.data() + mesh_key.size()));
+  check(mesh != missing_mesh_claim.end(),
+        "GLB mesh structure fixture is absent");
+  *(mesh + 2) = static_cast<std::byte>('a');
+  check(!verify_projection3d_glb(missing_mesh_claim).ok(),
+        "GLB verifier accepted a missing required mesh structure");
   if (argc == 3 && std::string_view(argv[1]) == "--output-governed") {
     std::ofstream output(argv[2], std::ios::binary | std::ios::trunc);
     if (!output ||

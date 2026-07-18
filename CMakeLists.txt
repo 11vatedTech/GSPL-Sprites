@@ -70,6 +70,7 @@ add_library(gspl_sprites_core
   src/projection3d.cpp
   src/animation3d.cpp
   src/gltf_export.cpp
+  src/gltf_verify.cpp
   src/mesh_quality.cpp
   src/deformation_quality.cpp
   src/lod_quality.cpp

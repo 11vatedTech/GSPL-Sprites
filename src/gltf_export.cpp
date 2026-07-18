@@ -1,4 +1,5 @@
 #include "gspl_sprites/gltf_export.hpp"
+#include "gspl_sprites/gltf_verify.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -171,6 +172,23 @@ std::uint32_t sample_morph(const MorphTrack3d &track, std::uint32_t tick) {
   return static_cast<std::uint32_t>(
       static_cast<std::int64_t>(left.weight_per_million) +
       delta * elapsed / span);
+}
+
+std::vector<TargetRequirement>
+projection_requirements(const Projection3dDefinition &projection,
+                        std::span<const AnimationClip3d> animations) {
+  std::vector<TargetRequirement> result{{TargetFeature::mesh_3d, true}};
+  if (!projection.materials.empty())
+    result.push_back({TargetFeature::pbr_materials_3d, true});
+  if (projection.skeleton)
+    result.push_back({TargetFeature::skeleton_3d, true});
+  if (!projection.morph_targets.empty())
+    result.push_back({TargetFeature::morph_targets_3d, true});
+  if (!animations.empty())
+    result.push_back({TargetFeature::animation_3d, true});
+  if (!projection.lods.empty())
+    result.push_back({TargetFeature::lod_3d, true});
+  return result;
 }
 } // namespace
 
@@ -530,11 +548,18 @@ std::vector<std::byte> export_projection3d_glb(
     animation_payloads.push_back(std::move(payload));
   }
   std::ostringstream json;
+  const auto target_requirements =
+      projection_requirements(projection, animations);
+  const auto target_report =
+      canonicalize_target_compatibility(evaluate_target_compatibility(
+          builtin_target_adapter("glb-2.0"), target_requirements));
   json << "{\"asset\":{\"generator\":\"11vatedTech GSPL "
           "Sprites\",\"version\":\"2.0\",\"extras\":{"
           "\"gsplSourceEvidence\":"
        << canonicalize_target_source_evidence(source_evidence)
-       << "}},\"scene\":0,";
+       << ",\"gsplTargetRequirements\":"
+       << canonicalize_target_requirements(target_requirements)
+       << ",\"gsplTargetReport\":" << target_report << "}},\"scene\":0,";
   json << "\"buffers\":[{\"byteLength\":" << bin.size()
        << "}],\"bufferViews\":[";
   for (std::size_t i = 0; i < views.size(); ++i) {
@@ -795,6 +820,13 @@ std::vector<std::byte> export_projection3d_glb(
     u32(out, 0x004e4942);
     out.insert(out.end(), bin.begin(), bin.end());
   }
+  const auto verification =
+      verify_projection3d_glb(out, limits.maximum_glb_bytes);
+  if (!verification.ok())
+    throw std::runtime_error(
+        "generated GLB failed self-verification: " +
+        verification.validation.diagnostics.front().code + ": " +
+        verification.validation.diagnostics.front().message);
   return out;
 }
 

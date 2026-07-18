@@ -14,6 +14,13 @@ lower-level projection exports explicitly encode a null source package. Source
 evidence is issued only by the independent package verifier and remains valid
 standards-compliant glTF application metadata.
 
+`asset.extras` also carries canonical `gsplTargetRequirements` and the derived
+`gsplTargetReport`. The standalone verifier checks GLB framing and chunk bounds,
+parses those exact metadata objects, recomputes the `glb-2.0` compatibility
+report, validates source evidence, and requires concrete mesh, material, skin,
+morph, animation, and LOD structures for required features. Export performs
+this verification before returning bytes.
+
 Materials map to metallic-roughness PBR with explicit alpha behavior. Referenced
 textures must be supplied exactly once as governed PNG assets. They pass the
 bounded hostile-media decoder before embedding; missing, duplicate, malformed,
