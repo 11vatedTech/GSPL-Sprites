@@ -1,6 +1,7 @@
 #include "gspl_sprites/godot_export.hpp"
 
 #include "gspl_sprites/core.hpp"
+#include "gspl_sprites/package.hpp"
 
 #include <algorithm>
 #include <array>
@@ -12,12 +13,55 @@
 
 namespace gspl::sprites {
 namespace {
-constexpr std::array<std::string_view, 4> artifacts{
+constexpr std::array<std::string_view, 5> artifacts{
     "assets/entity.glb", "gspl_sprite.tscn", "project.godot",
-    "target-report.json"};
+    "source-evidence.json", "target-report.json"};
 
 std::string bytes_hash(std::span<const std::byte> bytes) {
   return sha256({reinterpret_cast<const char *>(bytes.data()), bytes.size()});
+}
+
+bool lowercase_sha256(std::string_view value) {
+  return value.size() == 64 &&
+         std::ranges::all_of(value, [](unsigned char character) {
+           return (character >= '0' && character <= '9') ||
+                  (character >= 'a' && character <= 'f');
+         });
+}
+
+std::string
+canonical_source_evidence(const std::optional<TargetSourceEvidence> &evidence) {
+  if (!evidence)
+    return "{\"sourcePackage\":null}";
+  if (!lowercase_sha256(evidence->package_identity()) ||
+      !lowercase_sha256(evidence->seed_identity()) ||
+      !lowercase_sha256(evidence->authoring_provenance_sha256()) ||
+      !lowercase_sha256(evidence->target_compatibility_sha256()))
+    throw std::invalid_argument("Godot source package evidence is invalid");
+  return "{\"sourcePackage\":{\"authoringProvenanceSha256\":\"" +
+         evidence->authoring_provenance_sha256() + "\",\"packageIdentity\":\"" +
+         evidence->package_identity() + "\",\"seedIdentity\":\"" +
+         evidence->seed_identity() + "\",\"targetCompatibilitySha256\":\"" +
+         evidence->target_compatibility_sha256() + "\"}}";
+}
+
+bool valid_source_evidence(std::string_view value) {
+  if (value == "{\"sourcePackage\":null}")
+    return true;
+  constexpr std::array<std::string_view, 5> tokens{
+      "{\"sourcePackage\":{\"authoringProvenanceSha256\":\"",
+      "\",\"packageIdentity\":\"", "\",\"seedIdentity\":\"",
+      "\",\"targetCompatibilitySha256\":\"", "\"}}"};
+  std::size_t cursor{};
+  for (std::size_t index = 0; index < 4; ++index) {
+    if (value.substr(cursor, tokens[index].size()) != tokens[index])
+      return false;
+    cursor += tokens[index].size();
+    if (!lowercase_sha256(value.substr(cursor, 64)))
+      return false;
+    cursor += 64;
+  }
+  return value.substr(cursor) == tokens.back();
 }
 
 bool valid_utf8(std::string_view value) {
@@ -142,6 +186,45 @@ projection_requirements(const Projection3dDefinition &projection,
 }
 } // namespace
 
+TargetSourceEvidence::TargetSourceEvidence(
+    std::string package_identity, std::string seed_identity,
+    std::string authoring_provenance_sha256,
+    std::string target_compatibility_sha256)
+    : package_identity_(std::move(package_identity)),
+      seed_identity_(std::move(seed_identity)),
+      authoring_provenance_sha256_(std::move(authoring_provenance_sha256)),
+      target_compatibility_sha256_(std::move(target_compatibility_sha256)) {}
+
+const std::string &TargetSourceEvidence::package_identity() const noexcept {
+  return package_identity_;
+}
+const std::string &TargetSourceEvidence::seed_identity() const noexcept {
+  return seed_identity_;
+}
+const std::string &
+TargetSourceEvidence::authoring_provenance_sha256() const noexcept {
+  return authoring_provenance_sha256_;
+}
+const std::string &
+TargetSourceEvidence::target_compatibility_sha256() const noexcept {
+  return target_compatibility_sha256_;
+}
+
+TargetSourceEvidence
+target_source_evidence_from_package(const std::filesystem::path &package_root) {
+  const auto verification = verify_package(package_root);
+  if (!verification.ok())
+    throw std::invalid_argument(
+        "Godot source package failed verification: " +
+        verification.validation.diagnostics.front().code + ": " +
+        verification.validation.diagnostics.front().message);
+  return {verification.package_identity, verification.seed_identity,
+          sha256(read_file(package_root / "authoring-provenance.json",
+                           4ULL * 1024ULL * 1024ULL)),
+          sha256(read_file(package_root / "target-compatibility.json",
+                           4ULL * 1024ULL * 1024ULL))};
+}
+
 void export_godot_3d_project(
     const Projection3dDefinition &projection,
     std::span<const AnimationClip3d> animations,
@@ -184,14 +267,18 @@ void export_godot_3d_project(
         "id=\"1_entity\"]\n\n"
         "[node name=\"GSPLSprite\" instance=ExtResource(\"1_entity\")]\n";
     const auto report_json = canonicalize_target_compatibility(report);
+    const auto source_evidence =
+        canonical_source_evidence(options.source_evidence);
     write_binary(staging / "assets" / "entity.glb", glb);
     write_text(staging / "project.godot", project);
     write_text(staging / "gspl_sprite.tscn", scene);
     write_text(staging / "target-report.json", report_json);
+    write_text(staging / "source-evidence.json", source_evidence);
     std::map<std::string, std::string, std::less<>> hashes;
     hashes.emplace("assets/entity.glb", bytes_hash(glb));
     hashes.emplace("gspl_sprite.tscn", sha256(scene));
     hashes.emplace("project.godot", sha256(project));
+    hashes.emplace("source-evidence.json", sha256(source_evidence));
     hashes.emplace("target-report.json", sha256(report_json));
     write_text(staging / "gspl-target-manifest.json", manifest(hashes));
     const auto verification = verify_godot_3d_project(staging);
@@ -245,6 +332,11 @@ verify_godot_3d_project(const std::filesystem::path &root) {
       add("SPRITE_GODOT_MANIFEST_MISMATCH",
           "Godot target manifest does not match its artifacts");
     result.project_identity = sha256(actual);
+    if (hashes.contains("source-evidence.json") &&
+        !valid_source_evidence(
+            read_file(root / "source-evidence.json", 1024ULL * 1024ULL)))
+      add("SPRITE_GODOT_SOURCE_EVIDENCE_INVALID",
+          "Godot source package evidence is malformed");
     std::set<std::string> expected_paths{"gspl-target-manifest.json"};
     expected_paths.insert(artifacts.begin(), artifacts.end());
     std::set<std::string> actual_paths;

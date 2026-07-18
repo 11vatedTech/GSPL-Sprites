@@ -1,3 +1,4 @@
+#include "gspl_sprites/core.hpp"
 #include "gspl_sprites/godot_export.hpp"
 
 #include <array>
@@ -28,6 +29,24 @@ Projection3dDefinition fixture() {
                         {0, 1, 2}}};
   return projection;
 }
+
+SpriteSeed seed_fixture() {
+  return parse_seed(R"(schema=gspl.sprite-seed/0.1
+id=original.godot-source
+name=Godot Source
+classification=fictional
+rights=ORIGINAL_USER_CREATION
+entropy_root=47
+primary_color=#112233
+accent_color=#AABBCC
+ability=arc|electric.projectile|20|4|2
+)");
+}
+
+std::string read(const std::filesystem::path &path) {
+  std::ifstream input(path, std::ios::binary);
+  return {std::istreambuf_iterator<char>(input), {}};
+}
 } // namespace
 
 int main(int argc, char **argv) try {
@@ -39,11 +58,20 @@ int main(int argc, char **argv) try {
   if (argc != 2)
     std::filesystem::remove_all(root);
   std::filesystem::remove_all(root.string() + ".staging");
-  export_godot_3d_project(fixture(), {}, {}, {}, root, {"Godot Fixture"});
+  const std::filesystem::path source_package =
+      root.string() + "-source-package";
+  std::filesystem::remove_all(source_package);
+  build_package(seed_fixture(), source_package);
+  const auto source = target_source_evidence_from_package(source_package);
+  export_godot_3d_project(fixture(), {}, {}, {}, root,
+                          {"Godot Fixture", {}, source});
   const auto verification = verify_godot_3d_project(root);
-  check(verification.ok() && verification.project_identity.size() == 64 &&
-            std::filesystem::exists(root / "assets" / "entity.glb"),
-        "generated Godot target failed verification");
+  check(
+      verification.ok() && verification.project_identity.size() == 64 &&
+          std::filesystem::exists(root / "assets" / "entity.glb") &&
+          read(root / "source-evidence.json").find(source.package_identity()) !=
+              std::string::npos,
+      "generated Godot target failed verification");
   const std::array unsupported{
       TargetRequirement{TargetFeature::living_runtime, true}};
   bool rejected = false;
@@ -66,6 +94,18 @@ int main(int argc, char **argv) try {
   check(invalid_name_rejected &&
             !std::filesystem::exists(root.string() + "-invalid-name"),
         "Godot target accepted a malformed UTF-8 project name");
+  bool invalid_source_rejected = false;
+  try {
+    std::ofstream tamper(source_package / "authoring-provenance.json",
+                         std::ios::app);
+    tamper << "x";
+    tamper.close();
+    (void)target_source_evidence_from_package(source_package);
+  } catch (const std::invalid_argument &) {
+    invalid_source_rejected = true;
+  }
+  check(invalid_source_rejected,
+        "Godot target evidence accepted a modified source package");
   if (argc != 2) {
     {
       std::ofstream undeclared(root / "undeclared.txt");
@@ -81,6 +121,7 @@ int main(int argc, char **argv) try {
           "Godot target verifier accepted a modified artifact");
     std::filesystem::remove_all(root);
   }
+  std::filesystem::remove_all(source_package);
   std::cout << "all GSPL Sprites Godot export tests passed\n";
   return 0;
 } catch (const std::exception &error) {
