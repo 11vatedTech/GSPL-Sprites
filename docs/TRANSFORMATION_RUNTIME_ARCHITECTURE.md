@@ -48,3 +48,9 @@ base form, timed transition, intermediate manifestation, atomic combat-capacity
 delta, canonical save/load, restored form manifestation, form-gated ability,
 damage, and timed status effect. The presentation frame and persisted state use
 the same authoritative identity throughout.
+
+The same total-binding and identity rules now cover validated 2.5D projections.
+Each form may resolve to a depth-plane, view, lighting, hybrid-geometry, and
+collision contract that independently passes `validate_projection25d`; active
+transition frames retain the same clip and deterministic progress semantics as
+3D. Invalid depth-layer projections cannot enter a manifestation program.

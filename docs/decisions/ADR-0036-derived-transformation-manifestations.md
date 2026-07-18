@@ -21,6 +21,6 @@ and target consumers prove which semantic state they manifested.
 ## Consequences
 
 Form and transition presentation is deterministic, complete, and traceable to
-semantic authority. The initial visual binding targets validated 3D projections;
-equivalent 2D and 2.5D binding variants remain necessary. Presentation
+semantic authority. Bindings target validated 3D and 2.5D projections. A
+first-class validated 2D projection artifact remains necessary. Presentation
 interpolation may use progress but cannot feed state back into simulation.

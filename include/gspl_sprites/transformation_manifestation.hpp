@@ -2,6 +2,7 @@
 
 #include "gspl_sprites/animation.hpp"
 #include "gspl_sprites/projection3d.hpp"
+#include "gspl_sprites/projection25d.hpp"
 #include "gspl_sprites/transformation_persistence.hpp"
 
 namespace gspl::sprites {
@@ -43,6 +44,21 @@ project_transformation_manifestation(
     const CombatProgram &combat_program, const AnimationStateGraph &animation_graph,
     std::span<const SkeletalClip> clips,
     std::span<const Projection3dDefinition> projections,
+    const TransformationState &state, std::uint64_t tick);
+
+[[nodiscard]] ValidationResult validate_transformation_manifestation25d_program(
+    const TransformationManifestationProgram &program,
+    const TransformationProgram &transformation_program,
+    const CombatProgram &combat_program, const AnimationStateGraph &animation_graph,
+    std::span<const SkeletalClip> clips,
+    std::span<const Projection25dDefinition> projections);
+[[nodiscard]] TransformationManifestationFrame
+project_transformation_manifestation25d(
+    const TransformationManifestationProgram &program,
+    const TransformationProgram &transformation_program,
+    const CombatProgram &combat_program, const AnimationStateGraph &animation_graph,
+    std::span<const SkeletalClip> clips,
+    std::span<const Projection25dDefinition> projections,
     const TransformationState &state, std::uint64_t tick);
 
 } // namespace gspl::sprites

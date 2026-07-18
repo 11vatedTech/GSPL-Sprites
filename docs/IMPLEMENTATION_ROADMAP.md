@@ -19,7 +19,8 @@
    and form-specific ability gating are implemented with canonical program-bound
    persistence and state-hash convergence evidence. Validated skeletal-animation
    and 3D-projection manifestations are derived from that authority;
-   authenticated transport plus 2D/2.5D form bindings remain open.
+   authenticated transport plus a first-class 2D form binding remain open; 2.5D
+   depth-layer manifestations now have equivalent validated coverage.
 6. 2.5D and 3D: depth layers, multi-view, reconstruction, topology, materials,
    rigging, retargeting, validation and LOD.
 7. Targets: portable runtime, Godot, Unity, Unreal, web and explicit feature
