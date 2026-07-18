@@ -75,6 +75,7 @@ add_library(gspl_sprites_core
   src/runtime25d.cpp
   src/target_contract.cpp
   src/godot_export.cpp
+  src/authoring.cpp
 )
 target_include_directories(gspl_sprites_core PUBLIC include)
 if(MSVC)
@@ -200,3 +201,7 @@ add_test(NAME gspl_sprites_target_contract_tests COMMAND gspl_sprites_target_con
 add_executable(gspl_sprites_godot_export_tests tests/godot_export_tests.cpp)
 target_link_libraries(gspl_sprites_godot_export_tests PRIVATE gspl_sprites_core)
 add_test(NAME gspl_sprites_godot_export_tests COMMAND gspl_sprites_godot_export_tests)
+
+add_executable(gspl_sprites_authoring_tests tests/authoring_tests.cpp)
+target_link_libraries(gspl_sprites_authoring_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_authoring_tests COMMAND gspl_sprites_authoring_tests)
