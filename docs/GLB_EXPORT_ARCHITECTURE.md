@@ -27,6 +27,10 @@ deterministic union timeline and emitted as the complete ordered weight vector
 required by glTF. Loop policy and semantic tick events remain GSPL extras because
 glTF defines key storage but not playback or gameplay event behavior.
 
+Animated exports additionally pass sampled linear-blend deformation analysis.
+Triangle collapse, excessive vertex displacement, and evaluation workloads over
+policy are rejected before animation accessors are created.
+
 Textured meshes pass the bounded mesh-quality gate before their UV attributes
 are emitted. Normal-mapped materials additionally receive generated normalized
 `TANGENT` vectors and handedness. UV overlap, degenerate parameterization, or

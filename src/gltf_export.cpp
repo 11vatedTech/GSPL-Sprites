@@ -198,6 +198,13 @@ export_projection3d_glb(const Projection3dDefinition &projection,
       throw std::invalid_argument(
           clip_validation.ok() ? "duplicate GLB animation ID"
                                : clip_validation.diagnostics.front().message);
+    if (projection.skeleton) {
+      const auto deformation = analyze_deformation_quality(
+          projection, clip, limits.deformation_quality);
+      if (!deformation.validation.ok())
+        throw std::invalid_argument(
+            deformation.validation.diagnostics.front().message);
+    }
   }
   std::map<std::string, GltfTextureAsset, std::less<>> textures;
   std::uint64_t texture_bytes{};

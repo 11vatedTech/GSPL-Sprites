@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gspl_sprites/animation3d.hpp"
+#include "gspl_sprites/deformation_quality.hpp"
 #include "gspl_sprites/image.hpp"
 #include "gspl_sprites/mesh_quality.hpp"
 #include "gspl_sprites/projection3d.hpp"
@@ -20,6 +21,7 @@ struct GltfExportLimits {
   std::uint64_t maximum_texture_bytes{256ULL * 1024ULL * 1024ULL};
   ImageLimits texture_image;
   MeshQualityPolicy mesh_quality;
+  DeformationQualityPolicy deformation_quality;
 };
 
 [[nodiscard]] std::vector<std::byte>

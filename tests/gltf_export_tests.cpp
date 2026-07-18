@@ -75,6 +75,17 @@ int main(int argc, char **argv) try {
   check(animated_json.find("\"animations\"") != std::string::npos &&
             animated_json.find("\"gsplEvents\"") != std::string::npos,
         "GLB animation or semantic events missing");
+  auto collapsed = animation();
+  collapsed.joint_tracks[0].keys[1].pose.scale_xyz_ppm = {1, 1, 1};
+  bool deformation_rejected = false;
+  try {
+    const std::array invalid_animations{collapsed};
+    (void)export_projection3d_glb(fixture(), invalid_animations,
+                                  std::span<const GltfTextureAsset>{}, {});
+  } catch (const std::invalid_argument &) {
+    deformation_rejected = true;
+  }
+  check(deformation_rejected, "collapsed GLB animation accepted");
   GltfExportLimits tiny;
   tiny.maximum_glb_bytes = 32;
   bool bounded = false;

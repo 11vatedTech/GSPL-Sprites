@@ -70,6 +70,7 @@ add_library(gspl_sprites_core
   src/animation3d.cpp
   src/gltf_export.cpp
   src/mesh_quality.cpp
+  src/deformation_quality.cpp
 )
 target_include_directories(gspl_sprites_core PUBLIC include)
 if(MSVC)
@@ -175,3 +176,7 @@ add_test(NAME gspl_sprites_gltf_export_tests COMMAND gspl_sprites_gltf_export_te
 add_executable(gspl_sprites_mesh_quality_tests tests/mesh_quality_tests.cpp)
 target_link_libraries(gspl_sprites_mesh_quality_tests PRIVATE gspl_sprites_core)
 add_test(NAME gspl_sprites_mesh_quality_tests COMMAND gspl_sprites_mesh_quality_tests)
+
+add_executable(gspl_sprites_deformation_quality_tests tests/deformation_quality_tests.cpp)
+target_link_libraries(gspl_sprites_deformation_quality_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_deformation_quality_tests COMMAND gspl_sprites_deformation_quality_tests)
