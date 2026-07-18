@@ -65,6 +65,7 @@ add_library(gspl_sprites_core
   src/runtime_persistence.cpp
   src/runtime_event_router.cpp
   src/runtime_consumers.cpp
+  src/projection25d.cpp
 )
 target_include_directories(gspl_sprites_core PUBLIC include)
 if(MSVC)
@@ -150,3 +151,7 @@ add_test(NAME gspl_sprites_runtime_event_router_tests COMMAND gspl_sprites_runti
 add_executable(gspl_sprites_runtime_consumers_tests tests/runtime_consumers_tests.cpp)
 target_link_libraries(gspl_sprites_runtime_consumers_tests PRIVATE gspl_sprites_core)
 add_test(NAME gspl_sprites_runtime_consumers_tests COMMAND gspl_sprites_runtime_consumers_tests)
+
+add_executable(gspl_sprites_projection25d_tests tests/projection25d_tests.cpp)
+target_link_libraries(gspl_sprites_projection25d_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_projection25d_tests COMMAND gspl_sprites_projection25d_tests)
