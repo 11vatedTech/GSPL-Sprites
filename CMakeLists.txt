@@ -88,6 +88,7 @@ add_library(gspl_sprites_core
   src/authoring.cpp
   src/authoring_io.cpp
   src/authoring_cli.cpp
+  src/synthesis.cpp
 )
 target_include_directories(gspl_sprites_core PUBLIC include)
 if(MSVC)
@@ -221,6 +222,10 @@ add_test(NAME gspl_sprites_projection25d_tests COMMAND gspl_sprites_projection25
 add_executable(gspl_sprites_projection2d_tests tests/projection2d_tests.cpp)
 target_link_libraries(gspl_sprites_projection2d_tests PRIVATE gspl_sprites_core)
 add_test(NAME gspl_sprites_projection2d_tests COMMAND gspl_sprites_projection2d_tests)
+
+add_executable(gspl_sprites_synthesis_tests tests/synthesis_tests.cpp)
+target_link_libraries(gspl_sprites_synthesis_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_synthesis_tests COMMAND gspl_sprites_synthesis_tests)
 
 add_executable(gspl_sprites_projection3d_tests tests/projection3d_tests.cpp)
 target_link_libraries(gspl_sprites_projection3d_tests PRIVATE gspl_sprites_core)
