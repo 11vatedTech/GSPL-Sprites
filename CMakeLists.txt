@@ -73,6 +73,7 @@ add_library(gspl_sprites_core
   src/deformation_quality.cpp
   src/lod_quality.cpp
   src/runtime25d.cpp
+  src/target_contract.cpp
 )
 target_include_directories(gspl_sprites_core PUBLIC include)
 if(MSVC)
@@ -190,3 +191,7 @@ add_test(NAME gspl_sprites_lod_quality_tests COMMAND gspl_sprites_lod_quality_te
 add_executable(gspl_sprites_runtime25d_tests tests/runtime25d_tests.cpp)
 target_link_libraries(gspl_sprites_runtime25d_tests PRIVATE gspl_sprites_core)
 add_test(NAME gspl_sprites_runtime25d_tests COMMAND gspl_sprites_runtime25d_tests)
+
+add_executable(gspl_sprites_target_contract_tests tests/target_contract_tests.cpp)
+target_link_libraries(gspl_sprites_target_contract_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_target_contract_tests COMMAND gspl_sprites_target_contract_tests $<TARGET_FILE:gspl-sprites>)
