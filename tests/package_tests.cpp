@@ -1,5 +1,6 @@
 #include "gspl_sprites/core.hpp"
 #include "gspl_sprites/package.hpp"
+#include "gspl_sprites/target_contract.hpp"
 
 #include <array>
 #include <filesystem>
@@ -75,7 +76,7 @@ int main() {
     for (const auto &diagnostic : verified.validation.diagnostics)
       std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
     check(verified.ok(), "valid package rejected");
-    check(verified.artifact_count == 7, "governance artifacts not declared");
+    check(verified.artifact_count == 9, "governance artifacts not declared");
     const auto governed = base / "governed";
     build_package(fixture(),
                   {"{\"project\":{\"id\":\"authoring.test\",\"revision\":0,"
@@ -138,12 +139,42 @@ int main() {
               has_code(graph_verification,
                        "SPRITE_PACKAGE_GRAPH_IDENTITY_MISMATCH"),
           "hash-consistent forged graph identity passed verification");
+    const auto forged_target = base / "forged-target";
+    std::filesystem::copy(valid, forged_target,
+                          std::filesystem::copy_options::recursive);
+    const auto requirement_path =
+        forged_target / "package-target-requirements.json";
+    const auto report_path = forged_target / "package-target-report.json";
+    const auto old_requirements = read_text(requirement_path);
+    const auto old_report = read_text(report_path);
+    const std::array forged_requirements{
+        TargetRequirement{TargetFeature::canonical_seed, true},
+        TargetRequirement{TargetFeature::rights_and_provenance, true},
+        TargetRequirement{TargetFeature::raster_2d, true}};
+    const auto new_requirements =
+        canonicalize_target_requirements(forged_requirements);
+    const auto new_report =
+        canonicalize_target_compatibility(evaluate_target_compatibility(
+            builtin_target_adapter("portable-package"), forged_requirements));
+    write_text(requirement_path, new_requirements);
+    write_text(report_path, new_report);
+    auto target_manifest = read_text(forged_target / "manifest.json");
+    target_manifest = replace_once(target_manifest, sha256(old_requirements),
+                                   sha256(new_requirements));
+    target_manifest =
+        replace_once(target_manifest, sha256(old_report), sha256(new_report));
+    write_text(forged_target / "manifest.json", target_manifest);
+    const auto target_verification = verify_package(forged_target);
+    check(!target_verification.ok() &&
+              has_code(target_verification,
+                       "SPRITE_PACKAGE_TARGET_STRUCTURE_MISSING"),
+          "hash-consistent unsupported package feature claim was accepted");
     const auto visual_package = base / "visual";
     const std::array visual_frames{visual()};
     build_package(fixture(), visual_frames, {16, 16, 1, true, 0},
                   visual_package);
     const auto visual_verified = verify_package(visual_package);
-    check(visual_verified.ok() && visual_verified.artifact_count == 11,
+    check(visual_verified.ok() && visual_verified.artifact_count == 13,
           "visual package rejected or incomplete");
     check(std::filesystem::exists(visual_package / "assets" /
                                   "sprite-atlas.png") &&

@@ -1,5 +1,6 @@
 #include "gspl_sprites/core.hpp"
 #include "gspl_sprites/domain.hpp"
+#include "gspl_sprites/target_contract.hpp"
 
 #include <algorithm>
 #include <array>
@@ -357,6 +358,18 @@ static void build_package_internal(const SpriteSeed& seed, std::span<const Frame
       for(const auto&map:channel_maps){const auto target=std::ranges::find(frames,map.target_frame_id,&FrameSource::id);if(target==frames.end())throw std::invalid_argument("channel map target is absent");const auto validation=validate_channel_map(map,*target);if(!validation.ok())throw std::invalid_argument(validation.diagnostics.front().code+": "+validation.diagnostics.front().message);std::ostringstream header;header<<"{\"colorSpace\":"<<static_cast<int>(map.image.color_space)<<",\"height\":"<<map.image.height<<",\"id\":\""<<escape_json(map.id)<<"\",\"kind\":"<<static_cast<int>(map.kind)<<",\"target\":\""<<escape_json(map.target_frame_id)<<"\",\"width\":"<<map.image.width<<"}\n";std::string source_bytes=header.str();source_bytes.append(reinterpret_cast<const char*>(map.image.pixels.data()),map.image.pixels.size());const auto source_hash=sha256(source_bytes);const ProvenanceRecord source_provenance{"prov-channel-source-"+source_hash,ProvenanceActor::user,"user","ingest-channel-map/1",{},source_hash};const auto source_artifact=graph.add("application/vnd.gspl.sprite-channel-map+rgba8",source_bytes,{},"ingest-channel-map/1",source_provenance.id,"canonical-2d",ArtifactValidation::valid);provenance_records.push_back(source_provenance);map_artifacts.push_back(source_artifact);const auto png=encode_png(map.image);const auto bytes=std::string_view(reinterpret_cast<const char*>(png.data()),png.size());std::vector dependencies{seed_artifact,source_artifact,frame_artifact_by_id.at(map.target_frame_id)};std::ranges::sort(dependencies);add_semantic_artifact("assets/channels/"+map.id+".png","image/png","encode-channel-map/1",bytes,"png",dependencies);}
       auto dependencies=map_artifacts;dependencies.push_back(seed_artifact);std::ranges::sort(dependencies);add_semantic_artifact("channel-maps.json","application/vnd.gspl.sprite-channel-maps+json","emit-channel-maps/1",channel_metadata,"portable",dependencies);
     }
+    std::vector<TargetRequirement> package_requirements{
+        {TargetFeature::canonical_seed, true},
+        {TargetFeature::rights_and_provenance, true}};
+    if(!frames.empty())package_requirements.push_back({TargetFeature::raster_2d,true});
+    if(ir.rig)package_requirements.push_back({TargetFeature::skeletal_2d,true});
+    if(ir.animation_graph)package_requirements.push_back({TargetFeature::animation_graph,true});
+    if(!ir.collision_shapes.empty()||!ir.collision_windows.empty())package_requirements.push_back({TargetFeature::collision_2d,true});
+    if(!channel_maps.empty())package_requirements.push_back({TargetFeature::channel_maps,true});
+    const auto package_requirements_json=canonicalize_target_requirements(package_requirements);
+    const auto package_report_json=canonicalize_target_compatibility(evaluate_target_compatibility(builtin_target_adapter("portable-package"),package_requirements));
+    add_semantic_artifact("package-target-requirements.json","application/vnd.gspl.sprite-target-requirements+json","declare-package-requirements/1",package_requirements_json,"portable",{seed_artifact});
+    add_semantic_artifact("package-target-report.json","application/vnd.gspl.sprite-target-compatibility+json","evaluate-package-target/1",package_report_json,"portable",{seed_artifact});
     const auto asset_graph_json=graph.canonical_manifest();write(staging / "asset-graph.json",asset_graph_json);manifest_artifacts.emplace_back("asset-graph.json",sha256(asset_graph_json));
     std::ranges::sort(provenance_records,{},&ProvenanceRecord::id);std::ostringstream provenance_json;provenance_json<<"{\"records\":[";for(std::size_t i=0;i<provenance_records.size();++i){if(i)provenance_json<<',';provenance_json<<canonical_provenance(provenance_records[i]);}provenance_json<<"]}";write(staging / "provenance.json",provenance_json.str());manifest_artifacts.emplace_back("provenance.json",sha256(provenance_json.str()));
     const auto rights_json="{\"classification\":\"" + rights_text(seed.rights) + "\",\"commercialExport\":true,\"decisionCode\":\"" + rights.code + "\"}";write(staging / "rights.json",rights_json);manifest_artifacts.emplace_back("rights.json",sha256(rights_json));

@@ -77,7 +77,7 @@ int main(int argc, char **argv) {
         quote(root / "visual.txt") + ' ' + quote(root / "package");
     check(run(command) == 0, "build-visual CLI failed");
     const auto verification = verify_package(root / "package");
-    check(verification.ok() && verification.artifact_count == 14 &&
+    check(verification.ok() && verification.artifact_count == 16 &&
               verification.package_identity.size() == 64 &&
               std::filesystem::exists(root / "package" /
                                       "visual-projection.json") &&

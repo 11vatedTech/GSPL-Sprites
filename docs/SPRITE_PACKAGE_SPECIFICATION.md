@@ -6,7 +6,8 @@ overwritten. A failed build removes its staging directory.
 
 Required files are `manifest.json`, `seed.canonical.json`, `asset-graph.json`,
 `provenance.json`, `rights.json`, `authoring-provenance.json`,
-`target-compatibility.json`, and the declared visual artifacts. Entities
+`target-compatibility.json`, `package-target-requirements.json`,
+`package-target-report.json`, and the declared visual artifacts. Entities
 with rig semantics additionally contain `rig.json`, `animations.json`,
 `collisions.json`, and, when present, `animation-state-graph.json`.
 
@@ -34,3 +35,10 @@ hashes against the node, and rejects orphaned records. It also proves package
 containment, byte integrity, declared identity, rights authorization, canonical
 manifest structure, and resource bounds. It does not claim cryptographic
 authorship or trust without a future signature policy.
+
+The package compiler derives its portable-target requirements from the emitted
+payload. Verification reparses those requirements, reconstructs the registered
+`portable-package` report, and checks every required feature against the closed
+manifest file set. Canonical seed, rights/provenance, raster, skeletal,
+animation-graph, collision, and channel-map claims therefore require their
+concrete artifacts even when an attacker updates manifest hashes consistently.

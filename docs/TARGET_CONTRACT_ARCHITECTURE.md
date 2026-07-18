@@ -16,6 +16,11 @@ re-evaluates the registered adapter, compares the canonical report exactly, and
 checks required features against emitted target structures. The report is thus
 derived evidence rather than a trusted declaration.
 
+Portable packages apply the same rule with
+`package-target-requirements.json` and `package-target-report.json`. These are
+distinct from authoring-request compatibility: they describe what the compiled
+package actually contains and are validated against its closed manifest.
+
 Current engine research supports this conservative boundary. Godot recommends glTF 2.0 for 3D scenes and supports imported animation libraries. Unreal documents that glTF cannot represent every engine feature and that unsupported extensions may prevent loading. Consequently, engine brand-level claims are not used as capability evidence; only GSPL adapter behavior is.
 
 ## Primary research
