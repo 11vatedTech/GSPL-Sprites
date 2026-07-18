@@ -33,3 +33,12 @@ Appearance, anatomy, behavior, animation, equipment, projection, and target
 implications require additional typed delta families. An authenticated
 replication transport and visual/animation consumers must bind this identity
 rather than creating independent form authority.
+
+The manifestation binding layer provides that consumer boundary for validated
+skeletal animation graphs, transition clips, and 3D projections. It requires
+exactly one binding for every form and transformation. Each derived frame
+contains the authoritative transformation-state identity, stable entity, current
+form, animation state, projection, and—while transitioning—the transition clip
+and deterministic parts-per-million progress. Missing states, clips,
+projections, incomplete coverage, invalid assets, or ticks outside an active
+transition fail closed. The frame contains no independently mutable form state.
