@@ -13,4 +13,4 @@ Represent references with content hashes, rights, typed use, and required/option
 
 ## Consequences
 
-Mutable URLs cannot silently change an authoring revision, and commercial asset use cannot inherit research-only permission. Target incompatibility becomes visible before synthesis. Full provenance propagation from these records into compiled packages remains a required subsequent compiler milestone.
+Mutable URLs cannot silently change an authoring revision, and commercial asset use cannot inherit research-only permission. Target incompatibility becomes visible before synthesis. Compiled authoring packages preserve these records and compatibility decisions as mandatory content-addressed artifacts linked from the canonical seed in the asset graph. Cryptographic authorship and full semantic closure verification remain separate release gates.

@@ -55,6 +55,7 @@ void publish_text(std::string_view value, const std::filesystem::path &path) {
 }
 
 void build_verified_package(const SpriteSeed &seed,
+                            const AuthoringProject &project,
                             const std::filesystem::path &path) {
   if (path.empty() || std::filesystem::exists(path))
     throw std::runtime_error("package destination is empty or already exists");
@@ -63,7 +64,10 @@ void build_verified_package(const SpriteSeed &seed,
   if (std::filesystem::exists(staging))
     throw std::runtime_error("package staging path already exists");
   try {
-    build_package(seed, staging);
+    build_package(seed,
+                  {canonicalize_authoring_provenance(project),
+                   canonicalize_authoring_target_reports(project)},
+                  staging);
     const auto verification = verify_package(staging);
     if (!verification.ok())
       throw std::runtime_error(
@@ -176,9 +180,11 @@ run_authoring_cli(std::span<const std::string_view> arguments,
       if (arguments.size() < 3 || arguments.size() > 4)
         throw std::invalid_argument(
             "usage: authoring-build <project> <output-package> [variant]");
-      const auto result = lower(arguments, 3);
+      const auto project = load_authoring_project(arguments[1]);
+      const auto result =
+          lower_authoring_project(project, variant_argument(arguments, 3));
       require_lowered(result);
-      build_verified_package(*result.seed, arguments[2]);
+      build_verified_package(*result.seed, project, arguments[2]);
       output << "built authoring project " << result.seed->stable_id << '\n';
       return 0;
     }

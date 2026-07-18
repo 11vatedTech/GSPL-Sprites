@@ -385,6 +385,51 @@ std::string authoring_revision_identity(const AuthoringProject &project) {
   return sha256(canonicalize_authoring_project(project));
 }
 
+std::string canonicalize_authoring_provenance(const AuthoringProject &project) {
+  const auto validation = validate_authoring_project(project);
+  if (!validation.ok())
+    throw std::invalid_argument(validation.diagnostics.front().message);
+  auto references = project.references;
+  std::ranges::sort(references, {}, &AuthoringReference::id);
+  std::ostringstream out;
+  out << "{\"project\":{\"id\":\"" << project.id
+      << "\",\"revision\":" << project.revision << ",\"revisionIdentity\":\""
+      << authoring_revision_identity(project) << "\"},\"references\":[";
+  for (std::size_t index = 0; index < references.size(); ++index) {
+    if (index)
+      out << ',';
+    const auto &reference = references[index];
+    out << "{\"contentSha256\":\"" << reference.content_sha256 << "\",\"id\":\""
+        << reference.id
+        << "\",\"required\":" << (reference.required ? "true" : "false")
+        << ",\"rights\":\"" << rights_name(reference.rights) << "\",\"uri\":\""
+        << escape_json(reference.uri) << "\",\"use\":\""
+        << reference_use_name(reference.use) << "\"}";
+  }
+  out << "]}";
+  return out.str();
+}
+
+std::string
+canonicalize_authoring_target_reports(const AuthoringProject &project) {
+  const auto validation = validate_authoring_project(project);
+  if (!validation.ok())
+    throw std::invalid_argument(validation.diagnostics.front().message);
+  auto targets = project.targets;
+  std::ranges::sort(targets, {}, &AuthoringTargetRequest::adapter_id);
+  std::ostringstream out;
+  out << "{\"reports\":[";
+  for (std::size_t index = 0; index < targets.size(); ++index) {
+    if (index)
+      out << ',';
+    out << canonicalize_target_compatibility(evaluate_target_compatibility(
+        builtin_target_adapter(targets[index].adapter_id),
+        targets[index].features));
+  }
+  out << "]}";
+  return out.str();
+}
+
 AuthoringProject
 revise_authoring_project(const AuthoringProject &project,
                          std::string_view expected_revision_identity,

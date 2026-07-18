@@ -81,6 +81,10 @@ validate_authoring_project(const AuthoringProject &project);
 [[nodiscard]] std::string
 canonicalize_authoring_project(const AuthoringProject &project);
 [[nodiscard]] std::string
+canonicalize_authoring_provenance(const AuthoringProject &project);
+[[nodiscard]] std::string
+canonicalize_authoring_target_reports(const AuthoringProject &project);
+[[nodiscard]] std::string
 authoring_revision_identity(const AuthoringProject &project);
 [[nodiscard]] AuthoringProject
 revise_authoring_project(const AuthoringProject &project,

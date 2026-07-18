@@ -282,22 +282,38 @@ std::string render_svg(const SpriteIr& ir) {
   return out.str();
 }
 
-static void build_package_internal(const SpriteSeed& seed, std::span<const FrameSource> frames, const SpriteSheetOptions& options, std::string_view visual_metadata, std::span<const ChannelMap> channel_maps, std::string_view channel_metadata, const std::filesystem::path& output);
+static void build_package_internal(const SpriteSeed& seed, std::span<const FrameSource> frames, const SpriteSheetOptions& options, std::string_view visual_metadata, std::span<const ChannelMap> channel_maps, std::string_view channel_metadata, const PackageGovernanceEvidence& governance, const std::filesystem::path& output);
 
 void build_package(const SpriteSeed& seed, const std::filesystem::path& output) {
-  build_package_internal(seed, {}, {}, {}, {}, {}, output);
+  build_package_internal(seed, {}, {}, {}, {}, {}, {}, output);
+}
+
+void build_package(const SpriteSeed& seed, const PackageGovernanceEvidence& governance, const std::filesystem::path& output) {
+  build_package_internal(seed, {}, {}, {}, {}, {}, governance, output);
 }
 
 void build_package(const SpriteSeed& seed, std::span<const FrameSource> frames, const SpriteSheetOptions& options, const std::filesystem::path& output) {
-  build_package_internal(seed, frames, options, {}, {}, {}, output);
+  build_package_internal(seed, frames, options, {}, {}, {}, {}, output);
 }
 
 void build_package(const SpriteSeed& seed, const AuthoredVisualSet& visual_set, const std::filesystem::path& output) {
-  if(visual_set.canonical_metadata.empty()||visual_set.canonical_channel_metadata.empty())throw std::invalid_argument("authored visual set lacks canonical projection metadata");build_package_internal(seed,visual_set.frames,visual_set.sheet,visual_set.canonical_metadata,visual_set.channel_maps,visual_set.canonical_channel_metadata,output);
+  if(visual_set.canonical_metadata.empty()||visual_set.canonical_channel_metadata.empty())throw std::invalid_argument("authored visual set lacks canonical projection metadata");build_package_internal(seed,visual_set.frames,visual_set.sheet,visual_set.canonical_metadata,visual_set.channel_maps,visual_set.canonical_channel_metadata,{},output);
 }
 
-static void build_package_internal(const SpriteSeed& seed, std::span<const FrameSource> frames, const SpriteSheetOptions& options, std::string_view visual_metadata, std::span<const ChannelMap> channel_maps, std::string_view channel_metadata, const std::filesystem::path& output) {
+static void build_package_internal(const SpriteSeed& seed, std::span<const FrameSource> frames, const SpriteSheetOptions& options, std::string_view visual_metadata, std::span<const ChannelMap> channel_maps, std::string_view channel_metadata, const PackageGovernanceEvidence& governance, const std::filesystem::path& output) {
   const auto ir = compile(seed); const auto canonical = canonicalize(seed); const auto svg = render_svg(ir);
+  const auto authoring_evidence_valid =
+      governance.authoring_provenance_json == "{\"project\":null,\"references\":[]}" ||
+      (governance.authoring_provenance_json.starts_with("{\"project\":{") &&
+       governance.authoring_provenance_json.find("},\"references\":[") != std::string::npos &&
+       governance.authoring_provenance_json.ends_with("]}"));
+  const auto target_evidence_valid =
+      governance.target_compatibility_json.starts_with("{\"reports\":[") &&
+      governance.target_compatibility_json.ends_with("]}");
+  if (!authoring_evidence_valid || !target_evidence_valid ||
+      governance.authoring_provenance_json.size() > 4ULL * 1024ULL * 1024ULL ||
+      governance.target_compatibility_json.size() > 4ULL * 1024ULL * 1024ULL)
+    throw std::invalid_argument("package governance evidence is malformed or oversized");
   const auto rights = evaluate_rights(seed.rights, AssetUsage::commercial_export);
   if (!rights.allowed) throw std::runtime_error(rights.code + ": " + rights.explanation);
   if (output.empty()) throw std::invalid_argument("output path must not be empty");
@@ -316,6 +332,8 @@ static void build_package_internal(const SpriteSeed& seed, std::span<const Frame
     std::vector<ProvenanceRecord> provenance_records{seed_provenance,svg_provenance};
     std::vector<std::pair<std::string,std::string>> manifest_artifacts{{"assets/entity.svg",sha256(svg)},{"seed.canonical.json",sha256(canonical)}};
     const auto add_semantic_artifact=[&](std::string path,std::string type,std::string pass,std::string_view bytes,std::string target,std::vector<std::string> dependencies){const auto hash=sha256(bytes);const ProvenanceRecord provenance{"prov-"+pass+"-"+hash,ProvenanceActor::compiler,"gspl-sprites/0.1.0",pass,dependencies,hash};(void)graph.add(std::move(type),bytes,dependencies,pass,provenance.id,std::move(target),ArtifactValidation::valid);write(staging/path,bytes);provenance_records.push_back(provenance);manifest_artifacts.emplace_back(std::move(path),hash);};
+    add_semantic_artifact("authoring-provenance.json","application/vnd.gspl.sprite-authoring-provenance+json","bind-authoring-provenance/1",governance.authoring_provenance_json,"portable",{seed_artifact});
+    add_semantic_artifact("target-compatibility.json","application/vnd.gspl.sprite-target-compatibility+json","evaluate-target-contracts/1",governance.target_compatibility_json,"portable",{seed_artifact});
     if(ir.rig){
       const auto rig_json=canonicalize_rig(*ir.rig);const auto clips_json=canonicalize_clips(ir.clips);const auto graph_json=ir.animation_graph?canonicalize_state_graph(*ir.animation_graph):"null";const auto collisions_json=canonicalize_collisions(ir.collision_shapes,ir.collision_windows);
       add_semantic_artifact("rig.json","application/vnd.gspl.sprite-rig+json","lower-rig/1",rig_json,"portable",{seed_artifact});

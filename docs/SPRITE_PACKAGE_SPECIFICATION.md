@@ -5,7 +5,8 @@ only after every artifact is written. Existing destinations are never
 overwritten. A failed build removes its staging directory.
 
 Required files are `manifest.json`, `seed.canonical.json`, `asset-graph.json`,
-`provenance.json`, `rights.json`, and the declared visual artifacts. Entities
+`provenance.json`, `rights.json`, `authoring-provenance.json`,
+`target-compatibility.json`, and the declared visual artifacts. Entities
 with rig semantics additionally contain `rig.json`, `animations.json`,
 `collisions.json`, and, when present, `animation-state-graph.json`.
 

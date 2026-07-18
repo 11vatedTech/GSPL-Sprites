@@ -18,21 +18,30 @@ void check(bool value, const char *message) {
 }
 
 AuthoringProject fixture() {
-  return {"gspl.sprite-authoring/0.1",
-          "authoring.cli",
-          "CLI-authored electric fox",
-          0,
-          {},
-          {{"identity.stable_id", {"original.cli-authoring"}, 0, true},
-           {"identity.name", {"Voltfox", "Arcfox"}, 0, false},
-           {"identity.classification", {"fictional.creature"}, 0, true},
-           {"rights.class", {"ORIGINAL_USER_CREATION"}, 0, true},
-           {"entropy.root", {"17"}, 0, true},
-           {"appearance.primary_color", {"#1122AA", "#6633CC"}, 0, false},
-           {"appearance.accent_color", {"#FFFF44"}, 0, true}},
-          {{{"arc", "electric.projectile", 20, 4, 2}, true, true},
-           {{"dash", "electric.movement", 10, 2, 1}, true, false}},
-          {{"violet", {{"appearance.primary_color", "#6633CC"}}, {"dash"}}}};
+  AuthoringProject project{
+      "gspl.sprite-authoring/0.1",
+      "authoring.cli",
+      "CLI-authored electric fox",
+      0,
+      {},
+      {{"identity.stable_id", {"original.cli-authoring"}, 0, true},
+       {"identity.name", {"Voltfox", "Arcfox"}, 0, false},
+       {"identity.classification", {"fictional.creature"}, 0, true},
+       {"rights.class", {"ORIGINAL_USER_CREATION"}, 0, true},
+       {"entropy.root", {"17"}, 0, true},
+       {"appearance.primary_color", {"#1122AA", "#6633CC"}, 0, false},
+       {"appearance.accent_color", {"#FFFF44"}, 0, true}},
+      {{{"arc", "electric.projectile", 20, 4, 2}, true, true},
+       {{"dash", "electric.movement", 10, 2, 1}, true, false}},
+      {{"violet", {{"appearance.primary_color", "#6633CC"}}, {"dash"}}}};
+  project.references.push_back(
+      {"concept.front", "file:///references/front.png",
+       "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+       RightsClass::licensed, AuthoringReferenceUse::visual_asset, true});
+  project.targets.push_back({"portable-package",
+                             {{TargetFeature::canonical_seed, true},
+                              {TargetFeature::living_runtime, false}}});
+  return project;
 }
 
 std::string read(const std::filesystem::path &path) {
@@ -129,7 +138,11 @@ int main(int argc, char **argv) try {
                          std::string_view{source_text},
                          std::string_view{package_text}};
   check(run_authoring_cli(build, output, error) == 0 &&
-            verify_package(package_path).ok(),
+            verify_package(package_path).ok() &&
+            read(package_path / "authoring-provenance.json")
+                    .find("concept.front") != std::string::npos &&
+            read(package_path / "target-compatibility.json")
+                    .find("portable-package") != std::string::npos,
         "authoring build command failed package verification");
 
   const auto command =

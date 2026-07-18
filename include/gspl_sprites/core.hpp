@@ -14,7 +14,17 @@
 
 namespace gspl::sprites {
 
-enum class RightsClass { original_user_creation, user_owned, licensed, public_domain, permissive, research_only, restricted, unknown, prohibited };
+enum class RightsClass {
+  original_user_creation,
+  user_owned,
+  licensed,
+  public_domain,
+  permissive,
+  research_only,
+  restricted,
+  unknown,
+  prohibited
+};
 enum class RuntimeState { idle, observing, charging, attacking, recovering };
 
 struct AbilitySeed {
@@ -62,19 +72,27 @@ struct RuntimeEntity {
   std::uint32_t cooldown_ticks{};
 };
 
+struct PackageGovernanceEvidence {
+  std::string authoring_provenance_json{"{\"project\":null,\"references\":[]}"};
+  std::string target_compatibility_json{"{\"reports\":[]}"};
+};
+
 [[nodiscard]] SpriteSeed parse_seed(std::string_view source);
-[[nodiscard]] ValidationResult validate(const SpriteSeed& seed);
-[[nodiscard]] std::string canonicalize(const SpriteSeed& seed);
+[[nodiscard]] ValidationResult validate(const SpriteSeed &seed);
+[[nodiscard]] std::string canonicalize(const SpriteSeed &seed);
 [[nodiscard]] std::string sha256(std::string_view input);
-[[nodiscard]] SpriteIr compile(const SpriteSeed& seed);
-[[nodiscard]] bool activate(RuntimeEntity& entity, const AbilitySeed& ability);
-void tick(RuntimeEntity& entity) noexcept;
-[[nodiscard]] std::string render_svg(const SpriteIr& ir);
-void build_package(const SpriteSeed& seed, const std::filesystem::path& output);
-void build_package(const SpriteSeed& seed, std::span<const FrameSource> frames,
-                   const SpriteSheetOptions& options,
-                   const std::filesystem::path& output);
-void build_package(const SpriteSeed& seed, const AuthoredVisualSet& visual_set,
-                   const std::filesystem::path& output);
+[[nodiscard]] SpriteIr compile(const SpriteSeed &seed);
+[[nodiscard]] bool activate(RuntimeEntity &entity, const AbilitySeed &ability);
+void tick(RuntimeEntity &entity) noexcept;
+[[nodiscard]] std::string render_svg(const SpriteIr &ir);
+void build_package(const SpriteSeed &seed, const std::filesystem::path &output);
+void build_package(const SpriteSeed &seed,
+                   const PackageGovernanceEvidence &governance,
+                   const std::filesystem::path &output);
+void build_package(const SpriteSeed &seed, std::span<const FrameSource> frames,
+                   const SpriteSheetOptions &options,
+                   const std::filesystem::path &output);
+void build_package(const SpriteSeed &seed, const AuthoredVisualSet &visual_set,
+                   const std::filesystem::path &output);
 
 } // namespace gspl::sprites
