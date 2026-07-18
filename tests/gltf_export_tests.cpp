@@ -25,6 +25,8 @@ Projection3dDefinition fixture() {
       b = a, c = a;
   b.position.x = 1'000'000;
   c.position.y = 1'000'000;
+  b.texture_coordinate.u = 1'000'000;
+  c.texture_coordinate.v = 1'000'000;
   p.meshes = {
       {"triangle", MeshPurpose::render, "mat", false, {a, b, c}, {0, 1, 2}}};
   p.morph_targets = {
@@ -102,6 +104,27 @@ int main(int argc, char **argv) try {
     hostile = true;
   }
   check(hostile, "malformed embedded PNG accepted");
+  auto textured = fixture();
+  textured.materials[0].normal_texture_id = "texture.normal";
+  const ImageRgba8 normal_image{
+      1, 1, ColorSpace::data, AlphaMode::opaque, {128, 128, 255, 255}};
+  const GltfTextureAsset normal_texture{"texture.normal", "image/png",
+                                        encode_png(normal_image)};
+  const auto textured_glb =
+      export_projection3d_glb(textured, std::span{&normal_texture, 1});
+  const auto textured_json_length = u32(textured_glb, 12);
+  const std::string textured_json(
+      reinterpret_cast<const char *>(textured_glb.data() + 20),
+      textured_json_length);
+  check(textured_json.find("\"TANGENT\"") != std::string::npos,
+        "normal-mapped GLB lacks generated tangents");
+  if (argc == 3 && std::string_view(argv[1]) == "--output-textured") {
+    std::ofstream output(argv[2], std::ios::binary | std::ios::trunc);
+    if (!output ||
+        !output.write(reinterpret_cast<const char *>(textured_glb.data()),
+                      static_cast<std::streamsize>(textured_glb.size())))
+      throw std::runtime_error("failed to write textured GLB fixture");
+  }
   std::cout << "all gspl sprites GLB export tests passed\n";
   return 0;
 } catch (const std::exception &e) {

@@ -24,6 +24,7 @@ struct Accessor {
 struct Primitive {
   std::uint32_t position{}, normal{}, indices{};
   std::optional<std::uint32_t> uv;
+  std::optional<std::uint32_t> tangent;
   std::optional<std::uint32_t> joints, weights;
   std::vector<std::uint32_t> morphs;
   std::vector<std::string> morph_names;
@@ -280,14 +281,20 @@ export_projection3d_glb(const Projection3dDefinition &projection,
         accessor(accessors, nv, 5126,
                  static_cast<std::uint32_t>(mesh.vertices.size()), "VEC3");
     bool needs_uv = false;
+    bool needs_tangent = false;
     if (mesh.material_id) {
       const auto material =
           std::ranges::find(materials, *mesh.material_id, &Material3d::id);
       needs_uv = material->base_color_texture_id.has_value() ||
                  material->normal_texture_id.has_value() ||
                  material->metallic_roughness_texture_id.has_value();
+      needs_tangent = material->normal_texture_id.has_value();
     }
     if (needs_uv) {
+      const auto quality = analyze_mesh_quality(mesh, limits.mesh_quality);
+      if (!quality.validation.ok())
+        throw std::invalid_argument(
+            quality.validation.diagnostics.front().message);
       auto uv = numeric_view(
           views, bin, mesh.vertices.size() * 2,
           [&](auto &o) {
@@ -299,6 +306,22 @@ export_projection3d_glb(const Projection3dDefinition &projection,
           34962);
       p.uv = accessor(accessors, uv, 5126,
                       static_cast<std::uint32_t>(mesh.vertices.size()), "VEC2");
+      if (needs_tangent) {
+        auto tangent = numeric_view(
+            views, bin, quality.tangents.size() * 4,
+            [&](auto &out) {
+              for (const auto &value : quality.tangents) {
+                f32(out, value.x / 1e6f);
+                f32(out, value.y / 1e6f);
+                f32(out, value.z / 1e6f);
+                f32(out, static_cast<float>(value.handedness));
+              }
+            },
+            34962);
+        p.tangent = accessor(
+            accessors, tangent, 5126,
+            static_cast<std::uint32_t>(quality.tangents.size()), "VEC4");
+      }
     }
     if (projection.skeleton && mesh.purpose == MeshPurpose::render) {
       auto jv = numeric_view(
@@ -572,6 +595,8 @@ export_projection3d_glb(const Projection3dDefinition &projection,
          << ",\"NORMAL\":" << p.normal;
     if (p.uv)
       json << ",\"TEXCOORD_0\":" << *p.uv;
+    if (p.tangent)
+      json << ",\"TANGENT\":" << *p.tangent;
     if (p.joints)
       json << ",\"JOINTS_0\":" << *p.joints << ",\"WEIGHTS_0\":" << *p.weights;
     json << "},\"indices\":" << p.indices;

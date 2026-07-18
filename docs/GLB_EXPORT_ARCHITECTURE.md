@@ -27,5 +27,10 @@ deterministic union timeline and emitted as the complete ordered weight vector
 required by glTF. Loop policy and semantic tick events remain GSPL extras because
 glTF defines key storage but not playback or gameplay event behavior.
 
+Textured meshes pass the bounded mesh-quality gate before their UV attributes
+are emitted. Normal-mapped materials additionally receive generated normalized
+`TANGENT` vectors and handedness. UV overlap, degenerate parameterization, or
+inconsistent normal orientation therefore fails before GLB construction.
+
 Tangent generation, texture color-space cross-checks, compression, and engine
 import conformance remain subsequent passes.
