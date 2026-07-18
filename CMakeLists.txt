@@ -66,6 +66,7 @@ add_library(gspl_sprites_core
   src/runtime_event_router.cpp
   src/runtime_consumers.cpp
   src/projection25d.cpp
+  src/projection3d.cpp
 )
 target_include_directories(gspl_sprites_core PUBLIC include)
 if(MSVC)
@@ -155,3 +156,7 @@ add_test(NAME gspl_sprites_runtime_consumers_tests COMMAND gspl_sprites_runtime_
 add_executable(gspl_sprites_projection25d_tests tests/projection25d_tests.cpp)
 target_link_libraries(gspl_sprites_projection25d_tests PRIVATE gspl_sprites_core)
 add_test(NAME gspl_sprites_projection25d_tests COMMAND gspl_sprites_projection25d_tests)
+
+add_executable(gspl_sprites_projection3d_tests tests/projection3d_tests.cpp)
+target_link_libraries(gspl_sprites_projection3d_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_projection3d_tests COMMAND gspl_sprites_projection3d_tests)
