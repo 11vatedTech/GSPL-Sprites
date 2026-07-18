@@ -42,3 +42,9 @@ form, animation state, projection, and—while transitioning—the transition cl
 and deterministic parts-per-million progress. Missing states, clips,
 projections, incomplete coverage, invalid assets, or ticks outside an active
 transition fail closed. The frame contains no independently mutable form state.
+
+The governed transformed-entity acceptance path now proves one coherent flow:
+base form, timed transition, intermediate manifestation, atomic combat-capacity
+delta, canonical save/load, restored form manifestation, form-gated ability,
+damage, and timed status effect. The presentation frame and persisted state use
+the same authoritative identity throughout.
