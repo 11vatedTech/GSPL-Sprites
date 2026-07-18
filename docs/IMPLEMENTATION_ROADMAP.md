@@ -18,10 +18,9 @@
    remain open gates. Identity-preserving timed combat-capacity transformations
    and form-specific ability gating are implemented with canonical program-bound
    persistence and state-hash convergence evidence. Validated skeletal-animation
-   and 3D-projection manifestations are derived from that authority;
-   authenticated transport plus 2D form binding remain open. The compiled 2D
-   projection now has a first-class validated, content-identified artifact
-   contract; 2.5D depth-layer manifestations have equivalent validated coverage.
+   and 3D-projection manifestations are derived from that authority. Compiled
+   2D, depth-layered 2.5D, and 3D form manifestations now share total-binding and
+   authoritative state-identity coverage; authenticated transport remains open.
 6. 2.5D and 3D: depth layers, multi-view, reconstruction, topology, materials,
    rigging, retargeting, validation and LOD.
 7. Targets: portable runtime, Godot, Unity, Unreal, web and explicit feature

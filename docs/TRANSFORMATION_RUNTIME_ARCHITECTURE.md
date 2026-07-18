@@ -54,3 +54,10 @@ Each form may resolve to a depth-plane, view, lighting, hybrid-geometry, and
 collision contract that independently passes `validate_projection25d`; active
 transition frames retain the same clip and deterministic progress semantics as
 3D. Invalid depth-layer projections cannot enter a manifestation program.
+
+Validated compiled 2D projections now have identical total-binding semantics.
+Form selection resolves a complete content-identified atlas, animation, channel,
+rig, and collision artifact rather than a sprite filename. The authoritative
+state hash and transition progress are representation-independent, so 2D,
+2.5D, and 3D manifestations can prove they project the same semantic entity and
+form.
