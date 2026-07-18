@@ -43,6 +43,20 @@ int main(int argc, char **argv) try {
   check(canonical.find("\"compatible\":false") != std::string::npos &&
             canonical.find("living-runtime") < canonical.find("mesh-3d"),
         "target report is not deterministic");
+  const auto requirement_source = canonicalize_target_requirements(rejected);
+  check(canonicalize_target_requirements(
+            parse_target_requirements(requirement_source)) == requirement_source,
+        "target requirements did not round-trip canonically");
+  bool noncanonical_rejected = false;
+  try {
+    (void)parse_target_requirements(
+        "{\"requirements\":[{\"feature\":\"mesh-3d\",\"required\":true},"
+        "{\"feature\":\"living-runtime\",\"required\":true}]}");
+  } catch (const std::invalid_argument &) {
+    noncanonical_rejected = true;
+  }
+  check(noncanonical_rejected,
+        "noncanonical target requirement ordering was accepted");
   auto duplicate = glb;
   duplicate.capabilities.push_back(duplicate.capabilities.front());
   check(!validate_target_adapter(duplicate).ok(),

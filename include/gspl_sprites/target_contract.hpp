@@ -75,6 +75,10 @@ evaluate_target_compatibility(const TargetAdapterDescriptor &adapter,
                               std::span<const TargetRequirement> requirements);
 [[nodiscard]] std::string
 canonicalize_target_compatibility(const TargetCompatibilityReport &report);
+[[nodiscard]] std::string canonicalize_target_requirements(
+    std::span<const TargetRequirement> requirements);
+[[nodiscard]] std::vector<TargetRequirement>
+parse_target_requirements(std::string_view source);
 [[nodiscard]] TargetAdapterDescriptor
 builtin_target_adapter(std::string_view id);
 

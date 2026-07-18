@@ -6,6 +6,7 @@ The `godot-4.7-3d` adapter publishes a directly importable Godot project from va
 - a Godot 4 format-3 `PackedScene` that instantiates the GLB scene;
 - `project.godot` with the generated scene as the runnable main scene;
 - the canonical target-compatibility report;
+- the normalized target requirement set from which that report is derived;
 - canonical source-package evidence containing the package, seed, authoring
   provenance, and target-compatibility identities when supplied;
 - a canonical SHA-256 target manifest.
@@ -22,6 +23,12 @@ governance artifacts from disk; callers cannot construct evidence directly.
 Invalid or modified source packages fail before target export.
 
 The independent verifier rejects modified or missing artifacts, undeclared files, symlinks, excessive directory entries, and manifest disagreement. Engine-generated `.godot` import caches are not target artifacts and therefore are produced only after verification/publication.
+
+Verification reparses `target-requirements.json`, recomputes the compatibility
+report from the registered `godot-4.7-3d` adapter, and requires byte-for-byte
+agreement with `target-report.json`. Required mesh, material, skin, morph,
+animation, and LOD features are also checked against concrete structures in the
+embedded GLB. A hash-consistent forged report therefore still fails closed.
 
 ## Import validation
 

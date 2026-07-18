@@ -13,6 +13,11 @@ void check(bool value, const char *message) {
   if (!value)
     throw std::runtime_error(message);
 }
+bool has_code(const GodotProjectVerification &value, std::string_view code) {
+  return std::ranges::any_of(
+      value.validation.diagnostics,
+      [&](const auto &diagnostic) { return diagnostic.code == code; });
+}
 
 Projection3dDefinition fixture() {
   Projection3dDefinition projection;
@@ -47,6 +52,20 @@ std::string read(const std::filesystem::path &path) {
   std::ifstream input(path, std::ios::binary);
   return {std::istreambuf_iterator<char>(input), {}};
 }
+void write(const std::filesystem::path &path, std::string_view value) {
+  std::ofstream output(path, std::ios::binary | std::ios::trunc);
+  output.write(value.data(), static_cast<std::streamsize>(value.size()));
+  if (!output)
+    throw std::runtime_error("Godot test artifact write failed");
+}
+std::string replace_once(std::string value, std::string_view old_value,
+                         std::string_view new_value) {
+  const auto position = value.find(old_value);
+  if (position == std::string::npos)
+    throw std::runtime_error("Godot test replacement source absent");
+  value.replace(position, old_value.size(), new_value);
+  return value;
+}
 } // namespace
 
 int main(int argc, char **argv) try {
@@ -70,8 +89,27 @@ int main(int argc, char **argv) try {
       verification.ok() && verification.project_identity.size() == 64 &&
           std::filesystem::exists(root / "assets" / "entity.glb") &&
           read(root / "source-evidence.json").find(source.package_identity()) !=
-              std::string::npos,
+              std::string::npos &&
+          std::filesystem::exists(root / "target-requirements.json"),
       "generated Godot target failed verification");
+  if (argc != 2) {
+    const std::filesystem::path forged = root.string() + "-forged-report";
+    std::filesystem::remove_all(forged);
+    std::filesystem::copy(root, forged,
+                          std::filesystem::copy_options::recursive);
+    const auto old_report = read(forged / "target-report.json");
+    const std::string forged_report = "{}";
+    write(forged / "target-report.json", forged_report);
+    write(forged / "gspl-target-manifest.json",
+          replace_once(read(forged / "gspl-target-manifest.json"),
+                       sha256(old_report), sha256(forged_report)));
+    const auto forged_verification = verify_godot_3d_project(forged);
+    check(!forged_verification.ok() &&
+              has_code(forged_verification,
+                       "SPRITE_GODOT_TARGET_REPORT_MISMATCH"),
+          "hash-consistent forged Godot target report was accepted");
+    std::filesystem::remove_all(forged);
+  }
   const std::array unsupported{
       TargetRequirement{TargetFeature::living_runtime, true}};
   bool rejected = false;

@@ -157,6 +157,76 @@ canonicalize_target_compatibility(const TargetCompatibilityReport &report) {
   return output.str();
 }
 
+std::string canonicalize_target_requirements(
+    std::span<const TargetRequirement> requirements) {
+  if (requirements.size() > 256)
+    throw std::invalid_argument("target requirement count exceeds limit");
+  auto sorted =
+      std::vector<TargetRequirement>(requirements.begin(), requirements.end());
+  std::ranges::sort(sorted, {}, &TargetRequirement::feature);
+  if (std::ranges::adjacent_find(sorted, {}, &TargetRequirement::feature) !=
+      sorted.end())
+    throw std::invalid_argument("target requirements contain duplicates");
+  std::ostringstream output;
+  output << "{\"requirements\":[";
+  for (std::size_t index = 0; index < sorted.size(); ++index) {
+    if (target_feature_name(sorted[index].feature) == "unknown")
+      throw std::invalid_argument("target requirement feature is invalid");
+    if (index)
+      output << ',';
+    output << "{\"feature\":\"" << target_feature_name(sorted[index].feature)
+           << "\",\"required\":" << (sorted[index].required ? "true" : "false")
+           << '}';
+  }
+  output << "]}";
+  return output.str();
+}
+
+std::vector<TargetRequirement>
+parse_target_requirements(std::string_view source) {
+  constexpr std::string_view prefix{"{\"requirements\":["};
+  if (!source.starts_with(prefix) || !source.ends_with("]}"))
+    throw std::invalid_argument("target requirements document is malformed");
+  std::vector<TargetRequirement> result;
+  auto payload =
+      source.substr(prefix.size(), source.size() - prefix.size() - 2);
+  while (!payload.empty()) {
+    constexpr std::string_view item_prefix{"{\"feature\":\""};
+    if (!payload.starts_with(item_prefix) || result.size() >= 256)
+      throw std::invalid_argument("target requirement entry is malformed");
+    payload.remove_prefix(item_prefix.size());
+    const auto feature_end = payload.find('"');
+    if (feature_end == std::string_view::npos)
+      throw std::invalid_argument("target requirement feature is truncated");
+    const auto feature = parse_target_feature(payload.substr(0, feature_end));
+    if (!feature)
+      throw std::invalid_argument("target requirement feature is unknown");
+    payload.remove_prefix(feature_end);
+    constexpr std::string_view required_prefix{"\",\"required\":"};
+    if (!payload.starts_with(required_prefix))
+      throw std::invalid_argument("target requirement flag is malformed");
+    payload.remove_prefix(required_prefix.size());
+    bool required{};
+    if (payload.starts_with("true}")) {
+      required = true;
+      payload.remove_prefix(5);
+    } else if (payload.starts_with("false}")) {
+      payload.remove_prefix(6);
+    } else {
+      throw std::invalid_argument("target requirement flag is invalid");
+    }
+    result.push_back({*feature, required});
+    if (payload.empty())
+      break;
+    if (!payload.starts_with(','))
+      throw std::invalid_argument("target requirement separator is invalid");
+    payload.remove_prefix(1);
+  }
+  if (canonicalize_target_requirements(result) != source)
+    throw std::invalid_argument("target requirements are not canonical");
+  return result;
+}
+
 TargetAdapterDescriptor builtin_target_adapter(std::string_view id) {
   if (id == "portable-package")
     return {

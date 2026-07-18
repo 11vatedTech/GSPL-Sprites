@@ -12,12 +12,56 @@
 
 namespace gspl::sprites {
 namespace {
-constexpr std::array<std::string_view, 5> artifacts{
-    "assets/entity.glb", "gspl_sprite.tscn", "project.godot",
-    "source-evidence.json", "target-report.json"};
+constexpr std::array<std::string_view, 6> artifacts{
+    "assets/entity.glb",    "gspl_sprite.tscn",   "project.godot",
+    "source-evidence.json", "target-report.json", "target-requirements.json"};
 
 std::string bytes_hash(std::span<const std::byte> bytes) {
   return sha256({reinterpret_cast<const char *>(bytes.data()), bytes.size()});
+}
+
+std::string glb_json(std::string_view bytes) {
+  const auto little_u32 = [&](std::size_t offset) {
+    if (offset + 4 > bytes.size())
+      throw std::runtime_error("Godot GLB header is truncated");
+    return static_cast<std::uint32_t>(
+               static_cast<unsigned char>(bytes[offset])) |
+           (static_cast<std::uint32_t>(
+                static_cast<unsigned char>(bytes[offset + 1]))
+            << 8U) |
+           (static_cast<std::uint32_t>(
+                static_cast<unsigned char>(bytes[offset + 2]))
+            << 16U) |
+           (static_cast<std::uint32_t>(
+                static_cast<unsigned char>(bytes[offset + 3]))
+            << 24U);
+  };
+  if (bytes.size() < 20 || little_u32(0) != 0x46546c67U || little_u32(4) != 2 ||
+      little_u32(8) != bytes.size() || little_u32(16) != 0x4e4f534aU ||
+      little_u32(12) > bytes.size() - 20)
+    throw std::runtime_error("Godot GLB container is invalid");
+  return std::string(bytes.substr(20, little_u32(12)));
+}
+
+bool has_required_structure(TargetFeature feature, std::string_view json) {
+  switch (feature) {
+  case TargetFeature::mesh_3d:
+    return json.find("\"meshes\":[") != std::string_view::npos;
+  case TargetFeature::pbr_materials_3d:
+    return json.find("\"materials\":[") != std::string_view::npos;
+  case TargetFeature::skeleton_3d:
+    return json.find("\"skins\":[") != std::string_view::npos;
+  case TargetFeature::morph_targets_3d:
+    return json.find("\"targets\":[") != std::string_view::npos;
+  case TargetFeature::animation_3d:
+    return json.find("\"animations\":[") != std::string_view::npos;
+  case TargetFeature::lod_3d:
+    return json.find("\"gsplLodLevel\":") != std::string_view::npos;
+  case TargetFeature::engine_project:
+    return true;
+  default:
+    return false;
+  }
 }
 
 bool valid_utf8(std::string_view value) {
@@ -185,12 +229,15 @@ void export_godot_3d_project(
         "id=\"1_entity\"]\n\n"
         "[node name=\"GSPLSprite\" instance=ExtResource(\"1_entity\")]\n";
     const auto report_json = canonicalize_target_compatibility(report);
+    const auto requirements_json =
+        canonicalize_target_requirements(requirements);
     const auto source_evidence =
         canonicalize_target_source_evidence(options.source_evidence);
     write_binary(staging / "assets" / "entity.glb", glb);
     write_text(staging / "project.godot", project);
     write_text(staging / "gspl_sprite.tscn", scene);
     write_text(staging / "target-report.json", report_json);
+    write_text(staging / "target-requirements.json", requirements_json);
     write_text(staging / "source-evidence.json", source_evidence);
     std::map<std::string, std::string, std::less<>> hashes;
     hashes.emplace("assets/entity.glb", bytes_hash(glb));
@@ -198,6 +245,7 @@ void export_godot_3d_project(
     hashes.emplace("project.godot", sha256(project));
     hashes.emplace("source-evidence.json", sha256(source_evidence));
     hashes.emplace("target-report.json", sha256(report_json));
+    hashes.emplace("target-requirements.json", sha256(requirements_json));
     write_text(staging / "gspl-target-manifest.json", manifest(hashes));
     const auto verification = verify_godot_3d_project(staging);
     if (!verification.ok())
@@ -255,6 +303,26 @@ verify_godot_3d_project(const std::filesystem::path &root) {
             read_file(root / "source-evidence.json", 1024ULL * 1024ULL)))
       add("SPRITE_GODOT_SOURCE_EVIDENCE_INVALID",
           "Godot source package evidence is malformed");
+    if (hashes.contains("target-requirements.json") &&
+        hashes.contains("target-report.json") &&
+        hashes.contains("assets/entity.glb")) {
+      const auto requirements = parse_target_requirements(
+          read_file(root / "target-requirements.json", 1024ULL * 1024ULL));
+      const auto expected_report =
+          canonicalize_target_compatibility(evaluate_target_compatibility(
+              builtin_target_adapter("godot-4.7-3d"), requirements));
+      if (read_file(root / "target-report.json", 1024ULL * 1024ULL) !=
+          expected_report)
+        add("SPRITE_GODOT_TARGET_REPORT_MISMATCH",
+            "Godot target report does not match normalized requirements");
+      const auto json = glb_json(read_file(root / "assets/entity.glb"));
+      for (const auto &requirement : requirements)
+        if (requirement.required &&
+            !has_required_structure(requirement.feature, json))
+          add("SPRITE_GODOT_REQUIRED_STRUCTURE_MISSING",
+              "Godot GLB lacks required target structure: " +
+                  std::string(target_feature_name(requirement.feature)));
+    }
     std::set<std::string> expected_paths{"gspl-target-manifest.json"};
     expected_paths.insert(artifacts.begin(), artifacts.end());
     std::set<std::string> actual_paths;
