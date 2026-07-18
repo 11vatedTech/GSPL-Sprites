@@ -12,9 +12,9 @@
 5. Living runtime: behavior, perception, abilities, combat, transformations,
    audio events, save/load and deterministic replication. Canonical,
    hash-bound authoritative full-state convergence and typed transactional
-   damage/healing/status ability execution are implemented; prediction,
-   rollback simulation, defense/projectiles, combos, and transformations remain
-   open gates.
+   damage/healing/status ability execution plus acyclic, hit-confirmed combo and
+   cancel-window graphs are implemented; prediction, rollback simulation,
+   defense/projectiles, input buffering, and transformations remain open gates.
 6. 2.5D and 3D: depth layers, multi-view, reconstruction, topology, materials,
    rigging, retargeting, validation and LOD.
 7. Targets: portable runtime, Godot, Unity, Unreal, web and explicit feature
