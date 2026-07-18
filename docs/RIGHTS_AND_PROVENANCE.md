@@ -19,3 +19,8 @@ The portable package includes `rights.json`, `provenance.json`, and
 verification failure. Operational telemetry and wall-clock time are excluded
 from canonical identities and provenance payloads.
 
+Package verification requires provenance records to be canonical and uniquely
+ordered. Each record referenced by an asset node must have the same sorted
+inputs and output content hash as that node; missing and orphaned records fail
+closed. Actor values, record limits, and required metadata are validated before
+the package can be accepted.

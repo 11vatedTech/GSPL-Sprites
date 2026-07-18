@@ -72,6 +72,8 @@ int main() {
     const auto valid = base / "valid";
     build_package(fixture(), valid);
     const auto verified = verify_package(valid);
+    for (const auto &diagnostic : verified.validation.diagnostics)
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
     check(verified.ok(), "valid package rejected");
     check(verified.artifact_count == 7, "governance artifacts not declared");
     const auto governed = base / "governed";
@@ -115,6 +117,27 @@ int main() {
               has_code(forged_verification,
                        "SPRITE_PACKAGE_AUTHORING_PROVENANCE_INVALID"),
           "hash-consistent malformed authoring evidence passed verification");
+    const auto forged_graph = base / "forged-graph";
+    std::filesystem::copy(valid, forged_graph,
+                          std::filesystem::copy_options::recursive);
+    const auto graph_path = forged_graph / "asset-graph.json";
+    const auto old_graph = read_text(graph_path);
+    const auto hash_field = old_graph.find("\"contentHash\":\"");
+    check(hash_field != std::string::npos,
+          "graph fixture content hash missing");
+    const auto hash_start = hash_field + 15;
+    check(hash_start + 64 <= old_graph.size(), "graph fixture hash truncated");
+    auto invalid_graph = old_graph;
+    invalid_graph.replace(hash_start, 64, 64, '0');
+    write_text(graph_path, invalid_graph);
+    write_text(forged_graph / "manifest.json",
+               replace_once(read_text(forged_graph / "manifest.json"),
+                            sha256(old_graph), sha256(invalid_graph)));
+    const auto graph_verification = verify_package(forged_graph);
+    check(!graph_verification.ok() &&
+              has_code(graph_verification,
+                       "SPRITE_PACKAGE_GRAPH_IDENTITY_MISMATCH"),
+          "hash-consistent forged graph identity passed verification");
     const auto visual_package = base / "visual";
     const std::array visual_frames{visual()};
     build_package(fixture(), visual_frames, {16, 16, 1, true, 0},

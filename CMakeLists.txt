@@ -54,6 +54,7 @@ add_library(gspl_sprites_core
   src/image.cpp
   src/animation.cpp
   src/package.cpp
+  src/package_semantics.cpp
   src/model.cpp
   src/jobs.cpp
   src/image_png.cpp

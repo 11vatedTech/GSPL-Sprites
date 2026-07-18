@@ -12,3 +12,8 @@ closure. Canonical manifests sort nodes by identity and dependencies by
 identity. Artifact bytes live outside the graph; storage and cache layers must
 verify their bytes against `content_hash` before use.
 
+Portable-package verification reparses the exact canonical grammar and
+recomputes every node ID from its type, schema version, content hash, compiler
+pass, provenance ID, target, and dependencies. All dependencies must resolve to
+nodes in the same graph, and every node must be `VALID` and covered by a
+consistent provenance record.

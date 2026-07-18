@@ -26,8 +26,11 @@ manifest/artifact/count/total-byte limits.
 Directory traversal itself is independently bounded so a package containing a
 large undeclared tree cannot evade the manifest artifact-count limit.
 
-Full semantic asset-graph and provenance-closure validation remains a release
-gate. The current verifier proves package containment, byte integrity, declared
-identity, rights authorization, canonical manifest structure, and resource
-bounds; it does not claim cryptographic authorship or trust without a future
-signature policy.
+The verifier parses the canonical asset graph and provenance documents under
+the package record limit. It recomputes every semantic node identity, requires
+strict node and dependency ordering, rejects missing dependencies, requires a
+unique provenance record for every node, checks provenance inputs and output
+hashes against the node, and rejects orphaned records. It also proves package
+containment, byte integrity, declared identity, rights authorization, canonical
+manifest structure, and resource bounds. It does not claim cryptographic
+authorship or trust without a future signature policy.
