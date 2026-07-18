@@ -20,6 +20,19 @@ final state. Limits bound frames, ticks, and emitted events.
 The persisted format is an internal `gspl.living-runtime-state/0.1` contract.
 Format version changes require explicit readers and migrations; permissive
 fallback parsing is prohibited. A final-state hash proves deterministic state
-agreement for the same program and inputs, but is not a network protocol,
-cryptographic authentication mechanism, rollback manager, or substitute for
-periodic authoritative snapshots. Those replication layers remain future work.
+agreement for the same program and inputs.
+
+Authoritative replication uses a separate canonical
+`gspl.runtime-replication/0.1` full-state update. An update binds the runtime
+program identity, the exact client base-state identity, target state identity,
+target tick, and byte-counted canonical target state. Receivers reject changed
+programs, divergent or stale bases, rollback attempts, corrupt payloads,
+noncanonical states, target tick mismatches, and configured byte-limit
+violations. Application parses and validates into a candidate before replacing
+live state, so a rejected update cannot partially mutate the receiver.
+
+This contract supplies deterministic convergence and divergence detection; it
+does not provide transport, cryptographic peer authentication, confidentiality,
+packet scheduling, prediction, or rollback simulation. Those belong above this
+engine-neutral authority boundary. A trusted transport must authenticate the
+serialized update before application.

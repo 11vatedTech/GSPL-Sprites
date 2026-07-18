@@ -64,6 +64,7 @@ add_library(gspl_sprites_core
   src/channel_map.cpp
   src/living_runtime.cpp
   src/runtime_persistence.cpp
+  src/runtime_replication.cpp
   src/runtime_event_router.cpp
   src/runtime_consumers.cpp
   src/projection25d.cpp
@@ -158,6 +159,10 @@ add_test(NAME gspl_sprites_living_runtime_tests COMMAND gspl_sprites_living_runt
 add_executable(gspl_sprites_runtime_persistence_tests tests/runtime_persistence_tests.cpp)
 target_link_libraries(gspl_sprites_runtime_persistence_tests PRIVATE gspl_sprites_core)
 add_test(NAME gspl_sprites_runtime_persistence_tests COMMAND gspl_sprites_runtime_persistence_tests)
+
+add_executable(gspl_sprites_runtime_replication_tests tests/runtime_replication_tests.cpp)
+target_link_libraries(gspl_sprites_runtime_replication_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_runtime_replication_tests COMMAND gspl_sprites_runtime_replication_tests)
 
 add_executable(gspl_sprites_runtime_event_router_tests tests/runtime_event_router_tests.cpp)
 target_link_libraries(gspl_sprites_runtime_event_router_tests PRIVATE gspl_sprites_core)
