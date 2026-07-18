@@ -75,6 +75,7 @@ add_library(gspl_sprites_core
   src/lod_quality.cpp
   src/runtime25d.cpp
   src/target_contract.cpp
+  src/target_evidence.cpp
   src/godot_export.cpp
   src/authoring.cpp
   src/authoring_io.cpp

@@ -6,6 +6,7 @@
 #include "gspl_sprites/lod_quality.hpp"
 #include "gspl_sprites/mesh_quality.hpp"
 #include "gspl_sprites/projection3d.hpp"
+#include "gspl_sprites/target_evidence.hpp"
 
 #include <cstddef>
 #include <span>
@@ -30,10 +31,10 @@ struct GltfExportLimits {
 export_projection3d_glb(const Projection3dDefinition &projection,
                         std::span<const GltfTextureAsset> textures = {},
                         const GltfExportLimits &limits = {});
-[[nodiscard]] std::vector<std::byte>
-export_projection3d_glb(const Projection3dDefinition &projection,
-                        std::span<const AnimationClip3d> animations,
-                        std::span<const GltfTextureAsset> textures,
-                        const GltfExportLimits &limits);
+[[nodiscard]] std::vector<std::byte> export_projection3d_glb(
+    const Projection3dDefinition &projection,
+    std::span<const AnimationClip3d> animations,
+    std::span<const GltfTextureAsset> textures, const GltfExportLimits &limits,
+    const std::optional<TargetSourceEvidence> &source_evidence = {});
 
 } // namespace gspl::sprites

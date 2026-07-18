@@ -7,6 +7,13 @@ from micrometers to glTF meters. Joint hierarchies become nodes and skins with
 computed global inverse bind matrices; render and collision purpose remains in
 node/mesh extras for downstream adapters.
 
+The glTF `asset.extras.gsplSourceEvidence` object always records the source
+boundary. Interchange generated from a verified sprite package embeds its
+package, seed, authoring-provenance, and target-compatibility SHA-256 identities;
+lower-level projection exports explicitly encode a null source package. Source
+evidence is issued only by the independent package verifier and remains valid
+standards-compliant glTF application metadata.
+
 Materials map to metallic-roughness PBR with explicit alpha behavior. Referenced
 textures must be supplied exactly once as governed PNG assets. They pass the
 bounded hostile-media decoder before embedding; missing, duplicate, malformed,

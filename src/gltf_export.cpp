@@ -174,11 +174,11 @@ std::uint32_t sample_morph(const MorphTrack3d &track, std::uint32_t tick) {
 }
 } // namespace
 
-std::vector<std::byte>
-export_projection3d_glb(const Projection3dDefinition &projection,
-                        std::span<const AnimationClip3d> supplied_animations,
-                        std::span<const GltfTextureAsset> supplied,
-                        const GltfExportLimits &limits) {
+std::vector<std::byte> export_projection3d_glb(
+    const Projection3dDefinition &projection,
+    std::span<const AnimationClip3d> supplied_animations,
+    std::span<const GltfTextureAsset> supplied, const GltfExportLimits &limits,
+    const std::optional<TargetSourceEvidence> &source_evidence) {
   const auto validation = validate_projection3d(projection);
   if (!validation.ok())
     throw std::invalid_argument(validation.diagnostics.front().message);
@@ -531,7 +531,10 @@ export_projection3d_glb(const Projection3dDefinition &projection,
   }
   std::ostringstream json;
   json << "{\"asset\":{\"generator\":\"11vatedTech GSPL "
-          "Sprites\",\"version\":\"2.0\"},\"scene\":0,";
+          "Sprites\",\"version\":\"2.0\",\"extras\":{"
+          "\"gsplSourceEvidence\":"
+       << canonicalize_target_source_evidence(source_evidence)
+       << "}},\"scene\":0,";
   json << "\"buffers\":[{\"byteLength\":" << bin.size()
        << "}],\"bufferViews\":[";
   for (std::size_t i = 0; i < views.size(); ++i) {
@@ -800,6 +803,6 @@ export_projection3d_glb(const Projection3dDefinition &projection,
                         std::span<const GltfTextureAsset> supplied,
                         const GltfExportLimits &limits) {
   return export_projection3d_glb(projection, std::span<const AnimationClip3d>{},
-                                 supplied, limits);
+                                 supplied, limits, {});
 }
 } // namespace gspl::sprites

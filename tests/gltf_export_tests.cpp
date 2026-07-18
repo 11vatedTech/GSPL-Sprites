@@ -1,6 +1,8 @@
+#include "gspl_sprites/core.hpp"
 #include "gspl_sprites/gltf_export.hpp"
 
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
@@ -66,9 +68,43 @@ Projection3dDefinition lod_fixture() {
   p.lods = {{0, "high", 800'000}, {1, "low", 100'000}};
   return p;
 }
+SpriteSeed seed_fixture() {
+  return parse_seed(R"(schema=gspl.sprite-seed/0.1
+id=original.glb-source
+name=GLB Source
+classification=fictional
+rights=ORIGINAL_USER_CREATION
+entropy_root=53
+primary_color=#334455
+accent_color=#CCDDEE
+ability=arc|electric.projectile|20|4|2
+)");
+}
 } // namespace
 int main(int argc, char **argv) try {
   const auto glb = export_projection3d_glb(fixture());
+  const auto source_package = std::filesystem::temp_directory_path() /
+                              "gspl-sprites-glb-source-package";
+  std::filesystem::remove_all(source_package);
+  build_package(seed_fixture(), source_package);
+  const auto source = target_source_evidence_from_package(source_package);
+  const auto governed_glb =
+      export_projection3d_glb(fixture(), std::span<const AnimationClip3d>{},
+                              std::span<const GltfTextureAsset>{}, {}, source);
+  const auto governed_json_length = u32(governed_glb, 12);
+  const std::string governed_json(
+      reinterpret_cast<const char *>(governed_glb.data() + 20),
+      governed_json_length);
+  check(governed_json.find(source.package_identity()) != std::string::npos &&
+            governed_json.find("gsplSourceEvidence") != std::string::npos,
+        "GLB did not preserve verified source package evidence");
+  if (argc == 3 && std::string_view(argv[1]) == "--output-governed") {
+    std::ofstream output(argv[2], std::ios::binary | std::ios::trunc);
+    if (!output ||
+        !output.write(reinterpret_cast<const char *>(governed_glb.data()),
+                      static_cast<std::streamsize>(governed_glb.size())))
+      throw std::runtime_error("failed to write governed GLB fixture");
+  }
   const std::array animations{animation()};
   const auto animated = export_projection3d_glb(
       fixture(), animations, std::span<const GltfTextureAsset>{}, {});
@@ -165,6 +201,7 @@ int main(int argc, char **argv) try {
                       static_cast<std::streamsize>(textured_glb.size())))
       throw std::runtime_error("failed to write textured GLB fixture");
   }
+  std::filesystem::remove_all(source_package);
   std::cout << "all gspl sprites GLB export tests passed\n";
   return 0;
 } catch (const std::exception &e) {
