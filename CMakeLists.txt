@@ -77,6 +77,7 @@ add_library(gspl_sprites_core
   src/godot_export.cpp
   src/authoring.cpp
   src/authoring_io.cpp
+  src/authoring_cli.cpp
 )
 target_include_directories(gspl_sprites_core PUBLIC include)
 if(MSVC)
@@ -210,3 +211,7 @@ add_test(NAME gspl_sprites_authoring_tests COMMAND gspl_sprites_authoring_tests)
 add_executable(gspl_sprites_authoring_io_tests tests/authoring_io_tests.cpp)
 target_link_libraries(gspl_sprites_authoring_io_tests PRIVATE gspl_sprites_core)
 add_test(NAME gspl_sprites_authoring_io_tests COMMAND gspl_sprites_authoring_io_tests)
+
+add_executable(gspl_sprites_authoring_cli_tests tests/authoring_cli_tests.cpp)
+target_link_libraries(gspl_sprites_authoring_cli_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_authoring_cli_tests COMMAND gspl_sprites_authoring_cli_tests $<TARGET_FILE:gspl-sprites>)

@@ -1,4 +1,5 @@
 #include "gspl_sprites/core.hpp"
+#include "gspl_sprites/authoring_cli.hpp"
 #include "gspl_sprites/package.hpp"
 #include "gspl_sprites/target_contract.hpp"
 #include "gspl_sprites/visual_set.hpp"
@@ -9,6 +10,7 @@
 
 int main(int argc, char** argv) {
   try {
+    std::vector<std::string_view> arguments;for(int index=1;index<argc;++index)arguments.emplace_back(argv[index]);if(const auto result=gspl::sprites::run_authoring_cli(arguments,std::cout,std::cerr))return *result;
     if(argc>=4&&std::string_view(argv[1])=="target-check"){
       const auto adapter=gspl::sprites::builtin_target_adapter(argv[2]);std::vector<gspl::sprites::TargetRequirement> requirements;
       for(int index=3;index<argc;++index){const auto feature=gspl::sprites::parse_target_feature(argv[index]);if(!feature){std::cerr<<"unknown target feature: "<<argv[index]<<'\n';return 2;}requirements.push_back({*feature,true});}
@@ -20,7 +22,7 @@ int main(int argc, char** argv) {
       std::cout<<"verified "<<verification.entity_id<<" seed="<<verification.seed_identity<<" package="<<verification.package_identity<<" artifacts="<<verification.artifact_count<<" bytes="<<verification.total_artifact_bytes<<'\n';return 0;
     }
     const bool seed_only=argc==4&&std::string_view(argv[1])=="build";const bool visual=argc==5&&std::string_view(argv[1])=="build-visual";
-    if (!seed_only&&!visual) { std::cerr << "usage:\n  gspl-sprites build <seed.sprite> <output-directory>\n  gspl-sprites build-visual <seed.sprite> <visual-set.txt> <output-directory>\n  gspl-sprites verify <package-directory>\n  gspl-sprites target-check <adapter> <required-feature>...\n"; return 2; }
+    if (!seed_only&&!visual) { std::cerr << "usage:\n  gspl-sprites build <seed.sprite> <output-directory>\n  gspl-sprites build-visual <seed.sprite> <visual-set.txt> <output-directory>\n  gspl-sprites verify <package-directory>\n  gspl-sprites target-check <adapter> <required-feature>...\n  gspl-sprites authoring-inspect <project>\n  gspl-sprites authoring-revise <project> <expected-identity> <output> <path> <selected-or-keep> <lock|unlock|keep> [...]\n  gspl-sprites authoring-lower <project> <output-seed-json> [variant]\n  gspl-sprites authoring-build <project> <output-package> [variant]\n"; return 2; }
     std::ifstream input(argv[2], std::ios::binary);
     if (!input) { std::cerr << "cannot open input seed\n"; return 2; }
     const std::string source{std::istreambuf_iterator<char>(input), {}};
