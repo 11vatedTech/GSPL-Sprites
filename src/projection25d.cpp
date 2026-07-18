@@ -45,6 +45,10 @@ validate_projection25d(const Projection25dDefinition &projection) {
       projection.views.size() < 2)
     add(result, "SPRITE_25D_MULTI_ANGLE_REQUIRED",
         "multi-angle billboard requires at least two views");
+  if (projection.billboard != BillboardMode::discrete_multi_angle &&
+      projection.views.size() != 1)
+    add(result, "SPRITE_25D_SINGLE_VIEW_REQUIRED",
+        "fixed-axis and camera-facing billboards require exactly one view");
   if (projection.representation != RepresentationKind::hybrid &&
       !projection.geometry.empty())
     add(result, "SPRITE_25D_GEOMETRY_KIND_INVALID",
