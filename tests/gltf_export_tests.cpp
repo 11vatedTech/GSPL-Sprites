@@ -49,6 +49,23 @@ AnimationClip3d animation() {
            {"raise", {{0, 0}, {5, 1'000'000}, {10, 0}}}},
           {{"cycle", 10}}};
 }
+Projection3dDefinition lod_fixture() {
+  Projection3dDefinition p;
+  p.id = "glb.lod";
+  p.materials = {{"mat"}};
+  Vertex3d a{{0, 0, 0}}, b{{1'000'000, 0, 0}}, c{{1'000'000, 1'000'000, 0}},
+      d{{0, 1'000'000, 0}};
+  p.meshes = {
+      {"high",
+       MeshPurpose::render,
+       "mat",
+       false,
+       {a, b, c, d},
+       {0, 1, 2, 0, 2, 3}},
+      {"low", MeshPurpose::render, "mat", false, {a, b, c, d}, {0, 1, 2}}};
+  p.lods = {{0, "high", 800'000}, {1, "low", 100'000}};
+  return p;
+}
 } // namespace
 int main(int argc, char **argv) try {
   const auto glb = export_projection3d_glb(fixture());
@@ -129,6 +146,18 @@ int main(int argc, char **argv) try {
       textured_json_length);
   check(textured_json.find("\"TANGENT\"") != std::string::npos,
         "normal-mapped GLB lacks generated tangents");
+  const auto lod_glb = export_projection3d_glb(lod_fixture());
+  const auto lod_json_length = u32(lod_glb, 12);
+  const std::string lod_json(
+      reinterpret_cast<const char *>(lod_glb.data() + 20), lod_json_length);
+  check(lod_json.find("\"gsplLodLevel\"") != std::string::npos,
+        "GLB lacks governed LOD metadata");
+  if (argc == 3 && std::string_view(argv[1]) == "--output-lod") {
+    std::ofstream output(argv[2], std::ios::binary | std::ios::trunc);
+    if (!output || !output.write(reinterpret_cast<const char *>(lod_glb.data()),
+                                 static_cast<std::streamsize>(lod_glb.size())))
+      throw std::runtime_error("failed to write LOD GLB fixture");
+  }
   if (argc == 3 && std::string_view(argv[1]) == "--output-textured") {
     std::ofstream output(argv[2], std::ios::binary | std::ios::trunc);
     if (!output ||

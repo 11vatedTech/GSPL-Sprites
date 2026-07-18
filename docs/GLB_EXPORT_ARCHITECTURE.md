@@ -31,6 +31,10 @@ Animated exports additionally pass sampled linear-blend deformation analysis.
 Triangle collapse, excessive vertex displacement, and evaluation workloads over
 policy are rejected before animation accessors are created.
 
+LOD-bearing projections pass bounded symmetric geometric correspondence and
+material checks. Each mesh node preserves its governed level and minimum screen
+coverage in GSPL extras for explicit target-adapter translation.
+
 Textured meshes pass the bounded mesh-quality gate before their UV attributes
 are emitted. Normal-mapped materials additionally receive generated normalized
 `TANGENT` vectors and handedness. UV overlap, degenerate parameterization, or

@@ -3,6 +3,7 @@
 #include "gspl_sprites/animation3d.hpp"
 #include "gspl_sprites/deformation_quality.hpp"
 #include "gspl_sprites/image.hpp"
+#include "gspl_sprites/lod_quality.hpp"
 #include "gspl_sprites/mesh_quality.hpp"
 #include "gspl_sprites/projection3d.hpp"
 
@@ -22,6 +23,7 @@ struct GltfExportLimits {
   ImageLimits texture_image;
   MeshQualityPolicy mesh_quality;
   DeformationQualityPolicy deformation_quality;
+  LodQualityPolicy lod_quality;
 };
 
 [[nodiscard]] std::vector<std::byte>

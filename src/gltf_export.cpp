@@ -178,6 +178,10 @@ export_projection3d_glb(const Projection3dDefinition &projection,
   const auto validation = validate_projection3d(projection);
   if (!validation.ok())
     throw std::invalid_argument(validation.diagnostics.front().message);
+  const auto lod_quality = analyze_lod_quality(projection, limits.lod_quality);
+  if (!lod_quality.validation.ok())
+    throw std::invalid_argument(
+        lod_quality.validation.diagnostics.front().message);
   if (limits.maximum_glb_bytes < 20 ||
       limits.maximum_glb_bytes > std::numeric_limits<std::uint32_t>::max() ||
       limits.maximum_texture_bytes == 0)
@@ -190,6 +194,9 @@ export_projection3d_glb(const Projection3dDefinition &projection,
   std::ranges::sort(materials, {}, &Material3d::id);
   std::ranges::sort(meshes, {}, &Mesh3d::id);
   std::ranges::sort(morphs, {}, &MorphTarget3d::id);
+  std::map<std::string, LodLevel3d, std::less<>> lod_by_mesh;
+  for (const auto &lod : projection.lods)
+    lod_by_mesh.emplace(lod.mesh_id, lod);
   std::ranges::sort(animations, {}, &AnimationClip3d::id);
   std::set<std::string> animation_ids;
   for (const auto &clip : animations) {
@@ -679,6 +686,11 @@ export_projection3d_glb(const Projection3dDefinition &projection,
     json << "{\"name\":\"" << meshes[i].id << ".node\",\"mesh\":" << i;
     if (projection.skeleton && meshes[i].purpose == MeshPurpose::render)
       json << ",\"skin\":0";
+    if (const auto found = lod_by_mesh.find(meshes[i].id);
+        found != lod_by_mesh.end())
+      json << ",\"extras\":{\"gsplLodLevel\":" << found->second.level
+           << ",\"gsplMinimumScreenCoveragePerMillion\":"
+           << found->second.minimum_screen_coverage_per_million << '}';
     json << '}';
   }
   json << ']';
