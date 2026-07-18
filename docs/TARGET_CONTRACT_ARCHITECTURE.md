@@ -6,6 +6,7 @@ The initial built-in descriptors describe code that exists in this repository, n
 
 - `portable-package` covers the currently verified canonical seed, rights/provenance, 2D assets, rig, animation graph, collisions, and channel maps.
 - `glb-2.0` covers the validated mesh, PBR material, skin, morph, and animation exporter. LOD is adapter-emulated because GSPL metadata preserves levels but selection remains consumer-owned.
+- `godot-4.7-3d` adds a transactional, independently verified Godot project and PackedScene around the GLB representation.
 
 The CLI command `target-check <adapter> <required-feature>...` emits a deterministic JSON report and exits unsuccessfully if fidelity would be lost. Future engine adapters must ship their implementation, descriptor evidence, compatibility tests, and engine importer validation together.
 

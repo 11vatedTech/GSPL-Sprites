@@ -15,6 +15,7 @@ namespace {
 struct View {
   std::uint32_t offset{}, length{};
   std::optional<std::uint32_t> target;
+  std::optional<std::uint32_t> byte_stride;
 };
 struct Accessor {
   std::uint32_t view{}, component{}, count{};
@@ -80,24 +81,27 @@ std::string array(const std::array<double, N> &values) {
 }
 std::uint32_t add_view(std::vector<View> &views, std::vector<std::byte> &bin,
                        std::span<const std::byte> data,
-                       std::optional<std::uint32_t> target = {}) {
+                       std::optional<std::uint32_t> target = {},
+                       std::optional<std::uint32_t> byte_stride = {}) {
   align4(bin);
   if (bin.size() > std::numeric_limits<std::uint32_t>::max() - data.size())
     throw std::length_error("GLB binary exceeds 32-bit range");
   const auto offset = static_cast<std::uint32_t>(bin.size());
   bin.insert(bin.end(), data.begin(), data.end());
-  views.push_back({offset, static_cast<std::uint32_t>(data.size()), target});
+  views.push_back(
+      {offset, static_cast<std::uint32_t>(data.size()), target, byte_stride});
   return static_cast<std::uint32_t>(views.size() - 1);
 }
 template <class Writer>
 std::uint32_t numeric_view(std::vector<View> &views,
                            std::vector<std::byte> &bin, std::size_t count,
                            Writer writer,
-                           std::optional<std::uint32_t> target = {}) {
+                           std::optional<std::uint32_t> target = {},
+                           std::optional<std::uint32_t> byte_stride = {}) {
   std::vector<std::byte> data;
   data.reserve(count * 4);
   writer(data);
-  return add_view(views, bin, data, target);
+  return add_view(views, bin, data, target, byte_stride);
 }
 std::uint32_t accessor(std::vector<Accessor> &values, std::uint32_t view,
                        std::uint32_t component, std::uint32_t count,
@@ -277,7 +281,7 @@ export_projection3d_glb(const Projection3dDefinition &projection,
             }
           }
         },
-        34962);
+        34962, 12);
     p.position = accessor(accessors, pv, 5126,
                           static_cast<std::uint32_t>(mesh.vertices.size()),
                           "VEC3", minv, maxv);
@@ -290,7 +294,7 @@ export_projection3d_glb(const Projection3dDefinition &projection,
             f32(o, v.normal.z / 1e6f);
           }
         },
-        34962);
+        34962, 12);
     p.normal =
         accessor(accessors, nv, 5126,
                  static_cast<std::uint32_t>(mesh.vertices.size()), "VEC3");
@@ -317,7 +321,7 @@ export_projection3d_glb(const Projection3dDefinition &projection,
               f32(o, v.texture_coordinate.v / 1e6f);
             }
           },
-          34962);
+          34962, 8);
       p.uv = accessor(accessors, uv, 5126,
                       static_cast<std::uint32_t>(mesh.vertices.size()), "VEC2");
       if (needs_tangent) {
@@ -331,7 +335,7 @@ export_projection3d_glb(const Projection3dDefinition &projection,
                 f32(out, static_cast<float>(value.handedness));
               }
             },
-            34962);
+            34962, 16);
         p.tangent = accessor(
             accessors, tangent, 5126,
             static_cast<std::uint32_t>(quality.tangents.size()), "VEC4");
@@ -350,7 +354,7 @@ export_projection3d_glb(const Projection3dDefinition &projection,
                 u16(o, id);
             }
           },
-          34962);
+          34962, 8);
       p.joints =
           accessor(accessors, jv, 5123,
                    static_cast<std::uint32_t>(mesh.vertices.size()), "VEC4");
@@ -365,7 +369,7 @@ export_projection3d_glb(const Projection3dDefinition &projection,
                 f32(o, q);
             }
           },
-          34962);
+          34962, 16);
       p.weights =
           accessor(accessors, wv, 5126,
                    static_cast<std::uint32_t>(mesh.vertices.size()), "VEC4");
@@ -403,7 +407,7 @@ export_projection3d_glb(const Projection3dDefinition &projection,
                 }
               }
             },
-            34962);
+            34962, 12);
         p.morphs.push_back(
             accessor(accessors, mv, 5126,
                      static_cast<std::uint32_t>(m.position_deltas.size()),
@@ -537,6 +541,8 @@ export_projection3d_glb(const Projection3dDefinition &projection,
          << ",\"byteLength\":" << views[i].length;
     if (views[i].target)
       json << ",\"target\":" << *views[i].target;
+    if (views[i].byte_stride)
+      json << ",\"byteStride\":" << *views[i].byte_stride;
     json << '}';
   }
   json << "],\"accessors\":[";

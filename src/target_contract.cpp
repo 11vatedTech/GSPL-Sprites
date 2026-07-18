@@ -17,7 +17,8 @@ constexpr std::array names{
     "channel-maps",     "living-runtime",        "deterministic-replay",
     "depth-planes-25d", "multi-angle-25d",       "hybrid-geometry-25d",
     "mesh-3d",          "pbr-materials-3d",      "skeleton-3d",
-    "morph-targets-3d", "animation-3d",          "lod-3d"};
+    "morph-targets-3d", "animation-3d",          "lod-3d",
+    "engine-project"};
 
 bool stable_id(std::string_view value) {
   return !value.empty() && value.size() <= 128 &&
@@ -185,6 +186,15 @@ TargetAdapterDescriptor builtin_target_adapter(std::string_view id) {
              capability(TargetFeature::lod_3d, TargetSupport::adapter_emulated,
                         "validated LOD meshes with GSPL extras; selection "
                         "remains consumer-owned")}};
+  if (id == "godot-4.7-3d") {
+    auto adapter = builtin_target_adapter("glb-2.0");
+    adapter.id = "godot-4.7-3d";
+    adapter.capabilities.push_back(
+        capability(TargetFeature::engine_project, TargetSupport::native,
+                   "transactional Godot 4.7 project, PackedScene, GLB asset, "
+                   "and hash manifest"));
+    return adapter;
+  }
   throw std::invalid_argument("unknown target adapter: " + std::string(id));
 }
 

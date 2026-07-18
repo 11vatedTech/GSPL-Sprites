@@ -74,6 +74,7 @@ add_library(gspl_sprites_core
   src/lod_quality.cpp
   src/runtime25d.cpp
   src/target_contract.cpp
+  src/godot_export.cpp
 )
 target_include_directories(gspl_sprites_core PUBLIC include)
 if(MSVC)
@@ -195,3 +196,7 @@ add_test(NAME gspl_sprites_runtime25d_tests COMMAND gspl_sprites_runtime25d_test
 add_executable(gspl_sprites_target_contract_tests tests/target_contract_tests.cpp)
 target_link_libraries(gspl_sprites_target_contract_tests PRIVATE gspl_sprites_core)
 add_test(NAME gspl_sprites_target_contract_tests COMMAND gspl_sprites_target_contract_tests $<TARGET_FILE:gspl-sprites>)
+
+add_executable(gspl_sprites_godot_export_tests tests/godot_export_tests.cpp)
+target_link_libraries(gspl_sprites_godot_export_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_godot_export_tests COMMAND gspl_sprites_godot_export_tests)

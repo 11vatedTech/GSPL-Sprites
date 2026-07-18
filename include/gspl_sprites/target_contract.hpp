@@ -26,7 +26,8 @@ enum class TargetFeature {
   skeleton_3d,
   morph_targets_3d,
   animation_3d,
-  lod_3d
+  lod_3d,
+  engine_project
 };
 
 enum class TargetSupport { native, adapter_emulated, unsupported };
