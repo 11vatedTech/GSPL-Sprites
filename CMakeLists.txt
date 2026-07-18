@@ -68,6 +68,7 @@ add_library(gspl_sprites_core
   src/projection25d.cpp
   src/projection3d.cpp
   src/animation3d.cpp
+  src/gltf_export.cpp
 )
 target_include_directories(gspl_sprites_core PUBLIC include)
 if(MSVC)
@@ -165,3 +166,7 @@ add_test(NAME gspl_sprites_projection3d_tests COMMAND gspl_sprites_projection3d_
 add_executable(gspl_sprites_animation3d_tests tests/animation3d_tests.cpp)
 target_link_libraries(gspl_sprites_animation3d_tests PRIVATE gspl_sprites_core)
 add_test(NAME gspl_sprites_animation3d_tests COMMAND gspl_sprites_animation3d_tests)
+
+add_executable(gspl_sprites_gltf_export_tests tests/gltf_export_tests.cpp)
+target_link_libraries(gspl_sprites_gltf_export_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_gltf_export_tests COMMAND gspl_sprites_gltf_export_tests)
