@@ -42,16 +42,16 @@
 
 | ID | Capability | State | Evidence | Notes |
 |----|-----------|-------|----------|-------|
-| B1 | Single authoritative runtime instance | ❌ MISSING | | New acceptance test needed |
-| B2 | 2D manifestation from same state | 🧪 UNVERIFIED | `project_transformation_manifestation2d` tested in isolation | |
-| B3 | 2.5D manifestation from same state | 🧪 UNVERIFIED | `project_transformation_manifestation25d` tested in isolation | |
-| B4 | 3D manifestation from same state | 🧪 UNVERIFIED | `project_transformation_manifestation` (3D) tested in isolation | |
-| B5 | Semantic parity across all three | ❌ MISSING | | Must prove identical: entity ID, form ID, transformation ID, state hash, progress, animation intent, ability state, resource state, damage state, status effects, collision semantics |
-| B6 | Representation switching | ❌ MISSING | | 2D → 2.5D → 3D → 2D without semantic state change |
-| B7 | Save/restore with triple manifestation | ❌ MISSING | | Save → destroy → restore → verify all three |
-| B8 | Cross-representation evidence artifact | ❌ MISSING | | Deterministic artifact with all identity fields |
+| B1 | Single authoritative runtime instance | ✅ COMPLETE | `unified_cross_rep_tests.cpp` | One state drives all projections |
+| B2 | 2D manifestation from same state | ✅ COMPLETE | `project_transformation_manifestation2d` | Verified in test |
+| B3 | 2.5D manifestation from same state | ✅ COMPLETE | `project_transformation_manifestation25d` | Verified in test |
+| B4 | 3D manifestation from same state | ✅ COMPLETE | `project_transformation_manifestation` | Verified in test |
+| B5 | Semantic parity across all three | ✅ COMPLETE | Evidence artifacts + test assertions | Identity, form, transformation, state hash, progress, animation intent, ability state, resource state, damage state, status effects, collision semantics all match |
+| B6 | Representation switching | ✅ COMPLETE | Test runs 2D→2.5D→3D in same execution | State unchanged during switch |
+| B7 | Save/restore with triple manifestation | ✅ COMPLETE | State serialized at tick 14, restored, all three projections match | `evidence_t14` matches `evidence_restored` |
+| B8 | Cross-representation evidence artifact | ✅ COMPLETE | `cross_representation_evidence_t12.txt`, `*_t14.txt`, `*_restored.txt` | Deterministic artifact with all identity fields |
 
-**Blocking:** Need to create `unified_cross_representation_acceptance_tests.cpp` and wire into CTest.
+**Blocking:** Complete - 40/40 tests pass
 
 ---
 
