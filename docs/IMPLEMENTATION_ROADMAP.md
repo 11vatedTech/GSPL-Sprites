@@ -16,7 +16,8 @@
    cancel-window graphs are implemented; prediction, rollback simulation,
    defense/projectiles, input buffering, and complete multi-domain form deltas
    remain open gates. Identity-preserving timed combat-capacity transformations
-   and form-specific ability gating are implemented; their persistence and
+   and form-specific ability gating are implemented with canonical program-bound
+   persistence and state-hash convergence evidence; authenticated transport and
    visual/animation bindings remain open.
 6. 2.5D and 3D: depth layers, multi-view, reconstruction, topology, materials,
    rigging, retargeting, validation and LOD.

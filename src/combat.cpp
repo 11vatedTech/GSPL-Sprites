@@ -1,9 +1,12 @@
 #include "gspl_sprites/combat.hpp"
 
+#include "gspl_sprites/core.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <limits>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 
 namespace gspl::sprites {
@@ -65,6 +68,35 @@ ValidationResult validate_combat_program(const CombatProgram &program) {
     }
   }
   return result;
+}
+
+std::string canonicalize_combat_program(const CombatProgram &program) {
+  const auto validation = validate_combat_program(program);
+  if (!validation.ok())
+    throw std::invalid_argument(validation.diagnostics.front().code + ": " +
+                                validation.diagnostics.front().message);
+  auto abilities = program.abilities;
+  std::ranges::sort(abilities, {}, &CombatAbilityDefinition::id);
+  std::ostringstream output;
+  output << "schema=gspl.combat-program/0.1\nid=" << program.id
+         << "\nmaximum_actors=" << program.maximum_actors
+         << "\nmaximum_statuses_per_actor=" << program.maximum_statuses_per_actor << '\n';
+  for (const auto &ability : abilities) {
+    output << "ability=" << ability.id << '|' << static_cast<int>(ability.target_rule)
+           << '|' << ability.resource_cost << '|' << ability.cooldown_ticks << '|'
+           << ability.maximum_range_millimeters << '\n';
+    for (std::size_t index = 0; index < ability.effects.size(); ++index) {
+      const auto &effect = ability.effects[index];
+      output << "effect=" << ability.id << '|' << index << '|'
+             << static_cast<int>(effect.kind) << '|' << effect.status_id << '|'
+             << effect.magnitude << '|' << effect.duration_ticks << '\n';
+    }
+  }
+  return output.str();
+}
+
+std::string combat_program_identity(const CombatProgram &program) {
+  return sha256(canonicalize_combat_program(program));
 }
 
 ValidationResult validate_combat_state(const CombatProgram &program,

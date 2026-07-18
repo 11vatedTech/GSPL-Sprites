@@ -68,6 +68,8 @@ struct CombatEvent {
 };
 
 [[nodiscard]] ValidationResult validate_combat_program(const CombatProgram &program);
+[[nodiscard]] std::string canonicalize_combat_program(const CombatProgram &program);
+[[nodiscard]] std::string combat_program_identity(const CombatProgram &program);
 [[nodiscard]] ValidationResult validate_combat_state(const CombatProgram &program,
                                                      const CombatState &state);
 [[nodiscard]] std::vector<CombatEvent>

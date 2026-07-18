@@ -68,6 +68,7 @@ add_library(gspl_sprites_core
   src/combat.cpp
   src/combo.cpp
   src/transformation.cpp
+  src/transformation_persistence.cpp
   src/runtime_event_router.cpp
   src/runtime_consumers.cpp
   src/projection25d.cpp
@@ -178,6 +179,10 @@ add_test(NAME gspl_sprites_combo_tests COMMAND gspl_sprites_combo_tests)
 add_executable(gspl_sprites_transformation_tests tests/transformation_tests.cpp)
 target_link_libraries(gspl_sprites_transformation_tests PRIVATE gspl_sprites_core)
 add_test(NAME gspl_sprites_transformation_tests COMMAND gspl_sprites_transformation_tests)
+
+add_executable(gspl_sprites_transformation_persistence_tests tests/transformation_persistence_tests.cpp)
+target_link_libraries(gspl_sprites_transformation_persistence_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_transformation_persistence_tests COMMAND gspl_sprites_transformation_persistence_tests)
 
 add_executable(gspl_sprites_runtime_event_router_tests tests/runtime_event_router_tests.cpp)
 target_link_libraries(gspl_sprites_runtime_event_router_tests PRIVATE gspl_sprites_core)

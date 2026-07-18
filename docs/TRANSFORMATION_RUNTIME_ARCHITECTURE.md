@@ -20,8 +20,16 @@ the matching authoritative combat actor, clamps current health and resource to
 new maxima, records history, and changes form. Transformation and combat states
 commit together only after both candidates validate.
 
+Transformation programs have a canonical identity that incorporates the full
+canonical combat-program identity. Transformation state uses the bounded
+`gspl.transformation-state/0.1` format and records both identities, stable entity,
+current form, energy, complete history, and any active transition. Loading
+requires exact canonical bytes and full semantic validation. The canonical
+state SHA-256 is replication convergence evidence: peers cannot agree while
+using different form or combat semantics.
+
 The current semantic delta covers combat capacity and ability availability.
 Appearance, anatomy, behavior, animation, equipment, projection, and target
-implications require additional typed delta families. Canonical persistence and
-replication must encompass transformation state before networked authority can
-claim form convergence.
+implications require additional typed delta families. An authenticated
+replication transport and visual/animation consumers must bind this identity
+rather than creating independent form authority.
