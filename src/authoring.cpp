@@ -20,20 +20,77 @@ constexpr std::array required_fields{
 bool token(std::string_view value) {
   return !value.empty() && value.size() <= 128 &&
          std::ranges::all_of(value, [](unsigned char character) {
-           return std::isalnum(character) || character == '.' ||
+           return (character >= 'a' && character <= 'z') ||
+                  (character >= 'A' && character <= 'Z') ||
+                  (character >= '0' && character <= '9') || character == '.' ||
                   character == '_' || character == '-';
          });
 }
 
+bool sha256_text(std::string_view value) {
+  return value.size() == 64 &&
+         std::ranges::all_of(value, [](unsigned char character) {
+           return (character >= '0' && character <= '9') ||
+                  (character >= 'a' && character <= 'f');
+         });
+}
+
+bool valid_utf8(std::string_view value) {
+  for (std::size_t index = 0; index < value.size();) {
+    const auto first = static_cast<unsigned char>(value[index]);
+    std::size_t length = 1;
+    std::uint32_t codepoint = first;
+    if ((first & 0xe0U) == 0xc0U) {
+      length = 2;
+      codepoint = first & 0x1fU;
+    } else if ((first & 0xf0U) == 0xe0U) {
+      length = 3;
+      codepoint = first & 0x0fU;
+    } else if ((first & 0xf8U) == 0xf0U) {
+      length = 4;
+      codepoint = first & 0x07U;
+    } else if (first >= 0x80U) {
+      return false;
+    }
+    if (index + length > value.size())
+      return false;
+    for (std::size_t offset = 1; offset < length; ++offset) {
+      const auto continuation =
+          static_cast<unsigned char>(value[index + offset]);
+      if ((continuation & 0xc0U) != 0x80U)
+        return false;
+      codepoint = (codepoint << 6U) | (continuation & 0x3fU);
+    }
+    if ((length == 2 && codepoint < 0x80U) ||
+        (length == 3 && codepoint < 0x800U) ||
+        (length == 4 && codepoint < 0x10000U) ||
+        (codepoint >= 0xd800U && codepoint <= 0xdfffU) || codepoint > 0x10ffffU)
+      return false;
+    index += length;
+  }
+  return true;
+}
+
 std::string escape_json(std::string_view value) {
+  constexpr char hex[] = "0123456789ABCDEF";
   std::string output;
   for (const unsigned char character : value) {
-    if (character == '"' || character == '\\')
+    if (character == '"' || character == '\\') {
       output += '\\';
-    if (character < 0x20)
-      throw std::invalid_argument(
-          "authoring value contains a control character");
-    output += static_cast<char>(character);
+      output += static_cast<char>(character);
+    } else if (character == '\n') {
+      output += "\\n";
+    } else if (character == '\r') {
+      output += "\\r";
+    } else if (character == '\t') {
+      output += "\\t";
+    } else if (character < 0x20) {
+      output += "\\u00";
+      output += hex[character >> 4U];
+      output += hex[character & 0x0fU];
+    } else {
+      output += static_cast<char>(character);
+    }
   }
   return output;
 }
@@ -68,12 +125,12 @@ ValidationResult validate_authoring_project(const AuthoringProject &project) {
   ValidationResult result;
   if (project.schema != "gspl.sprite-authoring/0.1" || !token(project.id) ||
       project.intent.empty() || project.intent.size() > 65'536 ||
-      project.fields.size() > 4'096 || project.abilities.size() > 256 ||
-      project.variants.size() > 1'024 ||
+      !valid_utf8(project.intent) || project.fields.size() > 4'096 ||
+      project.abilities.size() > 256 || project.variants.size() > 1'024 ||
       (project.revision == 0) !=
           !project.parent_revision_identity.has_value() ||
       (project.parent_revision_identity &&
-       project.parent_revision_identity->size() != 64))
+       !sha256_text(*project.parent_revision_identity)))
     add(result, "SPRITE_AUTHORING_HEADER_INVALID",
         "authoring project header, limits, or revision ancestry is invalid");
   std::set<std::string> paths;
@@ -84,7 +141,7 @@ ValidationResult validate_authoring_project(const AuthoringProject &project) {
       add(result, "SPRITE_AUTHORING_FIELD_INVALID",
           "authoring field is malformed, duplicate, or empty: " + field.path);
     for (const auto &value : field.alternatives)
-      if (value.empty() || value.size() > 8'192 ||
+      if (value.empty() || value.size() > 8'192 || !valid_utf8(value) ||
           !alternatives.insert(value).second)
         add(result, "SPRITE_AUTHORING_ALTERNATIVE_INVALID",
             "authoring alternative is empty, duplicate, or too large: " +
@@ -100,7 +157,8 @@ ValidationResult validate_authoring_project(const AuthoringProject &project) {
           "required authoring field is absent: " + std::string(path));
   std::set<std::string> abilities;
   for (const auto &ability : project.abilities)
-    if (!token(ability.value.id) || !abilities.insert(ability.value.id).second)
+    if (!token(ability.value.id) || !valid_utf8(ability.value.effect) ||
+        !abilities.insert(ability.value.id).second)
       add(result, "SPRITE_AUTHORING_ABILITY_INVALID",
           "authored ability identity is invalid or duplicate");
   std::set<std::string> variants;

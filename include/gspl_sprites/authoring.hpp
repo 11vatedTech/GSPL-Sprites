@@ -2,6 +2,7 @@
 
 #include "gspl_sprites/core.hpp"
 
+#include <filesystem>
 #include <optional>
 #include <span>
 
@@ -64,5 +65,12 @@ revise_authoring_project(const AuthoringProject &project,
 [[nodiscard]] AuthoringLoweringResult
 lower_authoring_project(const AuthoringProject &project,
                         std::optional<std::string_view> variant_id = {});
+[[nodiscard]] AuthoringProject parse_authoring_project(std::string_view source);
+[[nodiscard]] std::string
+serialize_authoring_project(const AuthoringProject &project);
+void save_authoring_project(const AuthoringProject &project,
+                            const std::filesystem::path &path);
+[[nodiscard]] AuthoringProject
+load_authoring_project(const std::filesystem::path &path);
 
 } // namespace gspl::sprites
