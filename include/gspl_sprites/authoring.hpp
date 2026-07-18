@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gspl_sprites/core.hpp"
+#include "gspl_sprites/target_contract.hpp"
 
 #include <filesystem>
 #include <optional>
@@ -27,6 +28,27 @@ struct AuthoringVariant {
   std::vector<std::string> disabled_abilities;
 };
 
+enum class AuthoringReferenceUse {
+  semantic_structure,
+  visual_asset,
+  motion_asset,
+  audio_asset
+};
+
+struct AuthoringReference {
+  std::string id;
+  std::string uri;
+  std::string content_sha256;
+  RightsClass rights{RightsClass::unknown};
+  AuthoringReferenceUse use{AuthoringReferenceUse::semantic_structure};
+  bool required{true};
+};
+
+struct AuthoringTargetRequest {
+  std::string adapter_id;
+  std::vector<TargetRequirement> features;
+};
+
 struct AuthoringProject {
   std::string schema{"gspl.sprite-authoring/0.1"};
   std::string id;
@@ -36,6 +58,8 @@ struct AuthoringProject {
   std::vector<AuthoringField> fields;
   std::vector<AuthoringAbility> abilities;
   std::vector<AuthoringVariant> variants;
+  std::vector<AuthoringReference> references;
+  std::vector<AuthoringTargetRequest> targets;
 };
 
 struct AuthoringEdit {
@@ -72,5 +96,8 @@ void save_authoring_project(const AuthoringProject &project,
                             const std::filesystem::path &path);
 [[nodiscard]] AuthoringProject
 load_authoring_project(const std::filesystem::path &path);
+[[nodiscard]] AuthoringProject
+authoring_project_from_seed(const SpriteSeed &seed, std::string project_id,
+                            std::string intent);
 
 } // namespace gspl::sprites

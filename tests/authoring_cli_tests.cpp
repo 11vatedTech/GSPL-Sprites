@@ -63,6 +63,28 @@ int main(int argc, char **argv) try {
   std::ostringstream output;
   std::ostringstream error;
 
+  const auto seed_source_path = root / "import.sprite";
+  const auto imported_path = root / "imported.gspl-authoring";
+  {
+    std::ofstream seed_source(seed_source_path);
+    seed_source << "schema=gspl.sprite-seed/0.1\n"
+                   "id=original.imported\nname=Imported Fox\n"
+                   "classification=fictional.creature\n"
+                   "rights=ORIGINAL_USER_CREATION\nentropy_root=31\n"
+                   "primary_color=#123456\naccent_color=#FEDCBA\n"
+                   "ability=arc|electric.projectile|20|4|2\n";
+  }
+  const auto seed_source_text = seed_source_path.string();
+  const auto imported_text = imported_path.string();
+  const std::array import{std::string_view{"authoring-import-seed"},
+                          std::string_view{seed_source_text},
+                          std::string_view{"authoring.imported"},
+                          std::string_view{"Imported for refinement"},
+                          std::string_view{imported_text}};
+  check(run_authoring_cli(import, output, error) == 0 &&
+            lower_authoring_project(load_authoring_project(imported_path)).ok(),
+        "authoring seed import command failed");
+
   const std::array inspect{std::string_view{"authoring-inspect"},
                            std::string_view{source_text}};
   check(run_authoring_cli(inspect, output, error) == 0 &&

@@ -13,20 +13,29 @@ void check(bool value, const char *message) {
 }
 
 AuthoringProject fixture() {
-  return {"gspl.sprite-authoring/0.1",
-          "authoring.io",
-          "Electric fox | variant; multilingual: 雷狐",
-          0,
-          {},
-          {{"identity.stable_id", {"original.io"}, 0, true},
-           {"identity.name", {"Volt|Fox", "雷狐"}, 1, false},
-           {"identity.classification", {"fictional.creature"}, 0, true},
-           {"rights.class", {"ORIGINAL_USER_CREATION"}, 0, true},
-           {"entropy.root", {"71"}, 0, true},
-           {"appearance.primary_color", {"#1122AA"}, 0, false},
-           {"appearance.accent_color", {"#FFFF44"}, 0, true}},
-          {{{"arc", "electric|projectile;directed", 20, 4, 2}, true, false}},
-          {{"bright", {{"appearance.primary_color", "#1122AA"}}, {}}}};
+  AuthoringProject project{
+      "gspl.sprite-authoring/0.1",
+      "authoring.io",
+      "Electric fox | variant; multilingual: 雷狐",
+      0,
+      {},
+      {{"identity.stable_id", {"original.io"}, 0, true},
+       {"identity.name", {"Volt|Fox", "雷狐"}, 1, false},
+       {"identity.classification", {"fictional.creature"}, 0, true},
+       {"rights.class", {"ORIGINAL_USER_CREATION"}, 0, true},
+       {"entropy.root", {"71"}, 0, true},
+       {"appearance.primary_color", {"#1122AA"}, 0, false},
+       {"appearance.accent_color", {"#FFFF44"}, 0, true}},
+      {{{"arc", "electric|projectile;directed", 20, 4, 2}, true, false}},
+      {{"bright", {{"appearance.primary_color", "#1122AA"}}, {}}}};
+  project.references.push_back(
+      {"concept.front", "file:///references/front concept.png",
+       "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+       RightsClass::licensed, AuthoringReferenceUse::visual_asset, true});
+  project.targets.push_back({"portable-package",
+                             {{TargetFeature::canonical_seed, true},
+                              {TargetFeature::living_runtime, false}}});
+  return project;
 }
 } // namespace
 
@@ -37,7 +46,8 @@ int main() try {
   check(serialize_authoring_project(parsed) == source &&
             authoring_revision_identity(parsed) ==
                 authoring_revision_identity(project) &&
-            parsed.intent == project.intent,
+            parsed.intent == project.intent && parsed.references.size() == 1 &&
+            parsed.targets.size() == 1,
         "authoring source did not round-trip deterministically");
   check(source.find("%7C") != std::string::npos &&
             source.find("%E9%9B%B7") != std::string::npos,

@@ -102,6 +102,12 @@ evaluate_target_compatibility(const TargetAdapterDescriptor &adapter,
     capabilities.emplace(item.feature, &item);
   std::set<TargetFeature> seen;
   for (const auto &requirement : requirements) {
+    if (target_feature_name(requirement.feature) == "unknown") {
+      report.validation.diagnostics.push_back(
+          {"SPRITE_TARGET_REQUIREMENT_INVALID",
+           "target requirement contains an unknown feature value"});
+      continue;
+    }
     if (!seen.insert(requirement.feature).second) {
       report.validation.diagnostics.push_back(
           {"SPRITE_TARGET_REQUIREMENT_DUPLICATE",

@@ -13,6 +13,19 @@
 
 namespace gspl::sprites {
 namespace {
+std::string read_seed_source(const std::filesystem::path &path) {
+  if (!std::filesystem::is_regular_file(path) ||
+      std::filesystem::is_symlink(std::filesystem::symlink_status(path)) ||
+      std::filesystem::file_size(path) > 1024ULL * 1024ULL)
+    throw std::runtime_error(
+        "seed import path is absent, unsafe, or oversized");
+  std::ifstream input(path, std::ios::binary);
+  const std::string source{std::istreambuf_iterator<char>(input), {}};
+  if (input.bad())
+    throw std::runtime_error("seed import read failed");
+  return source;
+}
+
 void publish_text(std::string_view value, const std::filesystem::path &path) {
   if (path.empty() || std::filesystem::exists(path))
     throw std::runtime_error(
@@ -99,6 +112,19 @@ run_authoring_cli(std::span<const std::string_view> arguments,
   if (arguments.empty() || !arguments.front().starts_with("authoring-"))
     return {};
   try {
+    if (arguments[0] == "authoring-import-seed") {
+      if (arguments.size() != 5)
+        throw std::invalid_argument(
+            "usage: authoring-import-seed <seed.sprite> <project-id> <intent> "
+            "<output>");
+      const auto seed = parse_seed(read_seed_source(arguments[1]));
+      const auto project = authoring_project_from_seed(
+          seed, std::string(arguments[2]), std::string(arguments[3]));
+      save_authoring_project(project, arguments[4]);
+      output << "imported " << project.id
+             << " identity=" << authoring_revision_identity(project) << '\n';
+      return 0;
+    }
     if (arguments[0] == "authoring-inspect") {
       if (arguments.size() != 2)
         throw std::invalid_argument("usage: authoring-inspect <project>");

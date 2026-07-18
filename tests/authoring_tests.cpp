@@ -95,6 +95,25 @@ int main() try {
       {"identity.stable_id", "original.voltfox"}};
   check(!validate_authoring_project(illegal_variant).ok(),
         "variant overrode a locked identity field");
+  auto denied_reference = project;
+  denied_reference.references.push_back(
+      {"research.visual", "file:///reference.png",
+       "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+       RightsClass::research_only, AuthoringReferenceUse::visual_asset, true});
+  const auto denied = lower_authoring_project(denied_reference);
+  check(!denied.ok() && denied.validation.diagnostics.front().code ==
+                            "SPRITE_RIGHTS_RESEARCH_ONLY",
+        "commercial lowering accepted a research-only visual reference");
+  auto unsupported_target = project;
+  unsupported_target.targets.push_back(
+      {"glb-2.0", {{TargetFeature::living_runtime, true}}});
+  check(!validate_authoring_project(unsupported_target).ok(),
+        "authoring target accepted an unsupported required feature");
+  const auto imported = authoring_project_from_seed(
+      *base.seed, "imported.voltfox", "Imported for refinement");
+  check(lower_authoring_project(imported).ok() && imported.revision == 0 &&
+            imported.fields[0].locked,
+        "canonical seed import did not create a valid authoring project");
   std::cout << "all GSPL Sprites authoring tests passed\n";
   return 0;
 } catch (const std::exception &error) {

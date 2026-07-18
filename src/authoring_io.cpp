@@ -140,6 +140,74 @@ bool boolean(std::string_view value) {
   throw std::runtime_error("invalid authoring boolean");
 }
 
+std::string_view rights_name(RightsClass value) {
+  switch (value) {
+  case RightsClass::original_user_creation:
+    return "ORIGINAL_USER_CREATION";
+  case RightsClass::user_owned:
+    return "USER_OWNED_REFERENCE";
+  case RightsClass::licensed:
+    return "LICENSED_REFERENCE";
+  case RightsClass::public_domain:
+    return "PUBLIC_DOMAIN";
+  case RightsClass::permissive:
+    return "PERMISSIVELY_LICENSED";
+  case RightsClass::research_only:
+    return "RESEARCH_ONLY_REFERENCE";
+  case RightsClass::restricted:
+    return "RESTRICTED_REFERENCE";
+  case RightsClass::unknown:
+    return "UNKNOWN_RIGHTS";
+  case RightsClass::prohibited:
+    return "PROHIBITED";
+  }
+  throw std::logic_error("invalid authoring rights class");
+}
+
+RightsClass parse_rights(std::string_view value) {
+  constexpr std::array values{
+      std::pair{"ORIGINAL_USER_CREATION", RightsClass::original_user_creation},
+      std::pair{"USER_OWNED_REFERENCE", RightsClass::user_owned},
+      std::pair{"LICENSED_REFERENCE", RightsClass::licensed},
+      std::pair{"PUBLIC_DOMAIN", RightsClass::public_domain},
+      std::pair{"PERMISSIVELY_LICENSED", RightsClass::permissive},
+      std::pair{"RESEARCH_ONLY_REFERENCE", RightsClass::research_only},
+      std::pair{"RESTRICTED_REFERENCE", RightsClass::restricted},
+      std::pair{"UNKNOWN_RIGHTS", RightsClass::unknown},
+      std::pair{"PROHIBITED", RightsClass::prohibited}};
+  const auto found = std::ranges::find_if(
+      values, [&](const auto &item) { return item.first == value; });
+  if (found == values.end())
+    throw std::runtime_error("unknown authoring reference rights class");
+  return found->second;
+}
+
+std::string_view use_name(AuthoringReferenceUse use) {
+  switch (use) {
+  case AuthoringReferenceUse::semantic_structure:
+    return "semantic-structure";
+  case AuthoringReferenceUse::visual_asset:
+    return "visual-asset";
+  case AuthoringReferenceUse::motion_asset:
+    return "motion-asset";
+  case AuthoringReferenceUse::audio_asset:
+    return "audio-asset";
+  }
+  throw std::logic_error("invalid authoring reference use");
+}
+
+AuthoringReferenceUse parse_use(std::string_view value) {
+  if (value == "semantic-structure")
+    return AuthoringReferenceUse::semantic_structure;
+  if (value == "visual-asset")
+    return AuthoringReferenceUse::visual_asset;
+  if (value == "motion-asset")
+    return AuthoringReferenceUse::motion_asset;
+  if (value == "audio-asset")
+    return AuthoringReferenceUse::audio_asset;
+  throw std::runtime_error("unknown authoring reference use");
+}
+
 std::string read_bounded(const std::filesystem::path &path) {
   if (!std::filesystem::is_regular_file(path) ||
       std::filesystem::is_symlink(std::filesystem::symlink_status(path)))
@@ -163,11 +231,15 @@ std::string serialize_authoring_project(const AuthoringProject &project) {
   auto fields = project.fields;
   auto abilities = project.abilities;
   auto variants = project.variants;
+  auto references = project.references;
+  auto targets = project.targets;
   std::ranges::sort(fields, {}, &AuthoringField::path);
   std::ranges::sort(abilities, [](const auto &left, const auto &right) {
     return left.value.id < right.value.id;
   });
   std::ranges::sort(variants, {}, &AuthoringVariant::id);
+  std::ranges::sort(references, {}, &AuthoringReference::id);
+  std::ranges::sort(targets, {}, &AuthoringTargetRequest::adapter_id);
   std::ostringstream output;
   output << "schema=gspl.sprite-authoring/0.1\nid=" << encode(project.id)
          << "\nintent=" << encode(project.intent)
@@ -197,6 +269,22 @@ std::string serialize_authoring_project(const AuthoringProject &project) {
            << ability.value.cooldown_ticks << '|' << ability.value.active_ticks
            << '|' << (ability.enabled ? '1' : '0') << '|'
            << (ability.locked ? '1' : '0') << '\n';
+  for (const auto &reference : references)
+    output << "reference=" << reference.id << '|' << use_name(reference.use)
+           << '|' << rights_name(reference.rights) << '|'
+           << (reference.required ? '1' : '0') << '|'
+           << reference.content_sha256 << '|' << encode(reference.uri) << '\n';
+  for (auto &target : targets) {
+    std::ranges::sort(target.features, {}, &TargetRequirement::feature);
+    output << "target=" << target.adapter_id << '|';
+    for (std::size_t index = 0; index < target.features.size(); ++index) {
+      if (index)
+        output << ';';
+      output << target_feature_name(target.features[index].feature) << ','
+             << (target.features[index].required ? '1' : '0');
+    }
+    output << '\n';
+  }
   for (auto &variant : variants) {
     output << "variant=" << variant.id << '\n';
     std::ranges::sort(variant.field_overrides);
@@ -275,6 +363,28 @@ AuthoringProject parse_authoring_project(std::string_view source) {
             integer<std::uint32_t>(parts[4], "ability active ticks")},
            boolean(parts[5]),
            boolean(parts[6])});
+    } else if (key == "reference") {
+      const auto parts = split(value, '|');
+      if (parts.size() != 6)
+        throw std::runtime_error("authoring reference requires six parts");
+      project.references.push_back(
+          {std::string(parts[0]), decode(parts[5]), std::string(parts[4]),
+           parse_rights(parts[2]), parse_use(parts[1]), boolean(parts[3])});
+    } else if (key == "target") {
+      const auto parts = split(value, '|');
+      if (parts.size() != 2)
+        throw std::runtime_error("authoring target requires two parts");
+      AuthoringTargetRequest target{std::string(parts[0]), {}};
+      for (const auto encoded_feature : split(parts[1], ';')) {
+        const auto feature_parts = split(encoded_feature, ',');
+        if (feature_parts.size() != 2)
+          throw std::runtime_error("authoring target feature has wrong arity");
+        const auto feature = parse_target_feature(feature_parts[0]);
+        if (!feature)
+          throw std::runtime_error("unknown authoring target feature");
+        target.features.push_back({*feature, boolean(feature_parts[1])});
+      }
+      project.targets.push_back(std::move(target));
     } else if (key == "variant") {
       project.variants.push_back({std::string(value), {}, {}});
       if (!variants

@@ -1,5 +1,7 @@
 #include "gspl_sprites/authoring.hpp"
 
+#include "gspl_sprites/domain.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -111,6 +113,44 @@ std::optional<RightsClass> parse_rights(std::string_view value) {
   return found == values.end() ? std::optional<RightsClass>{} : found->second;
 }
 
+std::string rights_name(RightsClass value) {
+  switch (value) {
+  case RightsClass::original_user_creation:
+    return "ORIGINAL_USER_CREATION";
+  case RightsClass::user_owned:
+    return "USER_OWNED_REFERENCE";
+  case RightsClass::licensed:
+    return "LICENSED_REFERENCE";
+  case RightsClass::public_domain:
+    return "PUBLIC_DOMAIN";
+  case RightsClass::permissive:
+    return "PERMISSIVELY_LICENSED";
+  case RightsClass::research_only:
+    return "RESEARCH_ONLY_REFERENCE";
+  case RightsClass::restricted:
+    return "RESTRICTED_REFERENCE";
+  case RightsClass::unknown:
+    return "UNKNOWN_RIGHTS";
+  case RightsClass::prohibited:
+    return "PROHIBITED";
+  }
+  throw std::logic_error("invalid rights class");
+}
+
+std::string_view reference_use_name(AuthoringReferenceUse use) {
+  switch (use) {
+  case AuthoringReferenceUse::semantic_structure:
+    return "semantic-structure";
+  case AuthoringReferenceUse::visual_asset:
+    return "visual-asset";
+  case AuthoringReferenceUse::motion_asset:
+    return "motion-asset";
+  case AuthoringReferenceUse::audio_asset:
+    return "audio-asset";
+  }
+  throw std::logic_error("invalid authoring reference use");
+}
+
 std::string selected_value(const AuthoringField &field) {
   return field.selected ? field.alternatives.at(*field.selected)
                         : std::string{};
@@ -127,6 +167,7 @@ ValidationResult validate_authoring_project(const AuthoringProject &project) {
       project.intent.empty() || project.intent.size() > 65'536 ||
       !valid_utf8(project.intent) || project.fields.size() > 4'096 ||
       project.abilities.size() > 256 || project.variants.size() > 1'024 ||
+      project.references.size() > 4'096 || project.targets.size() > 64 ||
       (project.revision == 0) !=
           !project.parent_revision_identity.has_value() ||
       (project.parent_revision_identity &&
@@ -192,6 +233,36 @@ ValidationResult validate_authoring_project(const AuthoringProject &project) {
             "variant-disabled ability is absent, locked, or duplicate");
     }
   }
+  std::set<std::string> references;
+  for (const auto &reference : project.references) {
+    if (!token(reference.id) || !references.insert(reference.id).second ||
+        reference.uri.empty() || reference.uri.size() > 4'096 ||
+        !valid_utf8(reference.uri) || !sha256_text(reference.content_sha256) ||
+        static_cast<unsigned>(reference.rights) >
+            static_cast<unsigned>(RightsClass::prohibited) ||
+        static_cast<unsigned>(reference.use) >
+            static_cast<unsigned>(AuthoringReferenceUse::audio_asset))
+      add(result, "SPRITE_AUTHORING_REFERENCE_INVALID",
+          "authoring reference identity, URI, or content hash is invalid");
+  }
+  std::set<std::string> targets;
+  for (const auto &target : project.targets) {
+    if (!token(target.adapter_id) ||
+        !targets.insert(target.adapter_id).second || target.features.empty() ||
+        target.features.size() > 256) {
+      add(result, "SPRITE_AUTHORING_TARGET_INVALID",
+          "authoring target identity, feature set, or uniqueness is invalid");
+      continue;
+    }
+    try {
+      const auto report = evaluate_target_compatibility(
+          builtin_target_adapter(target.adapter_id), target.features);
+      for (const auto &diagnostic : report.validation.diagnostics)
+        add(result, diagnostic.code, diagnostic.message);
+    } catch (const std::exception &error) {
+      add(result, "SPRITE_AUTHORING_TARGET_UNKNOWN", error.what());
+    }
+  }
   return result;
 }
 
@@ -202,11 +273,15 @@ std::string canonicalize_authoring_project(const AuthoringProject &project) {
   auto fields = project.fields;
   auto abilities = project.abilities;
   auto variants = project.variants;
+  auto references = project.references;
+  auto targets = project.targets;
   std::ranges::sort(fields, {}, &AuthoringField::path);
   std::ranges::sort(abilities, [](const auto &left, const auto &right) {
     return left.value.id < right.value.id;
   });
   std::ranges::sort(variants, {}, &AuthoringVariant::id);
+  std::ranges::sort(references, {}, &AuthoringReference::id);
+  std::ranges::sort(targets, {}, &AuthoringTargetRequest::adapter_id);
   std::ostringstream out;
   out << "{\"abilities\":[";
   for (std::size_t index = 0; index < abilities.size(); ++index) {
@@ -247,8 +322,37 @@ std::string canonicalize_authoring_project(const AuthoringProject &project) {
     out << '"' << *project.parent_revision_identity << '"';
   else
     out << "null";
-  out << ",\"revision\":" << project.revision << ",\"schema\":\""
-      << project.schema << "\",\"variants\":[";
+  out << ",\"references\":[";
+  for (std::size_t index = 0; index < references.size(); ++index) {
+    if (index)
+      out << ',';
+    const auto &reference = references[index];
+    out << "{\"contentSha256\":\"" << reference.content_sha256 << "\",\"id\":\""
+        << reference.id
+        << "\",\"required\":" << (reference.required ? "true" : "false")
+        << ",\"rights\":\"" << rights_name(reference.rights) << "\",\"uri\":\""
+        << escape_json(reference.uri) << "\",\"use\":\""
+        << reference_use_name(reference.use) << "\"}";
+  }
+  out << "],\"revision\":" << project.revision << ",\"schema\":\""
+      << project.schema << "\",\"targets\":[";
+  for (std::size_t index = 0; index < targets.size(); ++index) {
+    if (index)
+      out << ',';
+    auto features = targets[index].features;
+    std::ranges::sort(features, {}, &TargetRequirement::feature);
+    out << "{\"adapterId\":\"" << targets[index].adapter_id
+        << "\",\"features\":[";
+    for (std::size_t feature = 0; feature < features.size(); ++feature) {
+      if (feature)
+        out << ',';
+      out << "{\"feature\":\"" << target_feature_name(features[feature].feature)
+          << "\",\"required\":"
+          << (features[feature].required ? "true" : "false") << '}';
+    }
+    out << "]}";
+  }
+  out << "],\"variants\":[";
   for (std::size_t index = 0; index < variants.size(); ++index) {
     if (index)
       out << ',';
@@ -340,6 +444,20 @@ lower_authoring_project(const AuthoringProject &project,
   result.validation = validate_authoring_project(project);
   if (!result.validation.ok())
     return result;
+  for (const auto &reference : project.references) {
+    if (!reference.required)
+      continue;
+    const auto usage =
+        reference.use == AuthoringReferenceUse::semantic_structure
+            ? AssetUsage::research
+            : AssetUsage::commercial_export;
+    const auto decision = evaluate_rights(reference.rights, usage);
+    if (!decision.allowed)
+      add(result.validation, decision.code,
+          "required reference " + reference.id + ": " + decision.explanation);
+  }
+  if (!result.validation.ok())
+    return result;
   std::map<std::string, std::string, std::less<>> values;
   for (const auto &field : project.fields) {
     if (field.selected)
@@ -391,6 +509,31 @@ lower_authoring_project(const AuthoringProject &project,
   if (result.validation.ok())
     result.seed = std::move(seed);
   return result;
+}
+
+AuthoringProject authoring_project_from_seed(const SpriteSeed &seed,
+                                             std::string project_id,
+                                             std::string intent) {
+  const auto seed_validation = validate(seed);
+  if (!seed_validation.ok())
+    throw std::invalid_argument(seed_validation.diagnostics.front().message);
+  AuthoringProject project;
+  project.id = std::move(project_id);
+  project.intent = std::move(intent);
+  project.fields = {
+      {"identity.stable_id", {seed.stable_id}, 0, true},
+      {"identity.name", {seed.name}, 0, false},
+      {"identity.classification", {seed.classification}, 0, true},
+      {"rights.class", {rights_name(seed.rights)}, 0, true},
+      {"entropy.root", {std::to_string(seed.entropy_root)}, 0, false},
+      {"appearance.primary_color", {seed.primary_color}, 0, false},
+      {"appearance.accent_color", {seed.accent_color}, 0, false}};
+  for (const auto &ability : seed.abilities)
+    project.abilities.push_back({ability, true, false});
+  const auto validation = validate_authoring_project(project);
+  if (!validation.ok())
+    throw std::invalid_argument(validation.diagnostics.front().message);
+  return project;
 }
 
 } // namespace gspl::sprites
