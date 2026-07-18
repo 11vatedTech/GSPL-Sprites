@@ -14,7 +14,10 @@
    hash-bound authoritative full-state convergence and typed transactional
    damage/healing/status ability execution plus acyclic, hit-confirmed combo and
    cancel-window graphs are implemented; prediction, rollback simulation,
-   defense/projectiles, input buffering, and transformations remain open gates.
+   defense/projectiles, input buffering, and complete multi-domain form deltas
+   remain open gates. Identity-preserving timed combat-capacity transformations
+   and form-specific ability gating are implemented; their persistence and
+   visual/animation bindings remain open.
 6. 2.5D and 3D: depth layers, multi-view, reconstruction, topology, materials,
    rigging, retargeting, validation and LOD.
 7. Targets: portable runtime, Godot, Unity, Unreal, web and explicit feature
