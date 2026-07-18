@@ -21,6 +21,11 @@ the caller can commit it through the package system's transactional write path.
 
 The conformance fixture is checked with Khronos glTF Validator
 `2.0.0-dev.3.10`; the accepted baseline has zero errors, warnings, infos, or
-hints. Animation channel export, tangent generation, texture color-space
-cross-checks, compression, and engine import conformance remain subsequent
-passes.
+hints. Validated fixed-tick joint tracks export as linear translation, rotation,
+and scale channels. Morph tracks targeting the same mesh are merged onto a
+deterministic union timeline and emitted as the complete ordered weight vector
+required by glTF. Loop policy and semantic tick events remain GSPL extras because
+glTF defines key storage but not playback or gameplay event behavior.
+
+Tangent generation, texture color-space cross-checks, compression, and engine
+import conformance remain subsequent passes.

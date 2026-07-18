@@ -26,7 +26,22 @@ struct Primitive {
   std::optional<std::uint32_t> uv;
   std::optional<std::uint32_t> joints, weights;
   std::vector<std::uint32_t> morphs;
+  std::vector<std::string> morph_names;
   std::optional<std::uint32_t> material;
+};
+struct AnimationSamplerGlb {
+  std::uint32_t input{}, output{};
+};
+struct AnimationChannelGlb {
+  std::uint32_t sampler{}, node{};
+  std::string path;
+};
+struct AnimationGlb {
+  std::string id;
+  bool looping{};
+  std::vector<AnimationEvent3d> events;
+  std::vector<AnimationSamplerGlb> samplers;
+  std::vector<AnimationChannelGlb> channels;
 };
 void align4(std::vector<std::byte> &bytes) {
   while (bytes.size() % 4)
@@ -134,10 +149,29 @@ Matrix inverse_rigid(const Matrix &m) {
   r.v[14] = -(r.v[2] * m.v[12] + r.v[6] * m.v[13] + r.v[10] * m.v[14]);
   return r;
 }
+std::uint32_t sample_morph(const MorphTrack3d &track, std::uint32_t tick) {
+  const auto upper =
+      std::ranges::lower_bound(track.keys, tick, {}, &MorphKeyframe3d::tick);
+  if (upper == track.keys.begin())
+    return upper->weight_per_million;
+  if (upper == track.keys.end())
+    return track.keys.back().weight_per_million;
+  if (upper->tick == tick)
+    return upper->weight_per_million;
+  const auto &left = *(upper - 1);
+  const auto span = static_cast<std::int64_t>(upper->tick - left.tick);
+  const auto elapsed = static_cast<std::int64_t>(tick - left.tick);
+  const auto delta = static_cast<std::int64_t>(upper->weight_per_million) -
+                     left.weight_per_million;
+  return static_cast<std::uint32_t>(
+      static_cast<std::int64_t>(left.weight_per_million) +
+      delta * elapsed / span);
+}
 } // namespace
 
 std::vector<std::byte>
 export_projection3d_glb(const Projection3dDefinition &projection,
+                        std::span<const AnimationClip3d> supplied_animations,
                         std::span<const GltfTextureAsset> supplied,
                         const GltfExportLimits &limits) {
   const auto validation = validate_projection3d(projection);
@@ -150,9 +184,20 @@ export_projection3d_glb(const Projection3dDefinition &projection,
   auto materials = projection.materials;
   auto meshes = projection.meshes;
   auto morphs = projection.morph_targets;
+  auto animations = std::vector<AnimationClip3d>(supplied_animations.begin(),
+                                                 supplied_animations.end());
   std::ranges::sort(materials, {}, &Material3d::id);
   std::ranges::sort(meshes, {}, &Mesh3d::id);
   std::ranges::sort(morphs, {}, &MorphTarget3d::id);
+  std::ranges::sort(animations, {}, &AnimationClip3d::id);
+  std::set<std::string> animation_ids;
+  for (const auto &clip : animations) {
+    const auto clip_validation = validate_animation_clip3d(clip, projection);
+    if (!clip_validation.ok() || !animation_ids.insert(clip.id).second)
+      throw std::invalid_argument(
+          clip_validation.ok() ? "duplicate GLB animation ID"
+                               : clip_validation.diagnostics.front().message);
+  }
   std::map<std::string, GltfTextureAsset, std::less<>> textures;
   std::uint64_t texture_bytes{};
   for (const auto &t : supplied) {
@@ -326,6 +371,7 @@ export_projection3d_glb(const Projection3dDefinition &projection,
             accessor(accessors, mv, 5126,
                      static_cast<std::uint32_t>(m.position_deltas.size()),
                      "VEC3", mn, mx));
+        p.morph_names.push_back(m.id);
       }
     primitives.push_back(std::move(p));
   }
@@ -351,6 +397,96 @@ export_projection3d_glb(const Projection3dDefinition &projection,
     });
     inverse_accessor = accessor(
         accessors, bv, 5126, static_cast<std::uint32_t>(joints.size()), "MAT4");
+  }
+  std::vector<AnimationGlb> animation_payloads;
+  std::map<std::string, std::pair<std::uint32_t, std::uint32_t>, std::less<>>
+      morph_locations;
+  for (std::uint32_t mesh_index = 0; mesh_index < meshes.size(); ++mesh_index)
+    for (std::uint32_t morph_index = 0;
+         morph_index < primitives[mesh_index].morph_names.size(); ++morph_index)
+      morph_locations.emplace(primitives[mesh_index].morph_names[morph_index],
+                              std::pair{mesh_index, morph_index});
+  for (const auto &clip : animations) {
+    AnimationGlb payload{clip.id, clip.looping, clip.events};
+    auto add_times = [&](const auto &keys) {
+      auto view = numeric_view(views, bin, keys.size(), [&](auto &out) {
+        for (const auto &key : keys)
+          f32(out, static_cast<float>(key.tick) / clip.ticks_per_second);
+      });
+      return accessor(
+          accessors, view, 5126, static_cast<std::uint32_t>(keys.size()),
+          "SCALAR", {0.0},
+          {static_cast<double>(keys.back().tick) / clip.ticks_per_second});
+    };
+    for (const auto &track : clip.joint_tracks) {
+      const auto input = add_times(track.keys);
+      const auto node = joint_indices.at(track.joint_id);
+      auto add_output = [&](std::string path, std::string type,
+                            std::size_t components, auto writer) {
+        auto view = numeric_view(views, bin, track.keys.size() * components,
+                                 [&](auto &out) {
+                                   for (const auto &key : track.keys)
+                                     writer(out, key);
+                                 });
+        const auto output = accessor(
+            accessors, view, 5126,
+            static_cast<std::uint32_t>(track.keys.size()), std::move(type));
+        const auto sampler =
+            static_cast<std::uint32_t>(payload.samplers.size());
+        payload.samplers.push_back({input, output});
+        payload.channels.push_back({sampler, node, std::move(path)});
+      };
+      add_output("translation", "VEC3", 3, [](auto &out, const auto &key) {
+        f32(out, key.pose.translation.x / 1e6f);
+        f32(out, key.pose.translation.y / 1e6f);
+        f32(out, key.pose.translation.z / 1e6f);
+      });
+      add_output("rotation", "VEC4", 4, [](auto &out, const auto &key) {
+        for (auto value : key.pose.rotation_xyzw_ppm)
+          f32(out, value / 1e6f);
+      });
+      add_output("scale", "VEC3", 3, [](auto &out, const auto &key) {
+        for (auto value : key.pose.scale_xyz_ppm)
+          f32(out, value / 1e6f);
+      });
+    }
+    std::map<std::uint32_t, std::vector<const MorphTrack3d *>> tracks_by_mesh;
+    for (const auto &track : clip.morph_tracks)
+      tracks_by_mesh[morph_locations.at(track.morph_target_id).first].push_back(
+          &track);
+    for (auto &[mesh_index, tracks] : tracks_by_mesh) {
+      std::set<std::uint32_t> tick_set;
+      for (const auto *track : tracks)
+        for (const auto &key : track->keys)
+          tick_set.insert(key.tick);
+      std::vector<MorphKeyframe3d> timeline;
+      for (auto tick : tick_set)
+        timeline.push_back({tick, 0});
+      const auto input = add_times(timeline);
+      std::map<std::string, const MorphTrack3d *, std::less<>> by_id;
+      for (const auto *track : tracks)
+        by_id.emplace(track->morph_target_id, track);
+      const auto target_count = primitives[mesh_index].morph_names.size();
+      auto view = numeric_view(
+          views, bin, timeline.size() * target_count, [&](auto &out) {
+            for (const auto &time : timeline)
+              for (const auto &name : primitives[mesh_index].morph_names) {
+                const auto found = by_id.find(name);
+                f32(out, found == by_id.end()
+                             ? 0.0f
+                             : sample_morph(*found->second, time.tick) / 1e6f);
+              }
+          });
+      const auto output = accessor(
+          accessors, view, 5126,
+          static_cast<std::uint32_t>(timeline.size() * target_count), "SCALAR");
+      const auto sampler = static_cast<std::uint32_t>(payload.samplers.size());
+      payload.samplers.push_back({input, output});
+      payload.channels.push_back(
+          {sampler, static_cast<std::uint32_t>(joints.size() + mesh_index),
+           "weights"});
+    }
+    animation_payloads.push_back(std::move(payload));
   }
   std::ostringstream json;
   json << "{\"asset\":{\"generator\":\"11vatedTech GSPL "
@@ -450,9 +586,29 @@ export_projection3d_glb(const Projection3dDefinition &projection,
       }
       json << ']';
     }
-    json << "}],\"extras\":{\"gsplPurpose\":\""
+    json << "}]";
+    if (!p.morph_names.empty()) {
+      json << ",\"weights\":[";
+      for (std::size_t k = 0; k < p.morph_names.size(); ++k) {
+        if (k)
+          json << ',';
+        json << '0';
+      }
+      json << ']';
+    }
+    json << ",\"extras\":{\"gsplPurpose\":\""
          << (meshes[i].purpose == MeshPurpose::render ? "render" : "collision")
-         << "\"}}";
+         << '"';
+    if (!p.morph_names.empty()) {
+      json << ",\"targetNames\":[";
+      for (std::size_t k = 0; k < p.morph_names.size(); ++k) {
+        if (k)
+          json << ',';
+        json << '"' << p.morph_names[k] << '"';
+      }
+      json << ']';
+    }
+    json << "}}";
   }
   json << ']';
   json << ",\"nodes\":[";
@@ -508,6 +664,45 @@ export_projection3d_glb(const Projection3dDefinition &projection,
     }
     json << "]}]";
   }
+  if (!animation_payloads.empty()) {
+    json << ",\"animations\":[";
+    for (std::size_t i = 0; i < animation_payloads.size(); ++i) {
+      if (i)
+        json << ',';
+      const auto &animation = animation_payloads[i];
+      json << "{\"name\":\"" << animation.id << "\",\"samplers\":[";
+      for (std::size_t k = 0; k < animation.samplers.size(); ++k) {
+        if (k)
+          json << ',';
+        json << "{\"input\":" << animation.samplers[k].input
+             << ",\"output\":" << animation.samplers[k].output
+             << ",\"interpolation\":\"LINEAR\"}";
+      }
+      json << "],\"channels\":[";
+      for (std::size_t k = 0; k < animation.channels.size(); ++k) {
+        if (k)
+          json << ',';
+        json << "{\"sampler\":" << animation.channels[k].sampler
+             << ",\"target\":{\"node\":" << animation.channels[k].node
+             << ",\"path\":\"" << animation.channels[k].path << "\"}}";
+      }
+      auto events = animation.events;
+      std::ranges::sort(events, [](const auto &left, const auto &right) {
+        return std::tuple{left.tick, left.id} <
+               std::tuple{right.tick, right.id};
+      });
+      json << "],\"extras\":{\"gsplLooping\":"
+           << (animation.looping ? "true" : "false") << ",\"gsplEvents\":[";
+      for (std::size_t k = 0; k < events.size(); ++k) {
+        if (k)
+          json << ',';
+        json << "{\"id\":\"" << events[k].id << "\",\"tick\":" << events[k].tick
+             << '}';
+      }
+      json << "]}}";
+    }
+    json << ']';
+  }
   json << ",\"scenes\":[{\"nodes\":[";
   bool comma = false;
   if (projection.skeleton) {
@@ -548,5 +743,13 @@ export_projection3d_glb(const Projection3dDefinition &projection,
     out.insert(out.end(), bin.begin(), bin.end());
   }
   return out;
+}
+
+std::vector<std::byte>
+export_projection3d_glb(const Projection3dDefinition &projection,
+                        std::span<const GltfTextureAsset> supplied,
+                        const GltfExportLimits &limits) {
+  return export_projection3d_glb(projection, std::span<const AnimationClip3d>{},
+                                 supplied, limits);
 }
 } // namespace gspl::sprites

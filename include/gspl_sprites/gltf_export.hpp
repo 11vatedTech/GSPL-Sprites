@@ -1,5 +1,6 @@
 #pragma once
 
+#include "gspl_sprites/animation3d.hpp"
 #include "gspl_sprites/image.hpp"
 #include "gspl_sprites/projection3d.hpp"
 
@@ -23,5 +24,10 @@ struct GltfExportLimits {
 export_projection3d_glb(const Projection3dDefinition &projection,
                         std::span<const GltfTextureAsset> textures = {},
                         const GltfExportLimits &limits = {});
+[[nodiscard]] std::vector<std::byte>
+export_projection3d_glb(const Projection3dDefinition &projection,
+                        std::span<const AnimationClip3d> animations,
+                        std::span<const GltfTextureAsset> textures,
+                        const GltfExportLimits &limits);
 
 } // namespace gspl::sprites
