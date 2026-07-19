@@ -466,7 +466,7 @@ std::vector<std::byte> export_projection3d_glb(
       morph_locations.emplace(primitives[mesh_index].morph_names[morph_index],
                               std::pair{mesh_index, morph_index});
   for (const auto &clip : animations) {
-    AnimationGlb payload{clip.id, clip.looping, clip.events};
+    AnimationGlb payload{clip.id, clip.looping, clip.events, {}, {}};
     auto add_times = [&](const auto &keys) {
       auto view = numeric_view(views, bin, keys.size(), [&](auto &out) {
         for (const auto &key : keys)

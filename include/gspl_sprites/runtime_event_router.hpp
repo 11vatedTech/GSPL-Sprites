@@ -2,7 +2,10 @@
 
 #include "gspl_sprites/living_runtime.hpp"
 
+#include <cstdint>
 #include <span>
+#include <string>
+#include <vector>
 
 namespace gspl::sprites {
 

@@ -2,7 +2,10 @@
 
 #include "gspl_sprites/runtime_event_router.hpp"
 
+#include <cstdint>
 #include <optional>
+#include <string>
+#include <vector>
 
 namespace gspl::sprites {
 

@@ -2,6 +2,11 @@
 
 #include "gspl_sprites/projection25d.hpp"
 
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <vector>
+
 namespace gspl::sprites {
 
 struct Camera25dState {

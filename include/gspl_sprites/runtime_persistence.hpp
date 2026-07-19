@@ -2,6 +2,10 @@
 
 #include "gspl_sprites/living_runtime.hpp"
 
+#include <cstdint>
+#include <string>
+#include <vector>
+
 namespace gspl::sprites {
 
 struct RuntimeVariableUpdate {

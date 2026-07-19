@@ -81,7 +81,7 @@ TransformationManifestationFrame project_transformation_manifestation(
   if (form == program.forms.end()) throw std::logic_error("validated form manifestation is absent");
   TransformationManifestationFrame frame{state.stable_entity_id,
       transformation_state_identity(transformation_program, combat_program, state),
-      state.current_form, form->animation_state_id, form->projection_id};
+      state.current_form, form->animation_state_id, form->projection_id, std::nullopt};
   if (state.active) {
     if (tick < state.active->started_tick || tick > state.active->completes_tick)
       throw std::invalid_argument("manifestation tick is outside active transformation");
@@ -157,7 +157,7 @@ TransformationManifestationFrame project_transformation_manifestation25d(
                                       &FormManifestationBinding::form_id);
   TransformationManifestationFrame frame{state.stable_entity_id,
       transformation_state_identity(transformation_program, combat_program, state),
-      state.current_form, form->animation_state_id, form->projection_id};
+      state.current_form, form->animation_state_id, form->projection_id, std::nullopt};
   if (state.active) {
     if (tick < state.active->started_tick || tick > state.active->completes_tick)
       throw std::invalid_argument("2.5D manifestation tick is outside active transformation");
@@ -233,7 +233,7 @@ TransformationManifestationFrame project_transformation_manifestation2d(
                                       &FormManifestationBinding::form_id);
   TransformationManifestationFrame frame{state.stable_entity_id,
       transformation_state_identity(transformation_program, combat_program, state),
-      state.current_form, form->animation_state_id, form->projection_id};
+      state.current_form, form->animation_state_id, form->projection_id, std::nullopt};
   if (state.active) {
     if (tick < state.active->started_tick || tick > state.active->completes_tick)
       throw std::invalid_argument("2D manifestation tick is outside active transformation");

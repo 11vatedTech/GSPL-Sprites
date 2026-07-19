@@ -2,6 +2,8 @@
 
 #include "gspl_sprites/animation3d.hpp"
 
+#include <cstdint>
+
 namespace gspl::sprites {
 
 struct DeformationQualityPolicy {

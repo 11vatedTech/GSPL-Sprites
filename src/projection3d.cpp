@@ -183,7 +183,7 @@ validate_projection3d(const Projection3dDefinition &projection) {
           degenerate(mesh.vertices[a], mesh.vertices[b], mesh.vertices[c]))
         add(result, "SPRITE_3D_TRIANGLE_DEGENERATE",
             "mesh contains a degenerate triangle");
-      for (const auto [from, to] :
+      for (const auto &[from, to] :
            {std::pair{a, b}, std::pair{b, c}, std::pair{c, a}}) {
         const auto key = std::minmax(from, to);
         auto &edge = edges[key];

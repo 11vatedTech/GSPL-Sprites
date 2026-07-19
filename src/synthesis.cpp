@@ -174,6 +174,11 @@ std::vector<CollisionWindow> make_collision_windows() {
   return {};
 }
 
+RigDefinition make_rig_from_ir(const SpriteIr& ir) {
+  if (ir.rig) return *ir.rig;
+  return make_biped_rig(ir.entity_id);
+}
+
 Projection2dDefinition synthesize_projection2d(std::string_view entity_id, std::string_view form_id,
                                                const SynthesisPalette& palette,
                                                const RigDefinition& rig) {
@@ -190,8 +195,8 @@ Projection2dDefinition synthesize_projection2d(std::string_view entity_id, std::
 }
 
 Projection25dDefinition synthesize_projection25d(std::string_view entity_id, std::string_view form_id,
-                                                 const SynthesisPalette& [[maybe_unused]] palette,
-                                                 const RigDefinition& [[maybe_unused]] rig) {
+                                                  [[maybe_unused]] const SynthesisPalette& palette,
+                                                  [[maybe_unused]] const RigDefinition& rig) {
   std::string pf = std::string(entity_id) + "." + std::string(form_id);
   Projection25dDefinition proj;
   proj.id = pf + ".25d";
@@ -215,14 +220,14 @@ Projection25dDefinition synthesize_projection25d(std::string_view entity_id, std
 }
 
 Projection3dDefinition synthesize_projection3d(std::string_view entity_id, std::string_view form_id,
-                                               const SynthesisPalette& [[maybe_unused]] palette,
-                                               const RigDefinition& [[maybe_unused]] rig) {
+                                                [[maybe_unused]] const SynthesisPalette& palette,
+                                                [[maybe_unused]] const RigDefinition& rig) {
   std::string pf = std::string(entity_id) + "." + std::string(form_id);
   Projection3dDefinition proj;
   proj.id = pf + ".3d";
   proj.materials = {
-    {pf + ".body", palette.primary, 0, 900000},
-    {pf + ".accent", palette.accent, 0, 900000},
+    {pf + ".body", palette.primary, 0, 900000, {}, {}, {}, std::nullopt, std::nullopt, std::nullopt},
+    {pf + ".accent", palette.accent, 0, 900000, {}, {}, {}, std::nullopt, std::nullopt, std::nullopt},
   };
   auto v = [](float x, float y, float z) -> Vertex3d {
     return {{static_cast<std::int64_t>(x * 1000), static_cast<std::int64_t>(y * 1000), static_cast<std::int64_t>(z * 1000)},
@@ -240,7 +245,7 @@ Projection3dDefinition synthesize_projection3d(std::string_view entity_id, std::
 }
 
 TransformationManifestationProgram make_manifestation2d(std::string_view entity_id,
-                                                        const RigDefinition& [[maybe_unused]] rig) {
+                                                        [[maybe_unused]] const RigDefinition& rig) {
   std::string eid = std::string(entity_id);
   return {eid + ".manifest.2d",
     {{"base", "base", eid + ".base.2d"}, {"storm", "storm", eid + ".storm.2d"}},
@@ -248,7 +253,7 @@ TransformationManifestationProgram make_manifestation2d(std::string_view entity_
 }
 
 TransformationManifestationProgram make_manifestation25d(std::string_view entity_id,
-                                                         const RigDefinition& [[maybe_unused]] rig) {
+                                                         [[maybe_unused]] const RigDefinition& rig) {
   std::string eid = std::string(entity_id);
   return {eid + ".manifest.25d",
     {{"base", "base", eid + ".base.25d"}, {"storm", "storm", eid + ".storm.25d"}},
@@ -256,7 +261,7 @@ TransformationManifestationProgram make_manifestation25d(std::string_view entity
 }
 
 TransformationManifestationProgram make_manifestation3d(std::string_view entity_id,
-                                                        const RigDefinition& [[maybe_unused]] rig) {
+                                                        [[maybe_unused]] const RigDefinition& rig) {
   std::string eid = std::string(entity_id);
   return {eid + ".manifest.3d",
     {{"base", "base", eid + ".base.3d"}, {"storm", "storm", eid + ".storm.3d"}},
@@ -288,6 +293,20 @@ SynthesisResult synthesize_unified_entity(std::string_view entity_id,
   result.manifest25d = make_manifestation25d(entity_id, rig);
   result.manifest3d = make_manifestation3d(entity_id, rig);
 
+  return result;
+}
+
+SynthesisResult synthesize_unified_entity(const SpriteIr& ir) {
+  SynthesisPalette base_pal = make_palette(ir.primary_color, ir.accent_color);
+  SynthesisPalette storm_pal = make_palette(ir.accent_color, ir.primary_color);
+  RigDefinition rig = make_rig_from_ir(ir);
+  auto result = synthesize_unified_entity(ir.entity_id, base_pal, storm_pal);
+  result.proj2d_base.collision_shapes = ir.collision_shapes;
+  result.proj2d_base.collision_windows = ir.collision_windows;
+  result.proj2d_base.rig = rig;
+  result.proj2d_transformed.collision_shapes = ir.collision_shapes;
+  result.proj2d_transformed.collision_windows = ir.collision_windows;
+  result.proj2d_transformed.rig = rig;
   return result;
 }
 

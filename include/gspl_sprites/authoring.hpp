@@ -3,6 +3,7 @@
 #include "gspl_sprites/core.hpp"
 #include "gspl_sprites/target_contract.hpp"
 
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <span>

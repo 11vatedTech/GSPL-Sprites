@@ -2,8 +2,10 @@
 
 #include "gspl_sprites/model.hpp"
 
+#include <cstdint>
 #include <filesystem>
 #include <span>
+#include <vector>
 
 namespace gspl::sprites {
 

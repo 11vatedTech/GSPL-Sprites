@@ -3,6 +3,7 @@
 #include "gspl_sprites/sprite2d.hpp"
 #include "gspl_sprites/channel_map.hpp"
 
+#include <cstdint>
 #include <filesystem>
 
 namespace gspl::sprites {

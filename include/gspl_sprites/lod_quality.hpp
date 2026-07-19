@@ -2,6 +2,10 @@
 
 #include "gspl_sprites/projection3d.hpp"
 
+#include <cstdint>
+#include <string>
+#include <vector>
+
 namespace gspl::sprites {
 
 struct LodQualityPolicy {

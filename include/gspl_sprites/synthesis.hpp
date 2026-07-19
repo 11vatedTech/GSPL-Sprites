@@ -1,5 +1,8 @@
 #pragma once
 
+#include <cstdint>
+
+#include "gspl_sprites/core.hpp"
 #include "gspl_sprites/projection2d.hpp"
 #include "gspl_sprites/projection25d.hpp"
 #include "gspl_sprites/projection3d.hpp"
@@ -8,8 +11,6 @@
 #include "gspl_sprites/channel_map.hpp"
 #include "gspl_sprites/sprite2d.hpp"
 #include "gspl_sprites/transformation_manifestation.hpp"
-
-#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -60,5 +61,7 @@ struct SynthesisResult {
 [[nodiscard]] SynthesisResult synthesize_unified_entity(std::string_view entity_id,
                                                         const SynthesisPalette& base_palette,
                                                         const SynthesisPalette& transformed_palette);
+
+[[nodiscard]] SynthesisResult synthesize_unified_entity(const SpriteIr& ir);
 
 } // namespace gspl::sprites

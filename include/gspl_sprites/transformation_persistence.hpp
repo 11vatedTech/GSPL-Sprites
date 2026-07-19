@@ -2,6 +2,9 @@
 
 #include "gspl_sprites/transformation.hpp"
 
+#include <cstdint>
+#include <string>
+
 namespace gspl::sprites {
 
 [[nodiscard]] std::string canonicalize_transformation_program(

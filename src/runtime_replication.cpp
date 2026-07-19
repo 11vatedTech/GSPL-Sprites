@@ -4,12 +4,13 @@
 
 #include <charconv>
 #include <limits>
+#include <algorithm>
 #include <stdexcept>
 
 namespace gspl::sprites {
 namespace {
 bool hash(std::string_view value) {
-  return value.size() == 64 && std::ranges::all_of(value, [](unsigned char c) {
+  return value.size() == 64 && std::all_of(value.begin(), value.end(), [](unsigned char c) {
            return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
          });
 }

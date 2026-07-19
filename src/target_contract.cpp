@@ -93,7 +93,7 @@ validate_target_adapter(const TargetAdapterDescriptor &adapter) {
 TargetCompatibilityReport
 evaluate_target_compatibility(const TargetAdapterDescriptor &adapter,
                               std::span<const TargetRequirement> requirements) {
-  TargetCompatibilityReport report{adapter.id, adapter.contract_version};
+  TargetCompatibilityReport report{adapter.id, adapter.contract_version, {}, {}};
   report.validation = validate_target_adapter(adapter);
   if (!report.validation.ok())
     return report;

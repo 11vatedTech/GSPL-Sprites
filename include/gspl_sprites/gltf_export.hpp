@@ -9,6 +9,7 @@
 #include "gspl_sprites/target_evidence.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <span>
 
 namespace gspl::sprites {

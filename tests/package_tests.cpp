@@ -2,6 +2,7 @@
 #include "gspl_sprites/package.hpp"
 #include "gspl_sprites/target_contract.hpp"
 
+#include <algorithm>
 #include <array>
 #include <filesystem>
 #include <fstream>
@@ -17,8 +18,8 @@ void check(bool value, const char *message) {
     throw std::runtime_error(message);
 }
 bool has_code(const PackageVerification &value, std::string_view code) {
-  return std::ranges::any_of(
-      value.validation.diagnostics,
+  return std::any_of(value.validation.diagnostics.begin(),
+      value.validation.diagnostics.end(),
       [&](const auto &diagnostic) { return diagnostic.code == code; });
 }
 SpriteSeed fixture() {

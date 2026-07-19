@@ -4,6 +4,8 @@
 #include "gspl_sprites/channel_map.hpp"
 #include "gspl_sprites/sprite2d.hpp"
 
+#include <cstdint>
+
 namespace gspl::sprites {
 
 struct Projection2dDefinition {

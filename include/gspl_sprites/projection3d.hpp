@@ -3,6 +3,7 @@
 #include "gspl_sprites/common.hpp"
 
 #include <array>
+#include <cstdint>
 #include <map>
 #include <optional>
 

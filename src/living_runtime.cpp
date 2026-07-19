@@ -195,7 +195,7 @@ validate_living_runtime_state(const LivingRuntimeProgram &program,
 void set_runtime_variable(LivingRuntimeState &state, std::string key,
                           std::int32_t value) {
   if (!stable_id(key) ||
-      state.variables.size() >= 4096 && !state.variables.contains(key))
+      (state.variables.size() >= 4096 && !state.variables.contains(key)))
     throw std::invalid_argument(
         "runtime variable is invalid or variable bound exceeded");
   state.variables.insert_or_assign(std::move(key), value);

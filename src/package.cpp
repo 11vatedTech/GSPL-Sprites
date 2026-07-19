@@ -27,7 +27,8 @@ public:
       for (;;) {
         if (result.artifacts.size() >= max_artifacts_) fail("artifact count exceeds limit");
         expect("{\"path\":"); const auto path=string(); expect(",\"sha256\":"); const auto hash=string(); expect("}"); result.artifacts.push_back({path,hash});
-        if (consume(']')) break; expect(",");
+        if (consume(']')) break;
+        expect(",");
       }
     }
     expect(",\"assetGraph\":\"asset-graph.json\",\"entityId\":"); result.entity_id=string();
@@ -39,13 +40,15 @@ private:
   bool consume(char value) { if(cursor_<source_.size()&&source_[cursor_]==value){++cursor_;return true;}return false; }
   void expect(std::string_view value) { if(source_.substr(cursor_,value.size())!=value)fail("canonical manifest token mismatch");cursor_+=value.size(); }
   std::string string() {
-    if(!consume('"'))fail("expected JSON string");std::string result;
+    if(!consume('"'))fail("expected JSON string");
+    std::string result;
     while(cursor_<source_.size()){
       const unsigned char c=static_cast<unsigned char>(source_[cursor_++]);
       if(c=='"')return result;
       if(c<0x20)fail("control character in JSON string");
       if(c!='\\'){result+=static_cast<char>(c);continue;}
-      if(cursor_>=source_.size())fail("truncated JSON escape");const char escaped=source_[cursor_++];
+      if(cursor_>=source_.size())fail("truncated JSON escape");
+      const char escaped=source_[cursor_++];
       switch(escaped){case '"':result+='"';break;case '\\':result+='\\';break;case 'n':result+='\n';break;case 'r':result+='\r';break;case 't':result+='\t';break;default:fail("non-canonical JSON escape");}
     }
     fail("unterminated JSON string");
@@ -109,7 +112,8 @@ PackageVerification verify_package(const std::filesystem::path& root, const Pack
     for(const auto& artifact:manifest.artifacts){
       if(!safe_relative_path(artifact.path,limits)){add("SPRITE_PACKAGE_PATH_UNSAFE","unsafe artifact path: "+artifact.path);continue;}
       if(!declared.insert(artifact.path).second){add("SPRITE_PACKAGE_PATH_DUPLICATE","duplicate artifact path: "+artifact.path);continue;}
-      if(!previous.empty()&&artifact.path<=previous)add("SPRITE_PACKAGE_MANIFEST_NONCANONICAL","artifact paths are not strictly sorted");previous=artifact.path;
+      if(!previous.empty()&&artifact.path<=previous)add("SPRITE_PACKAGE_MANIFEST_NONCANONICAL","artifact paths are not strictly sorted");
+      previous=artifact.path;
       if(!lowercase_sha256(artifact.hash)){add("SPRITE_PACKAGE_HASH_INVALID","invalid SHA-256 for: "+artifact.path);continue;}
       auto current=root;bool unsafe_component=false;std::size_t start=0;while(start<artifact.path.size()){const auto end=artifact.path.find('/',start);const auto part=artifact.path.substr(start,end==std::string::npos?artifact.path.size()-start:end-start);current/=part;if(std::filesystem::exists(current)&&std::filesystem::is_symlink(std::filesystem::symlink_status(current))){unsafe_component=true;break;}if(end==std::string::npos)break;start=end+1;}
       if(unsafe_component||!std::filesystem::is_regular_file(current)){add("SPRITE_PACKAGE_ARTIFACT_UNSAFE","artifact is absent, non-regular, or traverses a symlink: "+artifact.path);continue;}

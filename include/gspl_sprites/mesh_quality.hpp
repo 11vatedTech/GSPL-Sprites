@@ -2,6 +2,9 @@
 
 #include "gspl_sprites/projection3d.hpp"
 
+#include <cstdint>
+#include <vector>
+
 namespace gspl::sprites {
 
 struct Tangent4Ppm {

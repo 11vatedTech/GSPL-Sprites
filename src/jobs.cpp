@@ -98,7 +98,8 @@ public:
   void stop()noexcept{
     std::vector<std::jthread> joining;
     {std::lock_guard lock(mutex);if(stopped)return;stopped=true;shutting_down=true;for(auto&[id,job]:jobs){static_cast<void>(id);job.cancellation.request_stop();if(job.status==JobStatus::queued){job.status=JobStatus::cancelled;job.error="job system shutdown";add_event(job,job.error);}}joining.swap(workers);condition.notify_all();}
-    for(auto&worker:joining)worker.request_stop();condition.notify_all();
+    for(auto&worker:joining)worker.request_stop();
+    condition.notify_all();
   }
 
   JobSystemLimits limits;
@@ -121,8 +122,17 @@ void JobSystem::submit(JobSpec job){
   if(job.id.empty()||job.id.size()>128||!std::ranges::all_of(job.id,[](unsigned char c){return std::isalnum(c)!=0||c=='.'||c=='_'||c=='-';})||!job.execute||job.maximum_retries>16)throw std::invalid_argument("invalid job specification");
   std::ranges::sort(job.dependencies);if(std::ranges::adjacent_find(job.dependencies)!=job.dependencies.end()||std::ranges::find(job.dependencies,job.id)!=job.dependencies.end())throw std::invalid_argument("duplicate or self job dependency");
   std::lock_guard lock(state_->mutex);if(state_->shutting_down)throw std::runtime_error("job system is shutting down");if(state_->jobs.size()>=state_->limits.maximum_jobs)throw std::runtime_error("job count exceeds limit");if(state_->jobs.contains(job.id))throw std::invalid_argument("duplicate job id");for(const auto&dependency:job.dependencies)if(!state_->jobs.contains(dependency))throw std::invalid_argument("job dependency must already exist: "+dependency);
-  if(job.resources.ram_bytes>state_->limits.ram_bytes)throw std::invalid_argument("job RAM requirement exceeds system budget");if(job.resources.vram_bytes>0){if(!job.resources.accelerator)throw std::invalid_argument("VRAM job requires accelerator affinity");const auto capacity=state_->limits.vram_bytes.find(*job.resources.accelerator);if(capacity==state_->limits.vram_bytes.end()||job.resources.vram_bytes>capacity->second)throw std::invalid_argument("job VRAM requirement exceeds device budget");}
-  const auto id=job.id;auto[found,inserted]=state_->jobs.emplace(id,State::Job{std::move(job)});static_cast<void>(inserted);state_->add_event(found->second);state_->condition.notify_all();
+  if(job.resources.ram_bytes>state_->limits.ram_bytes)throw std::invalid_argument("job RAM requirement exceeds system budget");
+  if(job.resources.vram_bytes>0){
+    if(!job.resources.accelerator)throw std::invalid_argument("VRAM job requires accelerator affinity");
+    const auto capacity=state_->limits.vram_bytes.find(*job.resources.accelerator);
+    if(capacity==state_->limits.vram_bytes.end()||job.resources.vram_bytes>capacity->second)throw std::invalid_argument("job VRAM requirement exceeds device budget");
+  }
+  const auto id=job.id;
+  auto[found,inserted]=state_->jobs.emplace(id,State::Job{std::move(job), {}, {}, {}, {}});
+  static_cast<void>(inserted);
+  state_->add_event(found->second);
+  state_->condition.notify_all();
 }
 
 bool JobSystem::cancel(std::string_view id){std::lock_guard lock(state_->mutex);const auto found=state_->jobs.find(id);if(found==state_->jobs.end())throw std::invalid_argument("unknown job id");auto&job=found->second;if(terminal(job.status))return false;job.cancellation.request_stop();if(job.status==JobStatus::queued){job.status=JobStatus::cancelled;job.error="cancelled before execution";state_->add_event(job,job.error);state_->propagate_locked();}state_->condition.notify_all();return true;}

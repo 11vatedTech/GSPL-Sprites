@@ -6,6 +6,11 @@
 #include "gspl_sprites/projection2d.hpp"
 #include "gspl_sprites/transformation_persistence.hpp"
 
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <vector>
+
 namespace gspl::sprites {
 
 struct FormManifestationBinding {

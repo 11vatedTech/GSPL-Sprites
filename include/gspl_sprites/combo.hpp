@@ -2,7 +2,10 @@
 
 #include "gspl_sprites/combat.hpp"
 
+#include <cstdint>
 #include <optional>
+#include <string>
+#include <vector>
 
 namespace gspl::sprites {
 

@@ -3,8 +3,11 @@
 #include "gspl_sprites/animation.hpp"
 #include "gspl_sprites/common.hpp"
 
+#include <cstdint>
 #include <map>
 #include <optional>
+#include <string>
+#include <vector>
 
 namespace gspl::sprites {
 

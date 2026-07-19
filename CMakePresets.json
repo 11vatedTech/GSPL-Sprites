@@ -5,14 +5,27 @@
       "name": "windows-msvc",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/windows-msvc",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "GSPL_EXPECT_COMPILER": "MSVC"
+      }
+    },
+    {
+      "name": "windows-mingw-gcc",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/windows-mingw-gcc",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "GSPL_EXPECT_COMPILER": "GNU"
+      }
     }
   ],
   "buildPresets": [
-    { "name": "windows-msvc-debug", "configurePreset": "windows-msvc" }
+    { "name": "windows-msvc-debug", "configurePreset": "windows-msvc" },
+    { "name": "windows-mingw-gcc-debug", "configurePreset": "windows-mingw-gcc" }
   ],
   "testPresets": [
-    { "name": "windows-msvc-debug", "configurePreset": "windows-msvc", "output": { "outputOnFailure": true } }
+    { "name": "windows-msvc-debug", "configurePreset": "windows-msvc", "output": { "outputOnFailure": true } },
+    { "name": "windows-mingw-gcc-debug", "configurePreset": "windows-mingw-gcc", "output": { "outputOnFailure": true } }
   ]
 }
-

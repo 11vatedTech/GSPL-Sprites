@@ -62,11 +62,21 @@ bool parse_bool(std::string_view value, std::string_view field) {
 }
 
 Comparison parse_comparison(std::string_view value) {
-  if (value == "EQUAL") return Comparison::equal; if (value == "NOT_EQUAL") return Comparison::not_equal;
-  if (value == "LESS") return Comparison::less; if (value == "LESS_EQUAL") return Comparison::less_equal;
-  if (value == "GREATER") return Comparison::greater; if (value == "GREATER_EQUAL") return Comparison::greater_equal;
+  if (value == "EQUAL")
+    return Comparison::equal;
+  if (value == "NOT_EQUAL")
+    return Comparison::not_equal;
+  if (value == "LESS")
+    return Comparison::less;
+  if (value == "LESS_EQUAL")
+    return Comparison::less_equal;
+  if (value == "GREATER")
+    return Comparison::greater;
+  if (value == "GREATER_EQUAL")
+    return Comparison::greater_equal;
   throw std::runtime_error("invalid transition comparison");
 }
+
 
 bool repeatable_field(std::string_view key) {
   static constexpr std::array values{"ability", "bone", "socket", "clip", "track", "clip_event", "state", "transition", "collision", "collision_window"};
@@ -177,12 +187,32 @@ SpriteSeed parse_seed(std::string_view source) {
       if (!seed.animation_graph) seed.animation_graph=AnimationStateGraph{};
       const auto p=split(value,'|');if(p.size()!=2)throw std::runtime_error("line " + std::to_string(line_number) + ": state requires id|clip");seed.animation_graph->states.push_back({p[0],p[1],{}});
     } else if (key == "transition") {
-      if (!seed.animation_graph) throw std::runtime_error("line " + std::to_string(line_number) + ": states must precede transitions");const auto p=split(value,'|');if(p.size()!=8)throw std::runtime_error("line " + std::to_string(line_number) + ": transition requires source|target|parameter|comparison|threshold|min|blend|priority");const auto state=std::ranges::find(seed.animation_graph->states,p[0],&AnimationState::id);if(state==seed.animation_graph->states.end())throw std::runtime_error("line " + std::to_string(line_number) + ": source state must precede transition");state->transitions.push_back({p[1],p[2],parse_comparison(p[3]),parse_double(p[4],"transition.threshold"),parse_u32(p[5],"transition.minimum"),parse_u32(p[6],"transition.blend"),parse_u32(p[7],"transition.priority")});
+      if (!seed.animation_graph)
+        throw std::runtime_error("line " + std::to_string(line_number) + ": states must precede transitions");
+      const auto p = split(value,'|');
+      if(p.size()!=8)
+        throw std::runtime_error("line " + std::to_string(line_number) + ": transition requires source|target|parameter|comparison|threshold|min|blend|priority");
+      const auto state=std::ranges::find(seed.animation_graph->states,p[0],&AnimationState::id);
+      if(state==seed.animation_graph->states.end())
+        throw std::runtime_error("line " + std::to_string(line_number) + ": source state must precede transition");
+      state->transitions.push_back({p[1],p[2],parse_comparison(p[3]),parse_double(p[4],"transition.threshold"),parse_u32(p[5],"transition.minimum"),parse_u32(p[6],"transition.blend"),parse_u32(p[7],"transition.priority")});
     } else if (key == "collision") {
-      if(seed.collision_shapes.size()>=512)throw std::runtime_error("collision shape count exceeds 512");const auto p=split(value,'|');if(p.size()!=7)throw std::runtime_error("line " + std::to_string(line_number) + ": collision requires id|kind|attachment|offset|extents");const auto kind=p[1]=="CIRCLE"?CollisionKind::circle:p[1]=="AXIS_ALIGNED_BOX"?CollisionKind::axis_aligned_box:throw std::runtime_error("invalid collision kind");seed.collision_shapes.push_back({p[0],kind,p[2],parse_double(p[3],"collision.offset_x"),parse_double(p[4],"collision.offset_y"),parse_double(p[5],"collision.extent_x"),parse_double(p[6],"collision.extent_y")});
+      if(seed.collision_shapes.size()>=512)
+        throw std::runtime_error("collision shape count exceeds 512");
+      const auto p=split(value,'|');
+      if(p.size()!=7)
+        throw std::runtime_error("line " + std::to_string(line_number) + ": collision requires id|kind|attachment|offset|extents");
+      const auto kind=p[1]=="CIRCLE"?CollisionKind::circle:p[1]=="AXIS_ALIGNED_BOX"?CollisionKind::axis_aligned_box:throw std::runtime_error("invalid collision kind");
+      seed.collision_shapes.push_back({p[0],kind,p[2],parse_double(p[3],"collision.offset_x"),parse_double(p[4],"collision.offset_y"),parse_double(p[5],"collision.extent_x"),parse_double(p[6],"collision.extent_y")});
     } else if (key == "collision_window") {
-      if(seed.collision_windows.size()>=2048)throw std::runtime_error("collision window count exceeds 2048");const auto p=split(value,'|');if(p.size()!=5)throw std::runtime_error("line " + std::to_string(line_number) + ": collision_window requires ability|shape|start|end|deals_damage");seed.collision_windows.push_back({p[1],parse_u32(p[2],"window.start"),parse_u32(p[3],"window.end"),parse_bool(p[4],"window.deals_damage"),p[0]});
+      if(seed.collision_windows.size()>=2048)
+        throw std::runtime_error("collision window count exceeds 2048");
+      const auto p=split(value,'|');
+      if(p.size()!=5)
+        throw std::runtime_error("line " + std::to_string(line_number) + ": collision_window requires ability|shape|start|end|deals_damage");
+      seed.collision_windows.push_back({p[1],parse_u32(p[2],"window.start"),parse_u32(p[3],"window.end"),parse_bool(p[4],"window.deals_damage"),p[0]});
     } else throw std::runtime_error("line " + std::to_string(line_number) + ": unknown field " + key);
+
   }
   return seed;
 }
@@ -298,7 +328,8 @@ void build_package(const SpriteSeed& seed, std::span<const FrameSource> frames, 
 }
 
 void build_package(const SpriteSeed& seed, const AuthoredVisualSet& visual_set, const std::filesystem::path& output) {
-  if(visual_set.canonical_metadata.empty()||visual_set.canonical_channel_metadata.empty())throw std::invalid_argument("authored visual set lacks canonical projection metadata");build_package_internal(seed,visual_set.frames,visual_set.sheet,visual_set.canonical_metadata,visual_set.channel_maps,visual_set.canonical_channel_metadata,{},output);
+  if(visual_set.canonical_metadata.empty()||visual_set.canonical_channel_metadata.empty())throw std::invalid_argument("authored visual set lacks canonical projection metadata");
+  build_package_internal(seed,visual_set.frames,visual_set.sheet,visual_set.canonical_metadata,visual_set.channel_maps,visual_set.canonical_channel_metadata,{},output);
 }
 
 static void build_package_internal(const SpriteSeed& seed, std::span<const FrameSource> frames, const SpriteSheetOptions& options, std::string_view visual_metadata, std::span<const ChannelMap> channel_maps, std::string_view channel_metadata, const PackageGovernanceEvidence& governance, const std::filesystem::path& output) {

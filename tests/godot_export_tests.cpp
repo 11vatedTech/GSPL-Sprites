@@ -1,6 +1,7 @@
 #include "gspl_sprites/core.hpp"
 #include "gspl_sprites/godot_export.hpp"
 
+#include <algorithm>
 #include <array>
 #include <filesystem>
 #include <fstream>
@@ -14,8 +15,8 @@ void check(bool value, const char *message) {
     throw std::runtime_error(message);
 }
 bool has_code(const GodotProjectVerification &value, std::string_view code) {
-  return std::ranges::any_of(
-      value.validation.diagnostics,
+  return std::any_of(value.validation.diagnostics.begin(),
+      value.validation.diagnostics.end(),
       [&](const auto &diagnostic) { return diagnostic.code == code; });
 }
 

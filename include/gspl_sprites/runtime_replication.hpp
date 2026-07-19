@@ -2,6 +2,9 @@
 
 #include "gspl_sprites/runtime_persistence.hpp"
 
+#include <cstdint>
+#include <string>
+
 namespace gspl::sprites {
 
 struct RuntimeReplicationUpdate {

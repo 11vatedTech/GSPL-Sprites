@@ -2,6 +2,7 @@
 
 #include "gspl_sprites/core.hpp"
 
+#include <cstdint>
 #include <map>
 #include <set>
 #include <span>

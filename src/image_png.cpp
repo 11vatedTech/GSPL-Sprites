@@ -19,7 +19,8 @@ void preflight_png(std::span<const std::byte> encoded,const ImageLimits& limits)
   if(encoded.size()<signature.size()||!std::equal(signature.begin(),signature.end(),encoded.begin()))throw std::runtime_error("invalid PNG signature");
   std::size_t cursor=signature.size();std::uint32_t chunks=0;bool ended=false;
   while(cursor<encoded.size()){
-    if(encoded.size()-cursor<12)throw std::runtime_error("truncated PNG chunk envelope");if(++chunks>limits.max_chunk_count)throw std::runtime_error("PNG chunk count exceeds limit");
+    if(encoded.size()-cursor<12)throw std::runtime_error("truncated PNG chunk envelope");
+    if(++chunks>limits.max_chunk_count)throw std::runtime_error("PNG chunk count exceeds limit");
     const auto length=big_endian_u32(encoded,cursor);const auto available=encoded.size()-cursor-12;if(length>available)throw std::runtime_error("truncated PNG chunk payload");
     const char t0=static_cast<char>(std::to_integer<unsigned char>(encoded[cursor+4]));const char t1=static_cast<char>(std::to_integer<unsigned char>(encoded[cursor+5]));const char t2=static_cast<char>(std::to_integer<unsigned char>(encoded[cursor+6]));const char t3=static_cast<char>(std::to_integer<unsigned char>(encoded[cursor+7]));cursor+=static_cast<std::size_t>(length)+12;
     if(t0=='I'&&t1=='E'&&t2=='N'&&t3=='D'){if(length!=0||cursor!=encoded.size())throw std::runtime_error("PNG IEND is malformed or not final");ended=true;break;}
@@ -30,7 +31,8 @@ void preflight_png(std::span<const std::byte> encoded,const ImageLimits& limits)
 
 ImageRgba8 decode_png(std::span<const std::byte> encoded,const ImageLimits& limits){
   if(encoded.empty()||encoded.size()>limits.max_input_bytes)throw std::runtime_error("PNG input is empty or exceeds byte limit");
-  if(limits.max_chunk_count==0)throw std::invalid_argument("PNG chunk-count limit must be positive");preflight_png(encoded,limits);
+  if(limits.max_chunk_count==0)throw std::invalid_argument("PNG chunk-count limit must be positive");
+  preflight_png(encoded,limits);
   Context context(spng_ctx_new(0),&spng_ctx_free);if(!context)throw std::runtime_error("failed to allocate PNG decoder");
   require(spng_set_image_limits(context.get(),limits.max_width,limits.max_height),"set PNG image limits");
   const auto metadata_limit=static_cast<std::size_t>(std::min<std::uint64_t>(limits.max_metadata_bytes,std::numeric_limits<std::size_t>::max()));

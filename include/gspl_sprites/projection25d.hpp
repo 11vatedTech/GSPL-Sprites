@@ -2,8 +2,11 @@
 
 #include "gspl_sprites/common.hpp"
 
+#include <cstdint>
 #include <optional>
 #include <span>
+#include <string>
+#include <vector>
 
 namespace gspl::sprites {
 
