@@ -335,6 +335,10 @@ add_executable(gspl_sprites_fuzz_parsing_tests tests/fuzz_parsing_tests.cpp)
 target_link_libraries(gspl_sprites_fuzz_parsing_tests PRIVATE gspl_sprites_core)
 add_test(NAME gspl_sprites_fuzz_parsing_tests COMMAND gspl_sprites_fuzz_parsing_tests)
 
+add_executable(gspl_sprites_mutation_tests tests/mutation_tests.cpp)
+target_link_libraries(gspl_sprites_mutation_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_mutation_tests COMMAND gspl_sprites_mutation_tests)
+
 if(BUILD_PREVIEW)
   find_package(SDL2 QUIET)
   if(SDL2_FOUND)
