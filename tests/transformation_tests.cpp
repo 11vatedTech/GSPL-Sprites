@@ -12,12 +12,12 @@ TransformationProgram transformations() { return {"fox.forms", "base", 8,
   {{"base", 0, 0, {"bite"}}, {"charged", 50, 30, {"bite", "lightning"}}},
   {{"charge", "base", "charged", 20, 3, true}, {"discharge", "charged", "base", 0, 2, true}}}; }
 CombatState combat_state() { CombatState value;
-  value.actors.emplace("fox", CombatActorState{"fox", "hero", 100, 100, 20, 20, 0, 0});
-  value.actors.emplace("enemy", CombatActorState{"enemy", "enemy", 100, 100, 0, 0, 1000, 0}); return value; }
+  value.actors.emplace("fox", CombatActorState{"fox", "hero", 100, 100, 20, 20, 0, 0, {}, {}});
+  value.actors.emplace("enemy", CombatActorState{"enemy", "enemy", 100, 100, 0, 0, 1000, 0, {}, {}}); return value; }
 }
 int main() try {
   const auto cp = combat(); const auto tp = transformations();
-  TransformationState state{"fox", "base", 50, 50}; auto combat_value = combat_state();
+  TransformationState state{"fox", "base", 50, 50, std::nullopt, {}}; auto combat_value = combat_state();
   check(validate_transformation_program(tp, cp).ok() && validate_transformation_state(tp, cp, state).ok(), "valid transformation rejected");
   check(rejects([&] { (void)execute_transformed_combat_command(tp, cp, state, combat_value, {0, "fox", "enemy", "lightning"}); }), "form-locked ability accepted");
   begin_transformation(tp, cp, state, "charge", 1);

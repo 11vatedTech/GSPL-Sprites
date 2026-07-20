@@ -8,7 +8,7 @@ namespace { void check(bool value, const char* message) { if (!value) throw std:
 
 int main() {
   try {
-    SpriteSeed seed{"gspl.sprite-seed/0.1", "original.test", "Test", "fictional", RightsClass::original_user_creation, 7, "#112233", "#AABBCC", {{"arc", "electric.projectile", 20, 4, 2}}};
+    SpriteSeed seed{"gspl.sprite-seed/0.1", "original.test", "Test", "fictional", RightsClass::original_user_creation, 7, "#112233", "#AABBCC", {{"arc", "electric.projectile", 20, 4, 2}}, std::nullopt, {}, std::nullopt, {}, {}, {}, {}, {}, std::nullopt};
     GeneRegistry registry; const auto genes = genes_from_seed(seed);
     check(registry.descriptor_count() == 5, "unexpected gene descriptor inventory");
     check(registry.validate(genes).ok(), "seed genes rejected");

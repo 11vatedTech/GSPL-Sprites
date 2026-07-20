@@ -201,6 +201,14 @@ void set_runtime_variable(LivingRuntimeState &state, std::string key,
   state.variables.insert_or_assign(std::move(key), value);
 }
 
+void set_health_percent(LivingRuntimeState &state, std::uint32_t health,
+                        std::uint32_t maximum_health) {
+  if (maximum_health == 0)
+    throw std::invalid_argument("maximum_health cannot be zero");
+  set_runtime_variable(state, "health_percent",
+                       static_cast<std::int32_t>(health * 100 / maximum_health));
+}
+
 void observe(LivingRuntimeState &state, const LivingRuntimeProgram &program,
              PerceptionObservation observation) {
   const auto validation = validate_living_runtime_program(program);

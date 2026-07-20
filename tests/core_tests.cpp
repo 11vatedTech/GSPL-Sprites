@@ -49,8 +49,252 @@ collision_window=arc|bolt|0|2|true
     bool duplicate_rejected = false; try { (void)parse_seed(text + "name=Again\n"); } catch (const std::runtime_error&) { duplicate_rejected = true; } check(duplicate_rejected, "duplicate field accepted");
     bool oversized_rejected = false; try { (void)parse_seed(std::string((1U << 20) + 1, 'x')); } catch (const std::runtime_error&) { oversized_rejected = true; } check(oversized_rejected, "oversized source accepted");
     bool unresolved_rejected = false; try { (void)parse_seed("schema=gspl.sprite-seed/0.1\ntrack=missing|root|0,0,0,0,1,1\n"); } catch (const std::runtime_error&) { unresolved_rejected = true; } check(unresolved_rejected, "track before owning clip accepted");
-    const auto output = std::filesystem::temp_directory_path() / "gspl-sprites-core-test"; std::filesystem::remove_all(output); std::filesystem::remove_all(output.string() + ".staging"); build_package(seed, output); check(std::filesystem::exists(output / "manifest.json"), "manifest missing"); check(std::filesystem::exists(output / "assets" / "entity.svg"), "projection missing"); check(std::filesystem::exists(output / "asset-graph.json"), "asset graph missing"); check(std::filesystem::exists(output / "provenance.json"), "provenance missing"); check(std::filesystem::exists(output / "rights.json"), "rights decision missing"); check(std::filesystem::exists(output / "rig.json"), "rig artifact missing"); check(std::filesystem::exists(output / "animations.json"), "animation artifact missing"); check(std::filesystem::exists(output / "animation-state-graph.json"), "state graph artifact missing"); check(std::filesystem::exists(output / "collisions.json"), "collision artifact missing");
+    const auto output = std::filesystem::temp_directory_path() / "gspl-sprites-core-test"; std::filesystem::remove_all(output); std::filesystem::remove_all(output.string() + ".staging"); build_package(seed, output); check(std::filesystem::exists(output / "manifest.json"), "manifest missing"); check(std::filesystem::exists(output / "assets" / "entity.svg"), "projection missing"); check(std::filesystem::exists(output / "asset-graph.json"), "asset graph missing"); check(std::filesystem::exists(output / "provenance.json"), "provenance missing"); check(std::filesystem::exists(output / "rights.json"), "rights decision missing"); check(std::filesystem::exists(output / "rig.json"), "rig artifact missing"); check(std::filesystem::exists(output / "animations.json"), "animation artifact missing"); check(std::filesystem::exists(output / "animation-state-graph.json"), "state graph artifact missing");     check(std::filesystem::exists(output / "collisions.json"), "collision artifact missing");
     bool overwrite_rejected = false; try { build_package(seed, output); } catch (const std::runtime_error&) { overwrite_rejected = true; } check(overwrite_rejected, "existing package overwritten"); std::filesystem::remove_all(output);
+    const std::string form_seed_text = R"(schema=gspl.sprite-seed/0.1
+id=original.voltfox
+name=Voltfox
+classification=biological.fictional.electric-fox
+rights=ORIGINAL_USER_CREATION
+entropy_root=11072026
+primary_color=#242038
+accent_color=#56F1FF
+ability=directional-lightning|electric.projectile.directional|25|8|2
+
+[form.Idle]
+transformations=IdleToRunning,IdleToAttack
+
+[form.Running]
+transformations=RunningToIdle
+
+[form.Attack]
+transformations=AttackToIdle
+
+[transformation.IdleToRunning]
+from_form=Idle
+to_form=Running
+trigger=perception:moving
+
+[transformation.IdleToAttack]
+from_form=Idle
+to_form=Attack
+trigger=combat:threat_detected
+
+[transformation.RunningToIdle]
+from_form=Running
+to_form=Idle
+trigger=perception:stopped
+
+[transformation.AttackToIdle]
+from_form=Attack
+to_form=Idle
+trigger=combat:target_defeated
+
+[morphology.torso]
+position=0,0,0
+size=40,30,20
+color=#242038
+rotation=0
+
+[morphology.head]
+position=0,25,5
+size=24,20,18
+color=#242038
+rotation=0
+
+[morphology.left_ear]
+position=-8,33,10
+size=8,16,8
+color=#56F1FF
+rotation=-10
+
+[morphology.right_ear]
+position=8,33,10
+size=8,16,8
+color=#56F1FF
+rotation=10
+
+[morphology.left_eye]
+position=-5,27,15
+size=4,4,4
+color=#56F1FF
+rotation=0
+
+[morphology.right_eye]
+position=5,27,15
+size=4,4,4
+color=#56F1FF
+rotation=0
+
+[morphology.muzzle]
+position=0,22,18
+size=10,8,6
+color=#FFFFFF
+rotation=0
+
+[morphology.tail]
+position=-20,-5,0
+size=6,30,6
+color=#242038
+rotation=-15
+
+[morphology.left_front_leg]
+position=-10,-20,-5
+size=8,20,8
+color=#1a1828
+rotation=0
+
+[morphology.right_front_leg]
+position=10,-20,-5
+size=8,20,8
+color=#1a1828
+rotation=0
+
+[morphology.aura]
+position=0,0,0
+size=60,50,40
+color=#56F1FF
+rotation=0
+
+[runtime]
+aggression=60
+curiosity=80
+energy=70
+loyalty=50
+animation_intents=idle:idle,running:idle,attack:attack
+)";
+    {
+      const auto form_seed = parse_seed(form_seed_text);
+      check(validate(form_seed).ok(), "valid form seed rejected");
+      check(form_seed.forms.size() == 3, "expected 3 forms");
+      check(form_seed.transformations.size() == 4, "expected 4 transformations");
+      check(form_seed.morphology.size() >= 11, "expected at least 11 morphology parts");
+      check(form_seed.runtime.has_value(), "expected runtime attributes");
+      check(form_seed.runtime->aggression == 60, "runtime aggression mismatch");
+      check(form_seed.runtime->animation_intents.size() == 3, "expected 3 animation intents");
+      const auto ir2 = compile(form_seed);
+      check(ir2.form_definitions.size() == 3, "expected 3 compiled form definitions");
+      check(ir2.transformation_deltas.size() == 4, "expected 4 compiled transformation deltas");
+      check(ir2.morphology.size() >= 11, "expected 11+ compiled morphology parts");
+      check(ir2.animation_intents.size() == 3, "expected 3 compiled animation intents");
+    }
+    {
+      const std::string dangling = R"(schema=gspl.sprite-seed/0.1
+id=test
+name=Test
+classification=test
+rights=ORIGINAL_USER_CREATION
+entropy_root=1
+primary_color=#111111
+accent_color=#222222
+ability=x|test|1|1|1
+
+[form.A]
+transformations=AtoB
+
+[transformation.BtoA]
+from_form=B
+to_form=A
+trigger=test
+)";
+      bool caught = false;
+      try { const auto bad_seed = parse_seed(dangling); (void)validate(bad_seed); const auto bad_ir = compile(bad_seed); (void)bad_ir; } catch (const std::runtime_error&) { caught = true; }
+      check(caught, "dangling transformation reference not caught");
+    }
+    {
+      const std::string form_seed_text2 = R"(schema=gspl.sprite-seed/0.1
+id=test
+name=Test
+classification=test
+rights=ORIGINAL_USER_CREATION
+entropy_root=1
+primary_color=#111111
+accent_color=#222222
+ability=x|test|1|1|1
+
+[form.A]
+transformations=AtoB
+
+[form.B]
+transformations=
+
+[transformation.AtoB]
+from_form=A
+to_form=B
+trigger=test
+
+[morphology.torso]
+position=0,0,0
+size=1,1,1
+color=#000000
+rotation=0
+
+[morphology.head]
+position=0,1,0
+size=1,1,1
+color=#000000
+rotation=0
+
+[morphology.left_ear]
+position=0,1,0
+size=1,1,1
+color=#000000
+rotation=0
+
+[morphology.right_ear]
+position=0,1,0
+size=1,1,1
+color=#000000
+rotation=0
+
+[morphology.left_eye]
+position=0,1,0
+size=1,1,1
+color=#000000
+rotation=0
+
+[morphology.right_eye]
+position=0,1,0
+size=1,1,1
+color=#000000
+rotation=0
+
+[morphology.muzzle]
+position=0,1,0
+size=1,1,1
+color=#000000
+rotation=0
+
+[morphology.tail]
+position=0,1,0
+size=1,1,1
+color=#000000
+rotation=0
+
+[morphology.left_front_leg]
+position=0,1,0
+size=1,1,1
+color=#000000
+rotation=0
+
+[morphology.right_front_leg]
+position=0,1,0
+size=1,1,1
+color=#000000
+rotation=0
+
+[morphology.aura]
+position=0,0,0
+size=1,1,1
+color=#000000
+rotation=0
+)";
+      const auto seed2 = parse_seed(form_seed_text2);
+      const auto ir2 = compile(seed2);
+      check(ir2.form_definitions.size() == 2, "expected 2 forms in isolated form test");
+      check(ir2.transformation_deltas.size() == 1, "expected 1 transformation delta");
+      check(ir2.morphology.size() >= 11, "expected 11+ morphology parts");
+    }
     std::cout << "all gspl sprites core tests passed\n"; return 0;
   } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

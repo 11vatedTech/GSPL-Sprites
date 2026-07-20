@@ -36,8 +36,29 @@ struct SynthesisPalette {
                                                                 const RigDefinition& rig);
 
 [[nodiscard]] Projection3dDefinition synthesize_projection3d(std::string_view entity_id, std::string_view form_id,
-                                                              const SynthesisPalette& palette,
-                                                              const RigDefinition& rig);
+                                                               const SynthesisPalette& palette,
+                                                               const RigDefinition& rig);
+
+[[nodiscard]] Projection3dDefinition synthesize_projection3d_voltfox(std::string_view entity_id, std::string_view form_id,
+                                                                        const SynthesisPalette& palette,
+                                                                        const std::map<std::string, MorphologyPart, std::less<>>& morphology);
+
+[[nodiscard]] Projection25dDefinition synthesize_projection25d_voltfox(
+    std::string_view entity_id, std::string_view form_id,
+    const SynthesisPalette& palette,
+    const std::map<std::string, MorphologyPart, std::less<>>& morphology);
+
+[[nodiscard]] Projection2dDefinition synthesize_projection2d_voltfox(
+    std::string_view entity_id, std::string_view form_id,
+    const SynthesisPalette& palette,
+    const std::map<std::string, MorphologyPart, std::less<>>& morphology,
+    const RigDefinition& rig);
+
+[[nodiscard]] std::vector<AnimationClip3d> synthesize_animation3d_voltfox(
+    std::string_view entity_id, std::string_view form_id,
+    const std::map<std::string, MorphologyPart, std::less<>>& morphology,
+    const std::vector<SkeletalClip>& clips,
+    std::span<const AnimationIntent> animation_intents);
 
 [[nodiscard]] TransformationManifestationProgram make_manifestation2d(std::string_view entity_id,
                                                                        const RigDefinition& rig);
@@ -53,6 +74,7 @@ struct SynthesisResult {
   Projection25dDefinition proj25d_transformed;
   Projection3dDefinition proj3d_base;
   Projection3dDefinition proj3d_transformed;
+  std::vector<AnimationClip3d> animations3d;
   TransformationManifestationProgram manifest2d;
   TransformationManifestationProgram manifest25d;
   TransformationManifestationProgram manifest3d;

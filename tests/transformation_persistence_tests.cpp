@@ -9,7 +9,7 @@ CombatProgram combat() { return {"persist.combat", 2, 2, {{"pulse", CombatTarget
 TransformationProgram program() { return {"persist.forms", "base", 4, {{"base", 0, 0, {"pulse"}}, {"power", 10, 0, {"pulse"}}}, {{"up", "base", "power", 1, 2, true}, {"down", "power", "base", 0, 1, true}}}; }
 }
 int main() try {
-  const auto cp = combat(); const auto tp = program(); TransformationState state{"entity", "base", 5, 5};
+  const auto cp = combat(); const auto tp = program(); TransformationState state{"entity", "base", 5, 5, std::nullopt, {}};
   begin_transformation(tp, cp, state, "up", 7);
   const auto encoded = serialize_transformation_state(tp, cp, state);
   const auto decoded = deserialize_transformation_state(tp, cp, encoded);

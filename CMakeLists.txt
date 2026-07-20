@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.25)
 project(gspl_sprites VERSION 0.1.0 LANGUAGES C CXX)
 
+option(BUILD_PREVIEW "Build the preview executable" OFF)
+
 set(GSPL_EXPECT_COMPILER "" CACHE STRING "Expected CXX compiler ID: MSVC, GNU, Clang, AppleClang")
 if(GSPL_EXPECT_COMPILER AND NOT CMAKE_CXX_COMPILER_ID MATCHES "${GSPL_EXPECT_COMPILER}")
   message(FATAL_ERROR "GSPL_EXPECT_COMPILER is \"${GSPL_EXPECT_COMPILER}\" "
@@ -122,6 +124,7 @@ add_library(gspl_sprites_core
   src/authoring_io.cpp
   src/authoring_cli.cpp
   src/synthesis.cpp
+  src/headless_evidence.cpp
 )
 target_include_directories(gspl_sprites_core PUBLIC include)
 if(MSVC)
@@ -308,6 +311,32 @@ add_executable(gspl_sprites_authoring_cli_tests tests/authoring_cli_tests.cpp)
 target_link_libraries(gspl_sprites_authoring_cli_tests PRIVATE gspl_sprites_core)
 add_test(NAME gspl_sprites_authoring_cli_tests COMMAND gspl_sprites_authoring_cli_tests $<TARGET_FILE:gspl-sprites>)
 
+add_executable(gspl_sprites_living_combat_wiring_tests tests/living_combat_wiring_tests.cpp)
+target_link_libraries(gspl_sprites_living_combat_wiring_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_living_combat_wiring_tests COMMAND gspl_sprites_living_combat_wiring_tests)
+
 add_executable(gspl_sprites_voltfox_integration_tests tests/voltfox_integration_tests.cpp)
 target_link_libraries(gspl_sprites_voltfox_integration_tests PRIVATE gspl_sprites_core)
 add_test(NAME gspl_sprites_voltfox_integration_tests COMMAND gspl_sprites_voltfox_integration_tests)
+
+add_executable(gspl_sprites_headless_evidence_tests tests/headless_evidence_tests.cpp)
+target_link_libraries(gspl_sprites_headless_evidence_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_headless_evidence_tests COMMAND gspl_sprites_headless_evidence_tests)
+
+add_executable(gspl_sprites_fuzz_parsing_tests tests/fuzz_parsing_tests.cpp)
+target_link_libraries(gspl_sprites_fuzz_parsing_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_fuzz_parsing_tests COMMAND gspl_sprites_fuzz_parsing_tests)
+
+if(BUILD_PREVIEW)
+  find_package(SDL2 QUIET)
+  if(SDL2_FOUND)
+    add_executable(gspl_sprites_preview src/preview.cpp)
+    target_link_libraries(gspl_sprites_preview PRIVATE gspl_sprites_core SDL2::SDL2)
+    target_compile_definitions(gspl_sprites_preview PRIVATE GSPL_SPRITES_HAS_SDL2)
+  else()
+    message(STATUS "SDL2 not found — preview target will build as a headless functional test")
+    add_executable(gspl_sprites_preview src/preview.cpp)
+    target_link_libraries(gspl_sprites_preview PRIVATE gspl_sprites_core)
+  endif()
+  gspl_stage_onnxruntime(gspl_sprites_preview)
+endif()

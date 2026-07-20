@@ -297,4 +297,47 @@ RuntimeReplayResult replay_living_runtime(
       sha256(serialize_living_runtime_state(program, result.final_state));
   return result;
 }
+RuntimePersistenceHeader
+capture_persistence_header(const CombatState &combat_state,
+                           const TransformationState &transformation_state,
+                           const LivingRuntimeState &runtime_state) {
+  static_cast<void>(runtime_state);
+  RuntimePersistenceHeader header;
+  header.entity_id = transformation_state.stable_entity_id;
+  header.form_id = transformation_state.current_form;
+  const auto actor = combat_state.actors.find(header.entity_id);
+  if (actor != combat_state.actors.end()) {
+    header.health = actor->second.health;
+    header.maximum_health = actor->second.maximum_health;
+    for (const auto &[status_id, status] : actor->second.statuses) {
+      static_cast<void>(status);
+      header.active_statuses.push_back(status_id);
+    }
+    for (const auto &[cooldown_id, expiry] : actor->second.cooldown_expiry) {
+      static_cast<void>(expiry);
+      header.cooldown_ids.push_back(cooldown_id);
+    }
+  }
+  return header;
+}
+
+void restore_from_persistence_header(
+    const RuntimePersistenceHeader &header, CombatState &combat_state,
+    TransformationState &transformation_state,
+    LivingRuntimeState &runtime_state) {
+  static_cast<void>(runtime_state);
+  transformation_state.stable_entity_id = header.entity_id;
+  transformation_state.current_form = header.form_id;
+  auto &actor = combat_state.actors[header.entity_id];
+  actor.id = header.entity_id;
+  actor.health = header.health;
+  actor.maximum_health = header.maximum_health;
+  actor.statuses.clear();
+  for (const auto &status_id : header.active_statuses)
+    actor.statuses[status_id] = CombatStatusState{0, 0};
+  actor.cooldown_expiry.clear();
+  for (const auto &cooldown_id : header.cooldown_ids)
+    actor.cooldown_expiry[cooldown_id] = 0;
+}
+
 } // namespace gspl::sprites

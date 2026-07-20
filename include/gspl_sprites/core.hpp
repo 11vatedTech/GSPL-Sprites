@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <span>
 #include <string>
 #include <string_view>
@@ -35,6 +36,37 @@ struct AbilitySeed {
   std::uint32_t active_ticks{};
 };
 
+struct MorphologyPart {
+  double x{};
+  double y{};
+  double z{};
+  double size_x{1.0};
+  double size_y{1.0};
+  double size_z{1.0};
+  std::string color;
+  double rotation_degrees{};
+};
+
+struct TransformationSeed {
+  std::string id;
+  std::string from_form;
+  std::string to_form;
+  std::string trigger_condition;
+};
+
+struct FormSeed {
+  std::string id;
+  std::vector<std::string> transformation_ids;
+};
+
+struct RuntimeAttributes {
+  std::uint32_t aggression{50};
+  std::uint32_t curiosity{50};
+  std::uint32_t energy{50};
+  std::uint32_t loyalty{50};
+  std::vector<std::pair<std::string, std::string>> animation_intents;
+};
+
 struct SpriteSeed {
   std::string schema;
   std::string stable_id;
@@ -50,6 +82,27 @@ struct SpriteSeed {
   std::optional<AnimationStateGraph> animation_graph;
   std::vector<CollisionShape> collision_shapes;
   std::vector<CollisionWindow> collision_windows;
+  std::vector<FormSeed> forms;
+  std::vector<TransformationSeed> transformations;
+  std::map<std::string, MorphologyPart, std::less<>> morphology;
+  std::optional<RuntimeAttributes> runtime;
+};
+
+struct FormDefinition {
+  std::string name;
+  std::vector<std::string> transformation_names;
+};
+
+struct TransformationDelta {
+  std::string name;
+  std::string from_form;
+  std::string to_form;
+  std::string trigger_condition;
+};
+
+struct AnimationIntent {
+  std::string behavior_state;
+  std::string clip_name;
 };
 
 struct SpriteIr {
@@ -63,6 +116,11 @@ struct SpriteIr {
   std::optional<AnimationStateGraph> animation_graph;
   std::vector<CollisionShape> collision_shapes;
   std::vector<CollisionWindow> collision_windows;
+  std::vector<FormDefinition> form_definitions;
+  std::vector<TransformationDelta> transformation_deltas;
+  std::map<std::string, MorphologyPart, std::less<>> morphology;
+  std::vector<AnimationIntent> animation_intents;
+  RuntimeAttributes runtime;
 };
 
 struct RuntimeEntity {

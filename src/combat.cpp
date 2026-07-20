@@ -1,4 +1,5 @@
 #include "gspl_sprites/combat.hpp"
+#include "gspl_sprites/transformation.hpp"
 
 #include "gspl_sprites/core.hpp"
 
@@ -201,6 +202,53 @@ std::vector<CombatEvent> execute_combat_command(const CombatProgram &program,
   require_valid(program, candidate);
   state = std::move(candidate);
   return events;
+}
+
+PerceptionObservation
+translate_combat_event_to_perception(const CombatEvent &event,
+                                     std::string_view receiver_entity_id,
+                                     std::uint64_t current_tick) {
+  PerceptionObservation result;
+  result.value = static_cast<std::int32_t>(event.applied_magnitude);
+  result.confidence_per_million = 1'000'000;
+  result.lifetime_ticks = 120;
+  result.observed_tick = current_tick;
+  result.source_entity = event.source_actor;
+  if (event.effect == CombatEffectKind::damage) {
+    if (receiver_entity_id == event.target_actor)
+      result.key = "damage_taken";
+    else
+      result.key = "damage_dealt";
+  } else if (event.effect == CombatEffectKind::healing) {
+    if (receiver_entity_id == event.target_actor)
+      result.key = "healing_received";
+    else
+      result.key = "healing_given";
+  } else {
+    result.key = std::string("status_applied_") + event.status_id;
+  }
+  return result;
+}
+
+bool can_use_ability_in_form(std::string_view ability_id,
+                             std::string_view current_form_id,
+                             const TransformationProgram &program) {
+  const auto found = std::ranges::find(program.forms, current_form_id,
+                                       &TransformationFormDefinition::id);
+  return found != program.forms.end() &&
+         std::ranges::contains(found->enabled_abilities, ability_id);
+}
+
+std::vector<CombatEvent>
+execute_combat_command(const CombatProgram &program, CombatState &state,
+                       const CombatCommand &command,
+                       std::string_view current_form_id,
+                       const TransformationProgram &transformation_program) {
+  if (command.ability_id == "directional-lightning" &&
+      !can_use_ability_in_form(command.ability_id, current_form_id,
+                               transformation_program))
+    throw std::runtime_error("ability requires Attack or Special form");
+  return execute_combat_command(program, state, command);
 }
 
 } // namespace gspl::sprites

@@ -1,13 +1,17 @@
 #pragma once
 
 #include "gspl_sprites/common.hpp"
+#include "gspl_sprites/living_runtime.hpp"
 
 #include <cstdint>
 #include <map>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace gspl::sprites {
+
+struct TransformationProgram;
 
 enum class CombatTargetRule { self, ally, enemy, any };
 enum class CombatEffectKind { damage, healing, status };
@@ -78,7 +82,21 @@ struct CombatEvent {
 [[nodiscard]] std::vector<CombatEvent>
 execute_combat_command(const CombatProgram &program, CombatState &state,
                        const CombatCommand &command);
+[[nodiscard]] std::vector<CombatEvent>
+execute_combat_command(const CombatProgram &program, CombatState &state,
+                       const CombatCommand &command,
+                       std::string_view current_form_id,
+                       const TransformationProgram &transformation_program);
 void advance_combat_to(const CombatProgram &program, CombatState &state,
                        std::uint64_t tick);
+
+[[nodiscard]] PerceptionObservation
+translate_combat_event_to_perception(const CombatEvent &event,
+                                     std::string_view receiver_entity_id,
+                                     std::uint64_t current_tick);
+[[nodiscard]] bool
+can_use_ability_in_form(std::string_view ability_id,
+                        std::string_view current_form_id,
+                        const TransformationProgram &program);
 
 } // namespace gspl::sprites

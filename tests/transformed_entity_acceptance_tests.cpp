@@ -11,19 +11,19 @@ CombatProgram combat_program() { return {"voltfox.combat",4,4,
 TransformationProgram transformation_program() { return {"voltfox.forms","base",8,
   {{"base",0,0,{"bite"}},{"storm",40,20,{"bite","storm"}}},
   {{"ascend","base","storm",20,4,true},{"descend","storm","base",0,2,true}}}; }
-std::vector<SkeletalClip> clips() { return {{"idle",10,true},{"storm.idle",10,true},{"ascend",4,false},{"descend",2,false}}; }
+std::vector<SkeletalClip> clips() { return {{"idle",10,true,{},{}},{"storm.idle",10,true,{},{}},{"ascend",4,false,{},{}},{"descend",2,false,{},{}}}; }
 AnimationStateGraph graph() { return {"base",{{"base","idle",{{"storm","form",Comparison::equal,1,0,0,1}}},{"storm","storm.idle",{{"base","form",Comparison::equal,0,0,0,1}}}}}; }
 Vertex3d vertex(std::int64_t x,std::int64_t y){return {{x,y,0},{0,0,1'000'000},{0,0},{}};}
-Projection3dDefinition projection(std::string id,std::uint32_t color){Projection3dDefinition p;p.id=std::move(id);p.materials={{"fur",color,0,900'000}};p.meshes={{"body",MeshPurpose::render,"fur",false,{vertex(0,0),vertex(1000,0),vertex(0,1000)},{0,2,1}}};return p;}
+Projection3dDefinition projection(std::string id,std::uint32_t color){Projection3dDefinition p;p.id=std::move(id);p.materials={{"fur",color,0,900'000,MaterialAlphaMode::opaque,500'000,false,{},{},{}}};p.meshes={{"body",MeshPurpose::render,"fur",false,{vertex(0,0),vertex(1000,0),vertex(0,1000)},{0,2,1}}};return p;}
 TransformationManifestationProgram manifestation_program(){return {"voltfox.manifestation",{{"base","base","voltfox.base.3d"},{"storm","storm","voltfox.storm.3d"}},{{"ascend","ascend"},{"descend","descend"}}};}
-CombatState combat_state(){CombatState state;state.actors.emplace("voltfox",CombatActorState{"voltfox","hero",100,100,20,20,0,0});state.actors.emplace("target",CombatActorState{"target","enemy",100,100,0,0,1000,0});return state;}
+CombatState combat_state(){CombatState state;state.actors.emplace("voltfox",CombatActorState{"voltfox","hero",100,100,20,20,0,0,{}, {}});state.actors.emplace("target",CombatActorState{"target","enemy",100,100,0,0,1000,0,{}, {}});return state;}
 }
 int main() try {
   const auto combat=combat_program();const auto transformations=transformation_program();
   const auto animation_clips=clips();const auto animation_graph=graph();
   const std::array projections{projection("voltfox.base.3d",0x804020ffU),projection("voltfox.storm.3d",0x40a0ffffU)};
   const auto manifestations=manifestation_program();
-  TransformationState form{"voltfox","base",50,50};auto combat_state_value=combat_state();
+  TransformationState form{"voltfox","base",50,50,std::nullopt,{}};auto combat_state_value=combat_state();
   const auto base_identity=transformation_state_identity(transformations,combat,form);
   begin_transformation(transformations,combat,form,"ascend",10);
   const auto transition=project_transformation_manifestation(manifestations,transformations,combat,animation_graph,animation_clips,projections,form,12);

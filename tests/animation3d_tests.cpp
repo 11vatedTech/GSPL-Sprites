@@ -13,8 +13,8 @@ void check(bool v, const char *m) {
 Projection3dDefinition projection() {
   Projection3dDefinition p;
   p.id = "animated";
-  p.materials = {{"mat"}};
-  p.skeleton = Skeleton3d{"source", {{"root", {}}, {"tail", "root"}}};
+  p.materials = {{"mat", 0xffffffffU, 0, 1000000, MaterialAlphaMode::opaque, 500000, false, {}, {}, {}}};
+  p.skeleton = Skeleton3d{"source", {{"root", {}, {0,0,0}}, {"tail", "root", {0,0,0}}}};
   Vertex3d v{{0, 0, 0}, {0, 0, 1'000'000}, {0, 0}, {{"root", 1'000'000}}};
   p.meshes = {
       {"mesh", MeshPurpose::render, "mat", false, {v, v, v}, {0, 1, 2}}};
@@ -47,7 +47,7 @@ int main() try {
   auto bad = clip;
   bad.joint_tracks[0].keys[1].tick = 0;
   check(!validate_animation_clip3d(bad, p).ok(), "duplicate key time accepted");
-  Skeleton3d target{"target", {{"base", {}}, {"appendage", "base"}}};
+  Skeleton3d target{"target", {{"base", {}, {0,0,0}}, {"appendage", "base", {0,0,0}}}};
   RetargetMap3d map{"fox-to-drake",
                     "source",
                     "target",

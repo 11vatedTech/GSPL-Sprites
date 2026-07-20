@@ -207,4 +207,20 @@ std::vector<CombatEvent> execute_transformed_combat_command(
   return execute_combat_command(combat_program, combat_state, command);
 }
 
+TransformationVfxEvent
+trigger_transformation_vfx(const TransformationProgram &program,
+                           std::string_view transformation_id,
+                           std::uint64_t tick) {
+  const auto *definition = transformation(program, transformation_id);
+  if (definition == nullptr)
+    throw std::runtime_error("transformation not found for VFX trigger");
+  TransformationVfxEvent result;
+  result.transformation_id = definition->id;
+  result.from_form = definition->from_form;
+  result.to_form = definition->to_form;
+  result.tick = tick;
+  result.duration_ticks = definition->duration_ticks * 5;
+  return result;
+}
+
 } // namespace gspl::sprites

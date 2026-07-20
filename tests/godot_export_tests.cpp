@@ -24,7 +24,7 @@ Projection3dDefinition fixture() {
   Projection3dDefinition projection;
   projection.id = "entity.godot";
   projection.materials = {{"body", 0xff8040ffU, 0, 800'000,
-                           MaterialAlphaMode::opaque, 500'000, false}};
+                            MaterialAlphaMode::opaque, 500'000, false, {}, {}, {}}};
   projection.meshes = {{"body",
                         MeshPurpose::render,
                         "body",
@@ -126,7 +126,7 @@ int main(int argc, char **argv) try {
   try {
     export_godot_3d_project(fixture(), {}, {}, {},
                             root.string() + "-invalid-name",
-                            {std::string("bad\xc0\xaf", 5)});
+                            {std::string("bad\xc0\xaf", 5), {}, {}});
   } catch (const std::invalid_argument &) {
     invalid_name_rejected = true;
   }

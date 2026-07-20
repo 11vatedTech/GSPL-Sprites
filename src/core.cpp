@@ -83,6 +83,15 @@ bool repeatable_field(std::string_view key) {
   return std::ranges::find(values, key) != values.end();
 }
 
+std::vector<double> parse_double_list(std::string_view value, std::size_t expected, std::string_view field) {
+  const auto parts = split(value, ',');
+  if (parts.size() != expected) throw std::runtime_error("expected " + std::to_string(expected) + " values for " + std::string(field));
+  std::vector<double> result;
+  result.reserve(expected);
+  for (const auto& part : parts) result.push_back(parse_double(trim(part), field));
+  return result;
+}
+
 RightsClass parse_rights(std::string_view value) {
   static const std::map<std::string_view, RightsClass> values{
     {"ORIGINAL_USER_CREATION", RightsClass::original_user_creation}, {"USER_OWNED_REFERENCE", RightsClass::user_owned},
@@ -133,17 +142,84 @@ SpriteSeed parse_seed(std::string_view source) {
   std::string line;
   std::size_t line_number = 0;
   std::map<std::string, bool> seen;
+  std::string current_section_type;
+  std::string current_section_name;
+  auto reset_section = [&] { current_section_type.clear(); current_section_name.clear(); };
+  auto in_section = [&] { return !current_section_type.empty(); };
   while (std::getline(stream, line)) {
     ++line_number;
     if (line_number > 4096) throw std::runtime_error("source exceeds 4096-line limit");
     if (line.size() > 8192) throw std::runtime_error("line exceeds 8192-byte limit");
     line = trim(line);
     if (line.empty() || line.starts_with('#')) continue;
+    if (line.starts_with('[') && line.ends_with(']')) {
+      reset_section();
+      const auto inner = trim(line.substr(1, line.size() - 2));
+      if (inner.empty()) throw std::runtime_error("line " + std::to_string(line_number) + ": empty section name");
+      const auto dot = inner.find('.');
+      if (dot == std::string::npos) {
+        current_section_type = inner;
+      } else {
+        current_section_type = inner.substr(0, dot);
+        current_section_name = inner.substr(dot + 1);
+        if (current_section_name.empty()) throw std::runtime_error("line " + std::to_string(line_number) + ": empty section sub-name");
+      }
+      continue;
+    }
     const auto equals = line.find('=');
     if (equals == std::string::npos) throw std::runtime_error("line " + std::to_string(line_number) + ": expected key=value");
     const auto key = trim(line.substr(0, equals));
     const auto value = trim(line.substr(equals + 1));
-    if (!repeatable_field(key) && !seen.emplace(key, true).second) throw std::runtime_error("line " + std::to_string(line_number) + ": duplicate field " + key);
+    if (!in_section() && !repeatable_field(key) && !seen.emplace(key, true).second) throw std::runtime_error("line " + std::to_string(line_number) + ": duplicate field " + key);
+    if (in_section()) {
+      if (current_section_type == "form") {
+        if (key == "transformations") {
+          FormSeed fs;
+          fs.id = current_section_name;
+          const auto trimmed = trim(value);
+          if (!trimmed.empty()) {
+            for (const auto& t : split(trimmed, ',')) {
+              const auto tid = trim(t);
+              if (!tid.empty()) fs.transformation_ids.push_back(tid);
+            }
+          }
+          seed.forms.push_back(std::move(fs));
+        } else throw std::runtime_error("line " + std::to_string(line_number) + ": unknown form field " + key);
+      } else if (current_section_type == "transformation") {
+        if (key == "from_form") { seed.transformations.push_back({current_section_name, value, {}, {}}); }
+        else if (key == "to_form") { if (!seed.transformations.empty() && seed.transformations.back().id == current_section_name && seed.transformations.back().to_form.empty()) seed.transformations.back().to_form = value; else throw std::runtime_error("line " + std::to_string(line_number) + ": to_form requires preceding from_form"); }
+        else if (key == "trigger") { if (!seed.transformations.empty() && seed.transformations.back().id == current_section_name) seed.transformations.back().trigger_condition = value; else throw std::runtime_error("line " + std::to_string(line_number) + ": trigger requires preceding from_form"); }
+        else throw std::runtime_error("line " + std::to_string(line_number) + ": unknown transformation field " + key);
+      } else if (current_section_type == "morphology") {
+        MorphologyPart part;
+        if (key == "position") { const auto v = parse_double_list(value, 3, "morphology.position"); part.x = v[0]; part.y = v[1]; part.z = v[2]; }
+        else if (key == "size") { const auto v = parse_double_list(value, 3, "morphology.size"); part.size_x = v[0]; part.size_y = v[1]; part.size_z = v[2]; }
+        else if (key == "color") { part.color = value; }
+        else if (key == "rotation") { part.rotation_degrees = parse_double(value, "morphology.rotation"); }
+        else throw std::runtime_error("line " + std::to_string(line_number) + ": unknown morphology field " + key);
+        if (!seed.morphology.emplace(current_section_name, part).second) {
+          auto& existing = seed.morphology[current_section_name];
+          if (key == "position") { existing.x = part.x; existing.y = part.y; existing.z = part.z; }
+          else if (key == "size") { existing.size_x = part.size_x; existing.size_y = part.size_y; existing.size_z = part.size_z; }
+          else if (key == "color") { existing.color = part.color; }
+          else if (key == "rotation") { existing.rotation_degrees = part.rotation_degrees; }
+        }
+      } else if (current_section_type == "runtime") {
+        if (!seed.runtime) seed.runtime = RuntimeAttributes{};
+        if (key == "aggression") seed.runtime->aggression = parse_u32(value, "runtime.aggression");
+        else if (key == "curiosity") seed.runtime->curiosity = parse_u32(value, "runtime.curiosity");
+        else if (key == "energy") seed.runtime->energy = parse_u32(value, "runtime.energy");
+        else if (key == "loyalty") seed.runtime->loyalty = parse_u32(value, "runtime.loyalty");
+        else if (key == "animation_intents") {
+          for (const auto& pair : split(value, ',')) {
+            const auto colon = pair.find(':');
+            if (colon == std::string::npos) throw std::runtime_error("line " + std::to_string(line_number) + ": animation_intent requires state:clip format");
+            seed.runtime->animation_intents.emplace_back(trim(pair.substr(0, colon)), trim(pair.substr(colon + 1)));
+          }
+        } else throw std::runtime_error("line " + std::to_string(line_number) + ": unknown runtime field " + key);
+      } else throw std::runtime_error("line " + std::to_string(line_number) + ": unknown section type " + current_section_type);
+      continue;
+    }
     if (key == "schema") seed.schema = value;
     else if (key == "id") seed.stable_id = value;
     else if (key == "name") seed.name = value;
@@ -243,6 +319,31 @@ ValidationResult validate(const SpriteSeed& seed) {
     const auto shape_validation=validate_collision_contract(seed.collision_shapes,{},*seed.rig,0);result.diagnostics.insert(result.diagnostics.end(),shape_validation.diagnostics.begin(),shape_validation.diagnostics.end());
     for(const auto& window:seed.collision_windows){const auto ability=std::ranges::find(seed.abilities,window.ability_id,&AbilitySeed::id);if(ability==seed.abilities.end()){result.diagnostics.push_back({"SPRITE_COLLISION_ABILITY_MISSING","collision window references absent ability: "+window.ability_id});continue;}const std::array one{window};const auto collision_validation=validate_collision_contract(seed.collision_shapes,one,*seed.rig,ability->active_ticks);result.diagnostics.insert(result.diagnostics.end(),collision_validation.diagnostics.begin(),collision_validation.diagnostics.end());}
   }
+  if (!seed.forms.empty() || !seed.transformations.empty() || !seed.morphology.empty() || seed.runtime) {
+    require(!seed.forms.empty(), "SPRITE_FORMS_REQUIRED", "forms are required when transformation or morphology semantics are present");
+    require(!seed.transformations.empty(), "SPRITE_TRANSFORMATIONS_REQUIRED", "transformations are required when form semantics are present");
+    require(seed.morphology.size() >= 11, "SPRITE_MORPHOLOGY_INCOMPLETE", "morphology requires at least 11 body parts (torso, head, eyes, ears, muzzle, tail, limbs, aura)");
+    std::set<std::string> form_names;
+    for (const auto& form : seed.forms) {
+      require(!form.id.empty(), "SPRITE_FORM_INVALID", "form id must not be empty");
+      require(form_names.insert(form.id).second, "SPRITE_FORM_DUPLICATE", "form ids must be unique");
+    }
+    std::set<std::string> transformation_ids;
+    for (const auto& t : seed.transformations) {
+      require(!t.id.empty(), "SPRITE_TRANSFORMATION_INVALID", "transformation id must not be empty");
+      require(!t.from_form.empty() && !t.to_form.empty(), "SPRITE_TRANSFORMATION_ENDPOINTS", "transformation requires from_form and to_form");
+      require(form_names.count(t.from_form) && form_names.count(t.to_form), "SPRITE_TRANSFORMATION_FORM_MISSING", "transformation references non-existent form");
+      require(transformation_ids.insert(t.id).second, "SPRITE_TRANSFORMATION_DUPLICATE", "transformation ids must be unique");
+    }
+    for (const auto& form : seed.forms) {
+      for (const auto& t_name : form.transformation_ids) {
+        require(transformation_ids.count(t_name), "SPRITE_FORM_TRANSFORMATION_MISSING", "form references non-existent transformation");
+      }
+    }
+    if (seed.runtime) {
+      require(seed.runtime->aggression <= 100 && seed.runtime->curiosity <= 100 && seed.runtime->energy <= 100 && seed.runtime->loyalty <= 100, "SPRITE_RUNTIME_BOUNDS", "runtime attributes must be 0..100");
+    }
+  }
   return result;
 }
 
@@ -289,7 +390,33 @@ SpriteIr compile(const SpriteSeed& seed) {
   const auto genes = genes_from_seed(seed);
   const auto gene_validation = registry.validate(genes);
   if (!gene_validation.ok()) throw std::runtime_error(gene_validation.diagnostics.front().code + ": " + gene_validation.diagnostics.front().message);
-  return {sha256(canonicalize(seed)), seed.stable_id, seed.abilities, seed.primary_color, seed.accent_color, seed.rig, seed.clips, seed.animation_graph, seed.collision_shapes, seed.collision_windows};
+  std::vector<FormDefinition> form_defs;
+  for (const auto& f : seed.forms) form_defs.push_back({f.id, f.transformation_ids});
+  std::vector<TransformationDelta> trans_deltas;
+  for (const auto& t : seed.transformations) trans_deltas.push_back({t.id, t.from_form, t.to_form, t.trigger_condition});
+  std::vector<AnimationIntent> anim_intents;
+  RuntimeAttributes rt;
+  if (seed.runtime) {
+    rt = *seed.runtime;
+    for (const auto& intent : seed.runtime->animation_intents) anim_intents.push_back({intent.first, intent.second});
+  }
+  SpriteIr ir;
+  ir.seed_identity = sha256(canonicalize(seed));
+  ir.entity_id = seed.stable_id;
+  ir.abilities = seed.abilities;
+  ir.primary_color = seed.primary_color;
+  ir.accent_color = seed.accent_color;
+  ir.rig = seed.rig;
+  ir.clips = seed.clips;
+  ir.animation_graph = seed.animation_graph;
+  ir.collision_shapes = seed.collision_shapes;
+  ir.collision_windows = seed.collision_windows;
+  ir.form_definitions = std::move(form_defs);
+  ir.transformation_deltas = std::move(trans_deltas);
+  ir.morphology = seed.morphology;
+  ir.animation_intents = std::move(anim_intents);
+  ir.runtime = rt;
+  return ir;
 }
 
 bool activate(RuntimeEntity& entity, const AbilitySeed& ability) {

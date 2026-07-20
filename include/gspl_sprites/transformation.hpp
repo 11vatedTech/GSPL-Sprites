@@ -9,6 +9,14 @@
 
 namespace gspl::sprites {
 
+struct TransformationVfxEvent {
+  std::string transformation_id;
+  std::string from_form;
+  std::string to_form;
+  std::uint64_t tick{};
+  std::uint32_t duration_ticks{30};
+};
+
 struct TransformationFormDefinition {
   std::string id;
   std::int32_t maximum_health_delta{};
@@ -70,5 +78,10 @@ void advance_transformation_to(const TransformationProgram &program,
     const TransformationProgram &program, const CombatProgram &combat_program,
     const TransformationState &transformation_state, CombatState &combat_state,
     const CombatCommand &command);
+
+[[nodiscard]] TransformationVfxEvent
+trigger_transformation_vfx(const TransformationProgram &program,
+                           std::string_view transformation_id,
+                           std::uint64_t tick);
 
 } // namespace gspl::sprites

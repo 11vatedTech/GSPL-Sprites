@@ -12,7 +12,7 @@ CombatProgram combat_program() { return {"synthesis.combat", 4, 4,
 TransformationProgram transformation_program() { return {"synthesis.forms", "base", 8,
   {{"base", 0, 0, {"bite"}}, {"storm", 40, 20, {"bite", "storm"}}},
   {{"ascend", "base", "storm", 20, 4, true}, {"descend", "storm", "base", 0, 2, true}}}; }
-std::vector<SkeletalClip> clips() { return {{"idle", 10, true}, {"storm.idle", 10, true}, {"ascend", 4, false}, {"descend", 2, false}}; }
+std::vector<SkeletalClip> clips() { return {{"idle", 10, true, {}, {}}, {"storm.idle", 10, true, {}, {}}, {"ascend", 4, false, {}, {}}, {"descend", 2, false, {}, {}}}; }
 AnimationStateGraph graph() { return {"base", {{"base", "idle", {{"storm", "form", Comparison::equal, 1, 0, 0, 1}}}, {"storm", "storm.idle", {{"base", "form", Comparison::equal, 0, 0, 0, 1}}}}}; }
 }
 int main() try {

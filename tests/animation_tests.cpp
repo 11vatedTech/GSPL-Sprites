@@ -27,7 +27,7 @@ int main() {
     auto unreachable=graph; unreachable.states.push_back({"orphan","idle",{}}); check(!validate_state_graph(unreachable,clips).ok(), "unreachable state accepted");
 
     const std::array shapes{CollisionShape{"body",CollisionKind::axis_aligned_box,"root",0,0,8,5},CollisionShape{"bolt",CollisionKind::circle,"muzzle",3,0,2,2}};
-    const std::array windows{CollisionWindow{"body",0,6,false},CollisionWindow{"bolt",2,4,true}}; check(validate_collision_contract(shapes,windows,rig,6).ok(), "valid collision contract rejected");
+    const std::array windows{CollisionWindow{"body",0,6,false,{}},CollisionWindow{"bolt",2,4,true,{}}}; check(validate_collision_contract(shapes,windows,rig,6).ok(), "valid collision contract rejected");
     auto bad_windows=windows; bad_windows[1].end_tick=7; check(!validate_collision_contract(shapes,bad_windows,rig,6).ok(), "out-of-bounds hit window accepted");
     std::cout << "all gspl sprites animation tests passed\n"; return 0;
   } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }

@@ -23,7 +23,7 @@ CombatProgram combat_program() { return {"unified.combat", 4, 4,
 TransformationProgram transformation_program() { return {"unified.forms", "base", 8,
   {{"base", 0, 0, {"bite"}}, {"storm", 40, 20, {"bite", "storm"}}},
   {{"ascend", "base", "storm", 20, 4, true}, {"descend", "storm", "base", 0, 2, true}}}; }
-std::vector<SkeletalClip> clips() { return {{"idle", 10, true}, {"storm.idle", 10, true}, {"ascend", 4, false}, {"descend", 2, false}}; }
+std::vector<SkeletalClip> clips() { return {{"idle", 10, true, {}, {}}, {"storm.idle", 10, true, {}, {}}, {"ascend", 4, false, {}, {}}, {"descend", 2, false, {}, {}}}; }
 AnimationStateGraph graph() { return {"base", {{"base", "idle", {{"storm", "form", Comparison::equal, 1, 0, 0, 1}}}, {"storm", "storm.idle", {{"base", "form", Comparison::equal, 0, 0, 0, 1}}}}}; }
 
 ImageRgba8 make_image(std::uint32_t width, std::uint32_t height, std::uint8_t r, std::uint8_t g, std::uint8_t b) {
@@ -49,14 +49,14 @@ Projection2dDefinition make_projection2d(std::string id, std::string frame_id, s
 
 Projection25dDefinition make_projection25d(std::string id, std::string asset) {
   return {std::move(id), RepresentationKind::two_point_five_d, BillboardMode::camera_facing,
-    {{"body", std::move(asset), {}, {}, 0, 200'000, 0, false}},
+    {{"body", std::move(asset), {}, {}, 0, 200'000, 0, false, {}}},
     {{"front", 0, false, {}, {{"body", true, {}, {}}}}},
     {}, {{"body", "body", -100, -100, 100, 100, -10, 10}}};
 }
 
 Vertex3d vertex3d(std::int64_t x, std::int64_t y) { return {{x, y, 0}, {0, 0, 1'000'000}, {0, 0}, {}}; }
 Projection3dDefinition make_projection3d(std::string id, std::uint32_t color) {
-  Projection3dDefinition p; p.id = std::move(id); p.materials = {{"fur", color, 0, 900'000}};
+  Projection3dDefinition p; p.id = std::move(id); p.materials = {{"fur", color, 0, 900'000, MaterialAlphaMode::opaque, 500'000, false, {}, {}, {}}};
   p.meshes = {{"body", MeshPurpose::render, "fur", false, {vertex3d(0, 0), vertex3d(1000, 0), vertex3d(0, 1000)}, {0, 2, 1}}};
   return p;
 }
@@ -65,7 +65,7 @@ TransformationManifestationProgram make_manifestation2d() { return {"unified.2d"
 TransformationManifestationProgram make_manifestation25d() { return {"unified.25d", {{"base", "base", "unified.base.25d"}, {"storm", "storm", "unified.storm.25d"}}, {{"ascend", "ascend"}, {"descend", "descend"}}}; }
 TransformationManifestationProgram make_manifestation3d() { return {"unified.3d", {{"base", "base", "unified.base.3d"}, {"storm", "storm", "unified.storm.3d"}}, {{"ascend", "ascend"}, {"descend", "descend"}}}; }
 
-CombatState combat_state() { CombatState s; s.actors.emplace("unified", CombatActorState{"unified", "hero", 100, 100, 20, 20, 0, 0}); s.actors.emplace("target", CombatActorState{"target", "enemy", 100, 100, 0, 0, 1000, 0}); return s; }
+CombatState combat_state() { CombatState s; s.actors.emplace("unified", CombatActorState{"unified", "hero", 100, 100, 20, 20, 0, 0, {}, {}}); s.actors.emplace("target", CombatActorState{"target", "enemy", 100, 100, 0, 0, 1000, 0, {}, {}}); return s; }
 
 struct CrossRepresentationEvidence {
   std::string entity_identity;
@@ -149,7 +149,7 @@ int main() try {
   check(validate_transformation_manifestation25d_program(manifest25d, transformations, combat, animation_graph, animation_clips, projections25d).ok(), "2.5D manifestation program invalid");
   check(validate_transformation_manifestation_program(manifest3d, transformations, combat, animation_graph, animation_clips, projections3d).ok(), "3D manifestation program invalid");
 
-  TransformationState state{"unified", "base", 50, 50};
+  TransformationState state{"unified", "base", 50, 50, std::nullopt, {}};
 
   const auto base_hash = transformation_state_identity(transformations, combat, state);
 

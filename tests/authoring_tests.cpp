@@ -27,7 +27,7 @@ AuthoringProject fixture() {
            {"appearance.accent_color", {"#FFFF44"}, 0, true}},
           {{{"arc", "electric.projectile", 20, 4, 2}, true, true},
            {{"dash", "electric.movement", 10, 2, 1}, true, false}},
-          {{"violet", {{"appearance.primary_color", "#6633CC"}}, {"dash"}}}};
+            {{"violet", {{"appearance.primary_color", "#6633CC"}}, {"dash"}}}, {}, {}};
 }
 } // namespace
 

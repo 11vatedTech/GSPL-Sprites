@@ -13,8 +13,8 @@ CombatProgram combat() {
 }
 ComboProgram combo() { return {"fighter.combo", 8, {"jab"}, {{"jab", "cross", 2, 4, true}, {"cross", "uppercut", 1, 3, false}}}; }
 CombatState state() {
-  CombatState value; value.actors.emplace("a", CombatActorState{"a", "one", 100, 100, 0, 0, 0, 0});
-  value.actors.emplace("b", CombatActorState{"b", "two", 100, 100, 0, 0, 1000, 0}); return value;
+  CombatState value; value.actors.emplace("a", CombatActorState{"a", "one", 100, 100, 0, 0, 0, 0, {}, {}});
+  value.actors.emplace("b", CombatActorState{"b", "two", 100, 100, 0, 0, 1000, 0, {}, {}}); return value;
 }
 }
 int main() try {

@@ -12,8 +12,8 @@ void check(bool v, const char *m) {
 Projection3dDefinition projection() {
   Projection3dDefinition p;
   p.id = "deform";
-  p.materials = {{"mat"}};
-  p.skeleton = Skeleton3d{"rig", {{"root", {}}}};
+  p.materials = {{"mat", 0xffffffffU, 0, 1000000, MaterialAlphaMode::opaque, 500000, false, {}, {}, {}}};
+  p.skeleton = Skeleton3d{"rig", {{"root", {}, {0,0,0}}}};
   Vertex3d a{{0, 0, 0}, {0, 0, 1'000'000}, {0, 0}, {{"root", 1'000'000}}},
       b = a, c = a;
   b.position.x = 1'000'000;

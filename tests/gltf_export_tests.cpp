@@ -22,8 +22,8 @@ std::uint32_t u32(const std::vector<std::byte> &b, std::size_t o) {
 Projection3dDefinition fixture() {
   Projection3dDefinition p;
   p.id = "glb.entity";
-  p.materials = {{"mat"}};
-  p.skeleton = Skeleton3d{"rig", {{"root", {}}}};
+  p.materials = {{"mat", 0xffffffffU, 0, 1000000, MaterialAlphaMode::opaque, 500000, false, {}, {}, {}}};
+  p.skeleton = Skeleton3d{"rig", {{"root", {}, {0,0,0}}}};
   Vertex3d a{{0, 0, 0}, {0, 0, 1'000'000}, {0, 0}, {{"root", 1'000'000}}},
       b = a, c = a;
   b.position.x = 1'000'000;
@@ -55,9 +55,11 @@ AnimationClip3d animation() {
 Projection3dDefinition lod_fixture() {
   Projection3dDefinition p;
   p.id = "glb.lod";
-  p.materials = {{"mat"}};
-  Vertex3d a{{0, 0, 0}}, b{{1'000'000, 0, 0}}, c{{1'000'000, 1'000'000, 0}},
-      d{{0, 1'000'000, 0}};
+  p.materials = {{"mat", 0xffffffffU, 0, 1000000, MaterialAlphaMode::opaque, 500000, false, {}, {}, {}}};
+  Vertex3d a{{0, 0, 0}, {0, 0, 1'000'000}, {0, 0}, {}},
+      b{{1'000'000, 0, 0}, {0, 0, 1'000'000}, {0, 0}, {}},
+      c{{1'000'000, 1'000'000, 0}, {0, 0, 1'000'000}, {0, 0}, {}},
+      d{{0, 1'000'000, 0}, {0, 0, 1'000'000}, {0, 0}, {}};
   p.meshes = {
       {"high",
        MeshPurpose::render,

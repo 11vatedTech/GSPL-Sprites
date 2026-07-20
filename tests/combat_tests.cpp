@@ -17,8 +17,8 @@ CombatProgram program() {
 }
 CombatState state() {
   CombatState value;
-  value.actors.emplace("fox", CombatActorState{"fox", "heroes", 80, 100, 50, 100, 0, 0});
-  value.actors.emplace("drone", CombatActorState{"drone", "enemy", 30, 30, 0, 0, 1000, 0});
+  value.actors.emplace("fox", CombatActorState{"fox", "heroes", 80, 100, 50, 100, 0, 0, {}, {}});
+  value.actors.emplace("drone", CombatActorState{"drone", "enemy", 30, 30, 0, 0, 1000, 0, {}, {}});
   return value;
 }
 } // namespace

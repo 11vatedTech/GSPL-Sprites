@@ -15,7 +15,7 @@ Vertex3d v(std::int64_t x, std::int64_t y) {
 Projection3dDefinition projection() {
   Projection3dDefinition p;
   p.id = "lod";
-  p.materials = {{"mat"}, {"other"}};
+  p.materials = {{"mat", 0xffffffffU, 0, 1000000, MaterialAlphaMode::opaque, 500000, false, {}, {}, {}}, {"other", 0xffffffffU, 0, 1000000, MaterialAlphaMode::opaque, 500000, false, {}, {}, {}}};
   Mesh3d high{
       "high",
       MeshPurpose::render,

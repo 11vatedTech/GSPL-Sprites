@@ -27,7 +27,7 @@ AuthoringProject fixture() {
        {"appearance.primary_color", {"#1122AA"}, 0, false},
        {"appearance.accent_color", {"#FFFF44"}, 0, true}},
       {{{"arc", "electric|projectile;directed", 20, 4, 2}, true, false}},
-      {{"bright", {{"appearance.primary_color", "#1122AA"}}, {}}}};
+      {{"bright", {{"appearance.primary_color", "#1122AA"}}, {}}}, {}, {}};
   project.references.push_back(
       {"concept.front", "file:///references/front concept.png",
        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",

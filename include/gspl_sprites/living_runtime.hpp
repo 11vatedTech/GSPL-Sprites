@@ -111,6 +111,8 @@ validate_living_runtime_state(const LivingRuntimeProgram &program,
                               const LivingRuntimeState &state);
 void set_runtime_variable(LivingRuntimeState &state, std::string key,
                           std::int32_t value);
+void set_health_percent(LivingRuntimeState &state, std::uint32_t health,
+                        std::uint32_t maximum_health);
 void observe(LivingRuntimeState &state, const LivingRuntimeProgram &program,
              PerceptionObservation observation);
 [[nodiscard]] RuntimeStepResult

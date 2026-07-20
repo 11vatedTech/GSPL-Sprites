@@ -4,6 +4,8 @@
 #include "gspl_sprites/transformation.hpp"
 #include "gspl_sprites/transformation_manifestation.hpp"
 #include "gspl_sprites/visual_set.hpp"
+#include "gspl_sprites/gltf_export.hpp"
+#include "gspl_sprites/gltf_verify.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -87,7 +89,7 @@ void write_text(const std::filesystem::path &path, std::string_view text) {
   write_binary(path, std::as_bytes(std::span(text)));
 }
 
-static bool has_artifact(const PackageVerification &pv, std::string_view path) {
+[[maybe_unused]] static bool has_artifact(const PackageVerification &pv, std::string_view path) {
   return std::any_of(pv.validation.diagnostics.begin(), pv.validation.diagnostics.end(),
       [&](const Diagnostic &d) { return d.code == "SPRITE_PACKAGE_REQUIRED_ARTIFACT_MISSING" && d.message.find(path) != std::string_view::npos; });
 }
@@ -199,13 +201,13 @@ int main() try {
     TransformationProgram forms{"voltfox.forms", "base", 8,
       {{"base", 0, 0, {"bite"}}, {"storm", 40, 20, {"bite", "storm"}}},
       {{"ascend", "base", "storm", 20, 4, true}, {"descend", "storm", "base", 0, 2, true}}};
-    std::vector<SkeletalClip> clips{{"idle", 10, true}, {"storm.idle", 10, true}, {"ascend", 4, false}, {"descend", 2, false}};
+    std::vector<SkeletalClip> clips{{"idle", 10, true, {}, {}}, {"storm.idle", 10, true, {}, {}}, {"ascend", 4, false, {}, {}}, {"descend", 2, false, {}, {}}};
     AnimationStateGraph graph{"base", {{"base", "idle", {{"storm", "form", Comparison::equal, 1, 0, 0, 1}}}, {"storm", "storm.idle", {{"base", "form", Comparison::equal, 0, 0, 0, 1}}}}};
     std::vector<Projection3dDefinition> proj3ds;
     for (const auto &form : forms.forms) {
       Projection3dDefinition p;
       p.id = "original.voltfox." + form.id + ".3d";
-      p.materials = {{"body", 0x804020FF, 0, 900000}};
+      p.materials = {{"body", 0x804020FF, 0, 900000, MaterialAlphaMode::opaque, 500000, false, {}, {}, {}}};
       p.meshes = {{{"body", MeshPurpose::render, "body", false,
         {{{0, 0, 0}, {0, 0, 1000000}, {0, 0}, {}},
          {{1000, 0, 0}, {0, 0, 1000000}, {0, 0}, {}},
@@ -381,7 +383,130 @@ int main() try {
     std::cout << "  [PASS] Negative — validation failures\n";
   }
 
-  // === 10. Integrity — package corruption ===
+  // === 10. Morphology-driven 3D Voltfox synthesis ===
+  {
+    const std::string morph_seed_text = voltfox_seed_text() + R"(
+[form.Idle]
+transformations=IdleToAttack
+
+[form.Attack]
+transformations=
+
+[transformation.IdleToAttack]
+from_form=Idle
+to_form=Attack
+trigger=combat:threat_detected
+
+[morphology.torso]
+position=0,0,0
+size=40,30,20
+color=#242038
+rotation=0
+
+[morphology.head]
+position=0,25,5
+size=24,20,18
+color=#242038
+rotation=0
+
+[morphology.left_ear]
+position=-8,33,10
+size=8,16,8
+color=#56F1FF
+rotation=-10
+
+[morphology.right_ear]
+position=8,33,10
+size=8,16,8
+color=#56F1FF
+rotation=10
+
+[morphology.left_eye]
+position=-5,27,15
+size=4,4,4
+color=#56F1FF
+rotation=0
+
+[morphology.right_eye]
+position=5,27,15
+size=4,4,4
+color=#56F1FF
+rotation=0
+
+[morphology.muzzle]
+position=0,22,18
+size=10,8,6
+color=#FFFFFF
+rotation=0
+
+[morphology.tail]
+position=-20,-5,0
+size=6,30,6
+color=#242038
+rotation=-15
+
+[morphology.left_front_leg]
+position=-10,-20,-5
+size=8,20,8
+color=#1a1828
+rotation=0
+
+[morphology.right_front_leg]
+position=10,-20,-5
+size=8,20,8
+color=#1a1828
+rotation=0
+
+[morphology.aura]
+position=0,0,0
+size=60,50,40
+color=#56F1FF
+rotation=0
+
+[runtime]
+)";
+    const auto seed = parse_seed(morph_seed_text);
+    check(validate(seed).ok(), "morphology seed validation failed");
+    const auto ir = compile(seed);
+    check(!ir.morphology.empty(), "compiled morphology is empty");
+    check(ir.morphology.size() >= 11, "expected 11+ morphology parts");
+
+    const auto result = synthesize_unified_entity(ir);
+    auto val3d = validate_projection3d(result.proj3d_base);
+    if (!val3d.ok()) {
+      for (const auto& d : val3d.diagnostics) {
+        std::cerr << "  3D base diagnostic: " << d.code << " - " << d.message << '\n';
+      }
+    }
+    check(val3d.ok(), "morphology-driven 3D base projection validation failed");
+    val3d = validate_projection3d(result.proj3d_transformed);
+    if (!val3d.ok()) {
+      for (const auto& d : val3d.diagnostics) {
+        std::cerr << "  3D storm diagnostic: " << d.code << " - " << d.message << '\n';
+      }
+    }
+    check(val3d.ok(), "morphology-driven 3D storm projection validation failed");
+
+    check(result.proj3d_base.skeleton.has_value(), "3D base projection missing skeleton");
+    check(result.proj3d_base.skeleton->joints.size() == 13, "expected 13 bones in voltfox skeleton");
+    check(result.proj3d_base.meshes.size() >= 8, "expected 8+ meshes from morphology parts");
+    check(result.proj3d_transformed.skeleton.has_value(), "3D storm projection missing skeleton");
+    check(result.proj3d_transformed.skeleton->joints.size() == 13, "expected 13 bones in storm skeleton");
+
+    std::uint64_t total_verts = 0, total_tris = 0;
+    for (const auto& mesh : result.proj3d_base.meshes) {
+      total_verts += mesh.vertices.size();
+      total_tris += mesh.triangle_indices.size() / 3;
+    }
+    check(total_verts > 100, "expected >100 total vertices in voltfox 3D mesh");
+    check(total_tris > 100, "expected >100 total triangles in voltfox 3D mesh");
+
+    std::cout << "  [PASS] Morphology-driven 3D synthesis (" << result.proj3d_base.meshes.size()
+              << " meshes, " << total_verts << " verts, " << total_tris << " tris, "
+              << result.proj3d_base.skeleton->joints.size() << " bones)\n";
+  }
+
+  // === 11. Integrity — package corruption ===
   {
     TestFixture fix;
     const auto seed = parse_seed(voltfox_seed_text());
@@ -422,6 +547,120 @@ int main() try {
     check(va.package_identity != vb.package_identity, "different seeds must produce different package identity");
 
     std::cout << "  [PASS] Integrity — identity mismatch between different seeds\n";
+  }
+
+  // === 12. 3D animation synthesis and GLB export ===
+  {
+    const std::string morph_anim_seed = voltfox_seed_text() + R"(
+[form.Idle]
+transformations=IdleToAttack
+
+[form.Attack]
+transformations=
+
+[transformation.IdleToAttack]
+from_form=Idle
+to_form=Attack
+trigger=combat:threat_detected
+
+[morphology.torso]
+position=0,0,0
+size=40,30,20
+color=#242038
+rotation=0
+
+[morphology.head]
+position=0,25,5
+size=24,20,18
+color=#242038
+rotation=0
+
+[morphology.left_ear]
+position=-8,33,10
+size=8,16,8
+color=#56F1FF
+rotation=-10
+
+[morphology.right_ear]
+position=8,33,10
+size=8,16,8
+color=#56F1FF
+rotation=10
+
+[morphology.left_eye]
+position=-5,27,15
+size=4,4,4
+color=#56F1FF
+rotation=0
+
+[morphology.right_eye]
+position=5,27,15
+size=4,4,4
+color=#56F1FF
+rotation=0
+
+[morphology.muzzle]
+position=0,22,18
+size=10,8,6
+color=#FFFFFF
+rotation=0
+
+[morphology.tail]
+position=-20,-5,0
+size=6,30,6
+color=#242038
+rotation=-15
+
+[morphology.left_front_leg]
+position=-10,-20,-5
+size=8,20,8
+color=#1a1828
+rotation=0
+
+[morphology.right_front_leg]
+position=10,-20,-5
+size=8,20,8
+color=#1a1828
+rotation=0
+
+[morphology.aura]
+position=0,0,0
+size=60,50,40
+color=#56F1FF
+rotation=0
+
+[runtime]
+)";
+    const auto seed = parse_seed(morph_anim_seed);
+    check(validate(seed).ok(), "morphology animation seed validation failed");
+    const auto ir = compile(seed);
+    check(!ir.morphology.empty(), "compiled morphology is empty");
+
+    const auto result = synthesize_unified_entity(ir);
+    check(!result.animations3d.empty(), "expected 3D animation clips but got none");
+
+    // Verify animation clips are well-formed
+    for (const auto& clip : result.animations3d) {
+      auto val = validate_animation_clip3d(clip, result.proj3d_base);
+      if (!val.ok()) {
+        for (const auto& d : val.diagnostics)
+          std::cerr << "  clip validation: " << d.code << " - " << d.message << '\n';
+      }
+      check(val.ok(), "3D animation clip validation failed");
+    }
+
+    // Export to GLB with animations
+    const auto glb = export_projection3d_glb(
+        result.proj3d_base,
+        std::span<const AnimationClip3d>(result.animations3d),
+        std::span<const GltfTextureAsset>{}, {});
+    check(glb.size() > 100, "GLB animation export produced empty output");
+    const auto verification = verify_projection3d_glb(glb);
+    check(verification.ok(), "GLB with animations failed verification");
+
+    std::cout << "  [PASS] 3D animation synthesis + GLB export ("
+              << result.animations3d.size() << " clips, "
+              << glb.size() << " bytes)\n";
   }
 
   std::cout << "all GSPL Sprites voltfox integration tests passed\n";
