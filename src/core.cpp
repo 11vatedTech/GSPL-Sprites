@@ -79,7 +79,7 @@ Comparison parse_comparison(std::string_view value) {
 
 
 bool repeatable_field(std::string_view key) {
-  static constexpr std::array values{"ability", "bone", "socket", "clip", "track", "clip_event", "state", "transition", "collision", "collision_window"};
+  static constexpr std::array values{"ability", "storm_ability", "bone", "socket", "clip", "track", "clip_event", "state", "transition", "collision", "collision_window"};
   return std::ranges::find(values, key) != values.end();
 }
 
@@ -144,7 +144,8 @@ SpriteSeed parse_seed(std::string_view source) {
   std::map<std::string, bool> seen;
   std::string current_section_type;
   std::string current_section_name;
-  auto reset_section = [&] { current_section_type.clear(); current_section_name.clear(); };
+  std::string current_section_form;
+  auto reset_section = [&] { current_section_type.clear(); current_section_name.clear(); current_section_form.clear(); };
   auto in_section = [&] { return !current_section_type.empty(); };
   while (std::getline(stream, line)) {
     ++line_number;
@@ -161,7 +162,14 @@ SpriteSeed parse_seed(std::string_view source) {
         current_section_type = inner;
       } else {
         current_section_type = inner.substr(0, dot);
-        current_section_name = inner.substr(dot + 1);
+        auto sub = inner.substr(dot + 1);
+        const auto dot2 = sub.find('.');
+        if (current_section_type == "morphology" && dot2 != std::string::npos) {
+          current_section_name = sub.substr(0, dot2);
+          current_section_form = sub.substr(dot2 + 1);
+        } else {
+          current_section_name = sub;
+        }
         if (current_section_name.empty()) throw std::runtime_error("line " + std::to_string(line_number) + ": empty section sub-name");
       }
       continue;
@@ -184,11 +192,25 @@ SpriteSeed parse_seed(std::string_view source) {
             }
           }
           seed.forms.push_back(std::move(fs));
+        } else if (key == "resource_capacity") {
+          if (!seed.form_attributes.count(current_section_name)) seed.form_attributes[current_section_name] = FormAttributes{};
+          seed.form_attributes[current_section_name].resource_capacity = parse_u32(value, "form.resource_capacity");
+        } else if (key == "collision_scale") {
+          if (!seed.form_attributes.count(current_section_name)) seed.form_attributes[current_section_name] = FormAttributes{};
+          seed.form_attributes[current_section_name].collision_scale = parse_double(value, "form.collision_scale");
+        } else if (key == "ability_envelope") {
+          if (!seed.form_attributes.count(current_section_name)) seed.form_attributes[current_section_name] = FormAttributes{};
+          seed.form_attributes[current_section_name].ability_envelope = parse_double(value, "form.ability_envelope");
+        } else if (key == "max_health") {
+          if (!seed.form_attributes.count(current_section_name)) seed.form_attributes[current_section_name] = FormAttributes{};
+          seed.form_attributes[current_section_name].max_health = parse_u32(value, "form.max_health");
         } else throw std::runtime_error("line " + std::to_string(line_number) + ": unknown form field " + key);
       } else if (current_section_type == "transformation") {
         if (key == "from_form") { seed.transformations.push_back({current_section_name, value, {}, {}}); }
         else if (key == "to_form") { if (!seed.transformations.empty() && seed.transformations.back().id == current_section_name && seed.transformations.back().to_form.empty()) seed.transformations.back().to_form = value; else throw std::runtime_error("line " + std::to_string(line_number) + ": to_form requires preceding from_form"); }
         else if (key == "trigger") { if (!seed.transformations.empty() && seed.transformations.back().id == current_section_name) seed.transformations.back().trigger_condition = value; else throw std::runtime_error("line " + std::to_string(line_number) + ": trigger requires preceding from_form"); }
+        else if (key == "duration_ticks") { if (!seed.transformations.empty() && seed.transformations.back().id == current_section_name) seed.transformations.back().duration_ticks = parse_u32(value, "transformation.duration_ticks"); else throw std::runtime_error("line " + std::to_string(line_number) + ": duration_ticks requires preceding from_form"); }
+        else if (key == "resource_cost") { if (!seed.transformations.empty() && seed.transformations.back().id == current_section_name) seed.transformations.back().resource_cost = parse_u32(value, "transformation.resource_cost"); else throw std::runtime_error("line " + std::to_string(line_number) + ": resource_cost requires preceding from_form"); }
         else throw std::runtime_error("line " + std::to_string(line_number) + ": unknown transformation field " + key);
       } else if (current_section_type == "morphology") {
         MorphologyPart part;
@@ -196,13 +218,26 @@ SpriteSeed parse_seed(std::string_view source) {
         else if (key == "size") { const auto v = parse_double_list(value, 3, "morphology.size"); part.size_x = v[0]; part.size_y = v[1]; part.size_z = v[2]; }
         else if (key == "color") { part.color = value; }
         else if (key == "rotation") { part.rotation_degrees = parse_double(value, "morphology.rotation"); }
+        else if (key == "parent") { part.parent = value; }
+        else if (key == "emissive") { part.emissive = parse_bool(value, "morphology.emissive"); }
+        else if (key == "electrical_marking") { part.electrical_marking = parse_bool(value, "morphology.electrical_marking"); }
         else throw std::runtime_error("line " + std::to_string(line_number) + ": unknown morphology field " + key);
-        if (!seed.morphology.emplace(current_section_name, part).second) {
-          auto& existing = seed.morphology[current_section_name];
-          if (key == "position") { existing.x = part.x; existing.y = part.y; existing.z = part.z; }
-          else if (key == "size") { existing.size_x = part.size_x; existing.size_y = part.size_y; existing.size_z = part.size_z; }
-          else if (key == "color") { existing.color = part.color; }
-          else if (key == "rotation") { existing.rotation_degrees = part.rotation_degrees; }
+        auto upsert = [&](auto& map) {
+          if (!map.emplace(current_section_name, part).second) {
+            auto& existing = map[current_section_name];
+            if (key == "position") { existing.x = part.x; existing.y = part.y; existing.z = part.z; }
+            else if (key == "size") { existing.size_x = part.size_x; existing.size_y = part.size_y; existing.size_z = part.size_z; }
+            else if (key == "color") { existing.color = part.color; }
+            else if (key == "rotation") { existing.rotation_degrees = part.rotation_degrees; }
+            else if (key == "parent") { existing.parent = part.parent; }
+            else if (key == "emissive") { existing.emissive = part.emissive; }
+            else if (key == "electrical_marking") { existing.electrical_marking = part.electrical_marking; }
+          }
+        };
+        if (current_section_form.empty()) {
+          upsert(seed.morphology);
+        } else {
+          upsert(seed.form_morphology_overrides[current_section_form]);
         }
       } else if (current_section_type == "runtime") {
         if (!seed.runtime) seed.runtime = RuntimeAttributes{};
@@ -228,7 +263,16 @@ SpriteSeed parse_seed(std::string_view source) {
     else if (key == "entropy_root") seed.entropy_root = parse_u64(value, key);
     else if (key == "primary_color") seed.primary_color = value;
     else if (key == "accent_color") seed.accent_color = value;
-    else if (key == "ability") {
+    else if (key == "storm_primary_color") seed.storm_primary_color = value;
+    else if (key == "storm_accent_color") seed.storm_accent_color = value;
+    else if (key == "emissive_color") seed.emissive_color = value;
+    else if (key == "aura_color") seed.aura_color = value;
+    else if (key == "storm_ability") {
+      if (seed.storm_abilities.size() >= 64) throw std::runtime_error("storm_ability count exceeds 64");
+      const auto parts = split(value, '|');
+      if (parts.size() != 5) throw std::runtime_error("line " + std::to_string(line_number) + ": storm_ability requires id|effect|cost|cooldown|active");
+      seed.storm_abilities.push_back({parts[0], parts[1], parse_u32(parts[2], "storm_ability.cost"), parse_u32(parts[3], "storm_ability.cooldown"), parse_u32(parts[4], "storm_ability.active")});
+    } else if (key == "ability") {
       if (seed.abilities.size() >= 64) throw std::runtime_error("ability count exceeds 64");
       const auto parts = split(value, '|');
       if (parts.size() != 5) throw std::runtime_error("line " + std::to_string(line_number) + ": ability requires id|effect|cost|cooldown|active");
@@ -296,7 +340,7 @@ SpriteSeed parse_seed(std::string_view source) {
 ValidationResult validate(const SpriteSeed& seed) {
   ValidationResult result;
   auto require = [&](bool condition, std::string code, std::string message) { if (!condition) result.diagnostics.push_back({std::move(code), std::move(message)}); };
-  require(seed.schema == "gspl.sprite-seed/0.1", "SPRITE_SCHEMA_UNSUPPORTED", "schema must be gspl.sprite-seed/0.1");
+  require(seed.schema == "gspl.sprite-seed/0.1" || seed.schema == "gspl.sprite-seed/0.2", "SPRITE_SCHEMA_UNSUPPORTED", "schema must be gspl.sprite-seed/0.1 or 0.2");
   require(!seed.stable_id.empty() && seed.stable_id.size() <= 128, "SPRITE_ID_INVALID", "stable id must contain 1..128 bytes");
   require(!seed.name.empty() && seed.name.size() <= 128, "SPRITE_NAME_INVALID", "name must contain 1..128 bytes");
   require(!seed.classification.empty(), "SPRITE_CLASSIFICATION_REQUIRED", "classification is required");
@@ -359,7 +403,11 @@ std::string canonicalize(const SpriteSeed& seed) {
   }
   out << "],\"animationClips\":" << canonicalize_clips(seed.clips) << ",\"animationStateGraph\":";
   if(seed.animation_graph) out << canonicalize_state_graph(*seed.animation_graph); else out << "null";
-  out << ",\"classification\":\"" << escape_json(seed.classification) << "\",\"collisions\":" << canonicalize_collisions(seed.collision_shapes,seed.collision_windows) << ",\"colors\":{\"accent\":\"" << seed.accent_color << "\",\"primary\":\"" << seed.primary_color << "\"},\"entropyRoot\":" << seed.entropy_root << ",\"id\":\"" << escape_json(seed.stable_id) << "\",\"name\":\"" << escape_json(seed.name) << "\",\"rig\":";
+  out << ",\"classification\":\"" << escape_json(seed.classification) << "\",\"collisions\":" << canonicalize_collisions(seed.collision_shapes,seed.collision_windows) << ",\"colors\":{\"accent\":\"" << seed.accent_color << "\",\"primary\":\"" << seed.primary_color << "\"";
+  if(!seed.storm_primary_color.empty()) out << ",\"stormPrimary\":\"" << seed.storm_primary_color << "\",\"stormAccent\":\"" << seed.storm_accent_color << "\"";
+  if(!seed.emissive_color.empty()) out << ",\"emissive\":\"" << seed.emissive_color << "\"";
+  if(!seed.aura_color.empty()) out << ",\"aura\":\"" << seed.aura_color << "\"";
+  out << "},\"entropyRoot\":" << seed.entropy_root << ",\"id\":\"" << escape_json(seed.stable_id) << "\",\"name\":\"" << escape_json(seed.name) << "\",\"rig\":";
   if(seed.rig) out << canonicalize_rig(*seed.rig); else out << "null";
   out << ",\"rights\":\"" << rights_text(seed.rights) << "\",\"schema\":\"" << seed.schema << "\"}";
   return out.str();
@@ -403,18 +451,30 @@ SpriteIr compile(const SpriteSeed& seed) {
   SpriteIr ir;
   ir.seed_identity = sha256(canonicalize(seed));
   ir.entity_id = seed.stable_id;
+  ir.name = seed.name;
+  ir.classification = seed.classification;
+  ir.rights = seed.rights;
+  ir.provenance_hash = ir.seed_identity;
+  ir.schema_version = seed.schema;
   ir.abilities = seed.abilities;
   ir.primary_color = seed.primary_color;
   ir.accent_color = seed.accent_color;
+  ir.storm_primary_color = seed.storm_primary_color;
+  ir.storm_accent_color = seed.storm_accent_color;
+  ir.emissive_color = seed.emissive_color;
+  ir.aura_color = seed.aura_color;
   ir.rig = seed.rig;
   ir.clips = seed.clips;
   ir.animation_graph = seed.animation_graph;
   ir.collision_shapes = seed.collision_shapes;
   ir.collision_windows = seed.collision_windows;
   ir.form_definitions = std::move(form_defs);
+  ir.form_attributes = seed.form_attributes;
   ir.transformation_deltas = std::move(trans_deltas);
   ir.morphology = seed.morphology;
+  ir.form_morphology_overrides = seed.form_morphology_overrides;
   ir.animation_intents = std::move(anim_intents);
+  ir.storm_abilities = seed.storm_abilities;
   ir.runtime = rt;
   return ir;
 }

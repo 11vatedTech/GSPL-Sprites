@@ -81,6 +81,26 @@ struct ActiveRuntimeAction {
   std::uint32_t remaining_ticks{};
 };
 
+struct EntityStateIdentity {
+  std::string entity_def_id;
+  std::string instance_id;
+  std::string current_form;
+  std::string active_transformation;
+  std::uint64_t transformation_start_tick{};
+  std::uint64_t transformation_completion_tick{};
+  double transformation_progress{};
+  std::uint64_t runtime_tick{};
+  std::uint32_t health{100};
+  std::uint32_t resource{100};
+  std::map<std::string, std::uint32_t, std::less<>> cooldowns;
+  std::map<std::string, std::uint32_t, std::less<>> statuses;
+  std::string active_ability;
+  std::string projectile_state;
+  std::string combo_state;
+  std::string behavior_state;
+  std::string deterministic_event_hash;
+};
+
 struct LivingRuntimeState {
   std::uint64_t tick{};
   std::uint64_t next_sequence{};
@@ -121,5 +141,26 @@ step_living_runtime(const LivingRuntimeProgram &program,
 [[nodiscard]] bool interrupt_living_action(const LivingRuntimeProgram &program,
                                            LivingRuntimeState &state,
                                            std::vector<RuntimeEvent> &events);
+[[nodiscard]] EntityStateIdentity
+capture_entity_identity(const LivingRuntimeState &state,
+                        std::string_view entity_def_id,
+                        std::string_view instance_id,
+                        std::string_view current_form,
+                        std::string_view active_transformation,
+                        std::string_view active_ability,
+                        std::string_view projectile_state,
+                        std::string_view combo_state,
+                        std::string_view behavior_state);
+[[nodiscard]] EntityStateIdentity
+capture_entity_identity(const LivingRuntimeState &state,
+                        const LivingRuntimeState &combat_state,
+                        const LivingRuntimeState &transformation_state,
+                        std::string_view entity_def_id,
+                        std::string_view instance_id);
+[[nodiscard]] std::string
+entity_identity_hash(const EntityStateIdentity &identity);
+[[nodiscard]] bool
+entity_identities_match(const EntityStateIdentity &a,
+                        const EntityStateIdentity &b);
 
 } // namespace gspl::sprites

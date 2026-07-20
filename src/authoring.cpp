@@ -548,15 +548,22 @@ lower_authoring_project(const AuthoringProject &project,
                   values.at("appearance.primary_color"),
                   values.at("appearance.accent_color"),
                   {},
+                  {},
+                  {},
+                  {},
+                  {},
+                  {},
                   std::nullopt,
                   {},
                   std::nullopt,
-                    {},
-                    {},
-                    {},
-                    {},
-                    {},
-                    std::nullopt};
+                  {},
+                  {},
+                  {},
+                  {},
+                  {},
+                  {},
+                  {},
+                  std::nullopt};
   for (const auto &ability : project.abilities)
     if (ability.enabled && !disabled.contains(ability.value.id))
       seed.abilities.push_back(ability.value);

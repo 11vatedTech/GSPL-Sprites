@@ -1,9 +1,11 @@
 #include "gspl_sprites/living_runtime.hpp"
+#include "gspl_sprites/core.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <limits>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 #include <tuple>
 
@@ -345,5 +347,68 @@ bool interrupt_living_action(const LivingRuntimeProgram &program,
       event(state, RuntimeEventKind::action_interrupted, definition->id));
   state.active_action.reset();
   return true;
+}
+
+EntityStateIdentity capture_entity_identity(
+    const LivingRuntimeState& state, std::string_view entity_def_id,
+    std::string_view instance_id, std::string_view current_form,
+    std::string_view active_transformation, std::string_view active_ability,
+    std::string_view projectile_state, std::string_view combo_state,
+    std::string_view behavior_state) {
+  (void)projectile_state; (void)combo_state;
+  EntityStateIdentity id;
+  id.entity_def_id = entity_def_id;
+  id.instance_id = instance_id;
+  id.current_form = current_form;
+  id.active_transformation = active_transformation;
+  id.runtime_tick = state.tick;
+  id.resource = state.energy;
+  id.cooldowns = state.cooldowns;
+  id.active_ability = active_ability;
+  id.projectile_state = projectile_state;
+  id.combo_state = combo_state;
+  id.behavior_state = behavior_state;
+  if (state.variables.count("health")) id.health = static_cast<std::uint32_t>(state.variables.at("health"));
+  return id;
+}
+
+EntityStateIdentity capture_entity_identity(
+    const LivingRuntimeState& living_state,
+    const LivingRuntimeState& combat_state,
+    const LivingRuntimeState& transformation_state,
+    std::string_view entity_def_id, std::string_view instance_id) {
+  (void)transformation_state;
+  EntityStateIdentity id;
+  id.entity_def_id = entity_def_id;
+  id.instance_id = instance_id;
+  id.runtime_tick = living_state.tick;
+  id.resource = living_state.energy;
+  id.cooldowns = living_state.cooldowns;
+  if (living_state.variables.count("health")) id.health = static_cast<std::uint32_t>(living_state.variables.at("health"));
+  if (living_state.variables.count("form")) id.current_form = std::to_string(living_state.variables.at("form"));
+  if (living_state.variables.count("transformation")) id.active_transformation = std::to_string(living_state.variables.at("transformation"));
+  if (living_state.variables.count("ability")) id.active_ability = std::to_string(living_state.variables.at("ability"));
+  if (living_state.variables.count("behavior")) id.behavior_state = std::to_string(living_state.variables.at("behavior"));
+  for (const auto& [key, val] : combat_state.cooldowns) id.cooldowns[key] = val;
+  return id;
+}
+
+std::string entity_identity_hash(const EntityStateIdentity& identity) {
+  std::ostringstream out;
+  out << identity.entity_def_id << "|" << identity.instance_id << "|"
+      << identity.current_form << "|" << identity.active_transformation << "|"
+      << identity.transformation_start_tick << "|" << identity.runtime_tick << "|"
+      << identity.health << "|" << identity.resource << "|";
+  for (const auto& [k, v] : identity.cooldowns) out << k << ":" << v << ",";
+  out << "|";
+  for (const auto& [k, v] : identity.statuses) out << k << ":" << v << ",";
+  out << "|" << identity.active_ability << "|" << identity.projectile_state
+      << "|" << identity.combo_state << "|" << identity.behavior_state
+      << "|" << identity.deterministic_event_hash;
+  return sha256(out.str());
+}
+
+bool entity_identities_match(const EntityStateIdentity& a, const EntityStateIdentity& b) {
+  return entity_identity_hash(a) == entity_identity_hash(b);
 }
 } // namespace gspl::sprites

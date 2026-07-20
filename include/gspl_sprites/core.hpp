@@ -45,6 +45,9 @@ struct MorphologyPart {
   double size_z{1.0};
   std::string color;
   double rotation_degrees{};
+  std::string parent;
+  bool emissive{};
+  bool electrical_marking{};
 };
 
 struct TransformationSeed {
@@ -52,6 +55,8 @@ struct TransformationSeed {
   std::string from_form;
   std::string to_form;
   std::string trigger_condition;
+  std::uint32_t duration_ticks{};
+  std::uint32_t resource_cost{};
 };
 
 struct FormSeed {
@@ -67,6 +72,13 @@ struct RuntimeAttributes {
   std::vector<std::pair<std::string, std::string>> animation_intents;
 };
 
+struct FormAttributes {
+  std::uint32_t resource_capacity{100};
+  double collision_scale{1.0};
+  double ability_envelope{1.0};
+  std::uint32_t max_health{100};
+};
+
 struct SpriteSeed {
   std::string schema;
   std::string stable_id;
@@ -76,15 +88,22 @@ struct SpriteSeed {
   std::uint64_t entropy_root{};
   std::string primary_color;
   std::string accent_color;
+  std::string storm_primary_color;
+  std::string storm_accent_color;
+  std::string emissive_color;
+  std::string aura_color;
   std::vector<AbilitySeed> abilities;
+  std::vector<AbilitySeed> storm_abilities;
   std::optional<RigDefinition> rig;
   std::vector<SkeletalClip> clips;
   std::optional<AnimationStateGraph> animation_graph;
   std::vector<CollisionShape> collision_shapes;
   std::vector<CollisionWindow> collision_windows;
   std::vector<FormSeed> forms;
+  std::map<std::string, FormAttributes> form_attributes;
   std::vector<TransformationSeed> transformations;
   std::map<std::string, MorphologyPart, std::less<>> morphology;
+  std::map<std::string, std::map<std::string, MorphologyPart, std::less<>>, std::less<>> form_morphology_overrides;
   std::optional<RuntimeAttributes> runtime;
 };
 
@@ -105,21 +124,44 @@ struct AnimationIntent {
   std::string clip_name;
 };
 
+struct ProjectileDefinition {
+  std::string id;
+  std::string origin_socket;
+  double speed_mm_per_tick{};
+  double collision_radius_mm{};
+  std::uint32_t damage{};
+  std::string status_id;
+  std::uint32_t status_duration_ticks{};
+};
+
 struct SpriteIr {
   std::string seed_identity;
   std::string entity_id;
+  std::string name;
+  std::string classification;
+  RightsClass rights{RightsClass::unknown};
+  std::string provenance_hash;
+  std::string schema_version{"gspl.sprite-seed/0.2"};
   std::vector<AbilitySeed> abilities;
   std::string primary_color;
   std::string accent_color;
+  std::string storm_primary_color;
+  std::string storm_accent_color;
+  std::string emissive_color;
+  std::string aura_color;
   std::optional<RigDefinition> rig;
   std::vector<SkeletalClip> clips;
   std::optional<AnimationStateGraph> animation_graph;
   std::vector<CollisionShape> collision_shapes;
   std::vector<CollisionWindow> collision_windows;
   std::vector<FormDefinition> form_definitions;
+  std::map<std::string, FormAttributes> form_attributes;
   std::vector<TransformationDelta> transformation_deltas;
   std::map<std::string, MorphologyPart, std::less<>> morphology;
+  std::map<std::string, std::map<std::string, MorphologyPart, std::less<>>, std::less<>> form_morphology_overrides;
   std::vector<AnimationIntent> animation_intents;
+  std::vector<ProjectileDefinition> projectiles;
+  std::vector<AbilitySeed> storm_abilities;
   RuntimeAttributes runtime;
 };
 
