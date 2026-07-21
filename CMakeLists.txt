@@ -125,6 +125,17 @@ add_library(gspl_sprites_core
   src/authoring_cli.cpp
   src/synthesis.cpp
   src/headless_evidence.cpp
+  src/source.cpp
+  src/diagnostics.cpp
+  src/lexer.cpp
+  src/parser.cpp
+  src/modules.cpp
+  src/types.cpp
+  src/expressions.cpp
+  src/genes.cpp
+  src/ir.cpp
+  src/passes.cpp
+  src/cli.cpp
 )
 target_include_directories(gspl_sprites_core PUBLIC include)
 if(MSVC)
@@ -144,6 +155,9 @@ endfunction()
 add_executable(gspl-sprites src/main.cpp)
 target_link_libraries(gspl-sprites PRIVATE gspl_sprites_core)
 gspl_stage_onnxruntime(gspl-sprites)
+
+add_executable(gsplc src/gsplc_main.cpp)
+target_link_libraries(gsplc PRIVATE gspl_sprites_core)
 
 enable_testing()
 add_executable(gspl_sprites_tests tests/core_tests.cpp)
@@ -340,6 +354,10 @@ add_test(NAME gspl_sprites_fuzz_parsing_tests COMMAND gspl_sprites_fuzz_parsing_
 add_executable(gspl_sprites_mutation_tests tests/mutation_tests.cpp)
 target_link_libraries(gspl_sprites_mutation_tests PRIVATE gspl_sprites_core)
 add_test(NAME gspl_sprites_mutation_tests COMMAND gspl_sprites_mutation_tests)
+
+add_executable(gspl_sprites_compiler_tests tests/gspl_compiler_tests.cpp)
+target_link_libraries(gspl_sprites_compiler_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_compiler_tests COMMAND gspl_sprites_compiler_tests)
 
 if(BUILD_PREVIEW)
   find_package(SDL2 QUIET)
