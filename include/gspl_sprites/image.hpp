@@ -43,7 +43,13 @@ struct FrameSource {
   std::int32_t pivot_x{};
   std::int32_t pivot_y{};
   std::uint32_t duration_ticks{1};
+  std::string frame_hash{};
 };
+
+[[nodiscard]] std::string compute_frame_hash(const ImageRgba8& image);
+[[nodiscard]] std::string compute_frame_hash(const FrameSource& frame);
+struct PixelAABB { std::uint32_t min_x{}; std::uint32_t min_y{}; std::uint32_t max_x{}; std::uint32_t max_y{}; bool empty{true}; };
+[[nodiscard]] PixelAABB compute_pixel_aabb(const ImageRgba8& image);
 
 struct AtlasPlacement {
   std::string frame_id;
@@ -72,5 +78,7 @@ struct AnimationClip {
 };
 [[nodiscard]] ValidationResult validate_animation(const AnimationClip& clip,
                                                   std::span<const AtlasPlacement> frames);
+[[nodiscard]] ValidationResult validate_frame_distinctness(std::span<const FrameSource> frames,
+                                                           std::span<const AnimationClip> clips);
 
 } // namespace gspl::sprites

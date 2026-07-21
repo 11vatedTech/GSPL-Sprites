@@ -1,0 +1,19 @@
+{
+  "_schema_version": "gspl_evidence_v1",
+  "entity_id": "headless.test",
+  "seed": 42,
+  "total_ticks": 150,
+  "events": [
+    {"tick": 0, "kind": "spawn", "form_before": "", "form_after": "Idle", "health": 100, "status_id": "", "ability_name": ""},
+    {"tick": 10, "kind": "form_change", "form_before": "Idle", "form_after": "Running", "health": 100, "status_id": "", "ability_name": ""},
+    {"tick": 30, "kind": "ability_use", "form_before": "", "form_after": "", "health": 20, "status_id": "", "ability_name": "take_damage"},
+    {"tick": 30, "kind": "damage_taken", "form_before": "", "form_after": "", "health": 20, "status_id": "", "ability_name": ""},
+    {"tick": 35, "kind": "form_change", "form_before": "Running", "form_after": "Hurt", "health": 20, "status_id": "", "ability_name": ""},
+    {"tick": 60, "kind": "form_change", "form_before": "Hurt", "form_after": "Idle", "health": 80, "status_id": "", "ability_name": ""},
+    {"tick": 80, "kind": "form_change", "form_before": "Idle", "form_after": "Attack", "health": 80, "status_id": "", "ability_name": ""},
+    {"tick": 90, "kind": "ability_use", "form_before": "", "form_after": "", "health": 80, "status_id": "", "ability_name": "directional-lightning"},
+    {"tick": 100, "kind": "form_change", "form_before": "Attack", "form_after": "Special", "health": 80, "status_id": "", "ability_name": ""},
+    {"tick": 120, "kind": "form_change", "form_before": "Special", "form_after": "Idle", "health": 80, "status_id": "", "ability_name": ""},
+    {"tick": 150, "kind": "despawn", "form_before": "", "form_after": "", "health": 80, "status_id": "", "ability_name": ""}
+  ]
+}

@@ -1,6 +1,16 @@
 /build/
+/build-*/
 /.vs/
 /.cache/
+/.codex/
+/.cursor/
+/.windsurf/
 *.user
 *.pdb
+*.obj
+/.github/prompts/
+/.github/skills/
+/cross_representation_evidence_*.txt
+/implementation_plan.md
+/.debug_test.cpp
 

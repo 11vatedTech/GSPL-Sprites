@@ -177,6 +177,42 @@ struct PackageGovernanceEvidence {
   std::string target_compatibility_json{"{\"reports\":[]}"};
 };
 
+struct ResourceLimits {
+  std::uint64_t max_seed_bytes{1'048'576};
+  std::uint32_t max_forms{16};
+  std::uint32_t max_transformations{32};
+  std::uint32_t max_bones{64};
+  std::uint32_t max_sockets{32};
+  std::uint32_t max_animation_clips{32};
+  std::uint32_t max_frames{1024};
+  std::uint32_t max_frame_width{2048};
+  std::uint32_t max_frame_height{2048};
+  std::uint32_t max_25d_planes{32};
+  std::uint32_t max_vertices{65535};
+  std::uint64_t max_package_bytes{268'435'456};
+  std::uint32_t max_runtime_entities{64};
+  std::uint64_t max_source_bytes{1'048'576};
+  std::uint32_t max_token_count{65536};
+  std::uint32_t max_token_length{1024};
+  std::uint32_t max_string_length{4096};
+  std::uint32_t max_nesting_depth{32};
+  std::uint32_t max_module_count{64};
+  std::uint32_t max_import_count{64};
+  std::uint32_t max_import_depth{8};
+  std::uint32_t max_ast_nodes{65536};
+  std::uint32_t max_gene_count{1024};
+  std::uint32_t max_expression_depth{64};
+  std::uint32_t max_constraint_count{1024};
+  std::uint32_t max_sprite_ir_nodes{65536};
+  std::uint32_t max_compiler_pass_count{64};
+  std::uint32_t max_artifact_node_count{65536};
+  std::uint32_t max_package_entry_count{4096};
+  std::uint32_t max_runtime_event_count{65536};
+};
+
+[[nodiscard]] ValidationResult enforce_resource_limits(const SpriteSeed& seed, const ResourceLimits& limits = {});
+[[nodiscard]] ValidationResult enforce_resource_limits_source(std::string_view source, const ResourceLimits& limits = {});
+
 [[nodiscard]] SpriteSeed parse_seed(std::string_view source);
 [[nodiscard]] ValidationResult validate(const SpriteSeed &seed);
 [[nodiscard]] std::string canonicalize(const SpriteSeed &seed);

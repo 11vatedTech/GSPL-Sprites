@@ -86,4 +86,8 @@ struct SynthesisResult {
 
 [[nodiscard]] SynthesisResult synthesize_unified_entity(const SpriteIr& ir);
 
+[[nodiscard]] ValidationResult enforce_resource_limits(const SpriteSeed& seed,
+                                                         const SynthesisResult& result,
+                                                         const ResourceLimits& limits = {});
+
 } // namespace gspl::sprites

@@ -329,6 +329,8 @@ add_test(NAME gspl_sprites_entity_identity_tests COMMAND gspl_sprites_entity_ide
 
 add_executable(gspl_sprites_headless_evidence_tests tests/headless_evidence_tests.cpp)
 target_link_libraries(gspl_sprites_headless_evidence_tests PRIVATE gspl_sprites_core)
+target_compile_definitions(gspl_sprites_headless_evidence_tests PRIVATE
+  GSPL_SPRITES_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 add_test(NAME gspl_sprites_headless_evidence_tests COMMAND gspl_sprites_headless_evidence_tests)
 
 add_executable(gspl_sprites_fuzz_parsing_tests tests/fuzz_parsing_tests.cpp)

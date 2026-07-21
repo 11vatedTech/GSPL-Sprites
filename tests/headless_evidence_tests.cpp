@@ -1,6 +1,9 @@
 #include "gspl_sprites/headless_evidence.hpp"
 
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <sstream>
 #include <stdexcept>
 #include <string_view>
 
@@ -48,6 +51,8 @@ int main() try {
   check(!json.empty(), "json is empty");
   check(json.front() == '{', "json does not start with '{'");
   check(json.back() == '}', "json does not end with '}'");
+  check(json.find("\"_schema_version\": \"gspl_evidence_v1\"") != std::string::npos,
+        "json must include _schema_version field");
 
   // 4. Trace is deterministic (two runs with same seed produce same events)
   const auto trace2 = run_headless_evidence(ir);
@@ -60,6 +65,19 @@ int main() try {
   // 5. Headless mode produces no graphical output (no dependency on graphics)
   // Already demonstrated by the fact that the test compiles and runs without
   // any graphics library (no SDL, no OpenGL, etc.)
+
+  // 6. JSON output matches committed oracle
+  {
+    const auto oracle_path = std::filesystem::path(GSPL_SPRITES_SOURCE_DIR) / "tests" / "evidence_oracle.json";
+    std::ifstream in(oracle_path);
+    check(in.good(), "cannot open oracle file: tests/evidence_oracle.json");
+    std::stringstream buf;
+    buf << in.rdbuf();
+    const auto oracle = buf.str();
+    check(!oracle.empty(), "oracle file is empty");
+    check(json == oracle, "JSON output differs from committed oracle");
+  }
+
   std::cout << "all gspl sprites headless evidence tests passed ("
             << trace.events.size() << " events, "
             << form_change_count << " form changes)\n";

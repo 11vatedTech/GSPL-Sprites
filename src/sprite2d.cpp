@@ -48,7 +48,7 @@ TrimmedFrame trim_transparent(const FrameSource& source, std::uint8_t alpha_thre
   if(!found)throw std::invalid_argument("cannot trim a frame with no foreground pixels");
   const auto width=right-left+1;const auto height=bottom-top+1;ImageRgba8 image{width,height,source.image.color_space,source.image.alpha_mode,std::vector<std::uint8_t>(static_cast<std::size_t>(width)*height*4ULL)};
   for(std::uint32_t y=0;y<height;++y){const auto begin=(static_cast<std::size_t>(top+y)*source.image.width+left)*4ULL;const auto target=static_cast<std::size_t>(y)*width*4ULL;std::ranges::copy_n(source.image.pixels.begin()+static_cast<std::ptrdiff_t>(begin),static_cast<std::size_t>(width)*4ULL,image.pixels.begin()+static_cast<std::ptrdiff_t>(target));}
-  return{{source.id,std::move(image),source.pivot_x-static_cast<std::int32_t>(left),source.pivot_y-static_cast<std::int32_t>(top),source.duration_ticks},left,top,source.image.width,source.image.height};
+  return{{source.id,std::move(image),source.pivot_x-static_cast<std::int32_t>(left),source.pivot_y-static_cast<std::int32_t>(top),source.duration_ticks,{}},left,top,source.image.width,source.image.height};
 }
 
 FrameSource scale_nearest(const FrameSource& source, std::uint32_t integer_scale, const ImageLimits& limits) {
@@ -58,7 +58,7 @@ FrameSource scale_nearest(const FrameSource& source, std::uint32_t integer_scale
   ImageRgba8 output{static_cast<std::uint32_t>(width),static_cast<std::uint32_t>(height),source.image.color_space,source.image.alpha_mode,std::vector<std::uint8_t>(static_cast<std::size_t>(pixels)*4ULL)};
   for(std::uint32_t y=0;y<output.height;++y)for(std::uint32_t x=0;x<output.width;++x){const auto input=(static_cast<std::size_t>(y/integer_scale)*source.image.width+x/integer_scale)*4ULL;const auto target=(static_cast<std::size_t>(y)*output.width+x)*4ULL;std::ranges::copy_n(source.image.pixels.begin()+static_cast<std::ptrdiff_t>(input),4,output.pixels.begin()+static_cast<std::ptrdiff_t>(target));}
   const auto scaled_pivot_x=static_cast<std::int64_t>(source.pivot_x)*integer_scale;const auto scaled_pivot_y=static_cast<std::int64_t>(source.pivot_y)*integer_scale;if(scaled_pivot_x<std::numeric_limits<std::int32_t>::min()||scaled_pivot_x>std::numeric_limits<std::int32_t>::max()||scaled_pivot_y<std::numeric_limits<std::int32_t>::min()||scaled_pivot_y>std::numeric_limits<std::int32_t>::max())throw std::invalid_argument("scaled pivot exceeds integer range");
-  return{source.id,std::move(output),static_cast<std::int32_t>(scaled_pivot_x),static_cast<std::int32_t>(scaled_pivot_y),source.duration_ticks};
+  return{source.id,std::move(output),static_cast<std::int32_t>(scaled_pivot_x),static_cast<std::int32_t>(scaled_pivot_y),source.duration_ticks,{}};
 }
 
 std::vector<PaletteEntry> extract_palette(const ImageRgba8& image, std::uint32_t maximum_entries) {

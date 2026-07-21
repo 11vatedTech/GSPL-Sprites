@@ -33,6 +33,17 @@ std::string escape_json(std::string_view value) {
 } // namespace
 
 EvidenceTrace run_headless_evidence(const SpriteIr& ir) {
+  {
+    ResourceLimits rl;
+    const auto src = ir.abilities.size() + ir.storm_abilities.size() + ir.form_definitions.size() +
+                     ir.transformation_deltas.size() + ir.clips.size() + ir.collision_shapes.size() +
+                     ir.collision_windows.size() + ir.projectiles.size() + ir.animation_intents.size();
+    if (src > rl.max_sprite_ir_nodes) {
+      throw std::runtime_error("RESOURCE_SPRITE_IR_NODES: SpriteIR node count " +
+                               std::to_string(src) + " exceeds maximum " +
+                               std::to_string(rl.max_sprite_ir_nodes));
+    }
+  }
   EvidenceTrace trace;
   trace.entity_id = ir.entity_id;
   trace.seed = 42;
@@ -166,12 +177,21 @@ EvidenceTrace run_headless_evidence(const SpriteIr& ir) {
   emit_event(150, EvidenceEventKind::despawn, "", "", current_health(), "", "");
 
   trace.total_ticks = 150;
+  {
+    ResourceLimits rl;
+    if (trace.events.size() > rl.max_runtime_event_count) {
+      throw std::runtime_error("RESOURCE_RUNTIME_EVENT_COUNT: evidence trace events " +
+                               std::to_string(trace.events.size()) + " exceeds maximum " +
+                               std::to_string(rl.max_runtime_event_count));
+    }
+  }
   return trace;
 }
 
 std::string write_trace_json(const EvidenceTrace& trace) {
   std::ostringstream out;
   out << "{\n";
+  out << "  \"_schema_version\": \"gspl_evidence_v1\",\n";
   out << "  \"entity_id\": \"" << escape_json(trace.entity_id) << "\",\n";
   out << "  \"seed\": " << trace.seed << ",\n";
   out << "  \"total_ticks\": " << trace.total_ticks << ",\n";
@@ -183,7 +203,9 @@ std::string write_trace_json(const EvidenceTrace& trace) {
         << "\", \"form_before\": \"" << escape_json(ev.form_before)
         << "\", \"form_after\": \"" << escape_json(ev.form_after)
         << "\", \"health\": " << ev.health
-        << "}";
+        << ", \"status_id\": \"" << escape_json(ev.status_id)
+        << "\", \"ability_name\": \"" << escape_json(ev.ability_name)
+        << "\"}";
     if (i + 1 < trace.events.size())
       out << ",";
     out << "\n";

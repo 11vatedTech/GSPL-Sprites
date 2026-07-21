@@ -432,14 +432,54 @@ int main() {
       std::cout << "  [PASS] Mutation killed: accept unresolved plane asset\n";
     }
 
-    // 13. Make animation frames identical: duplicate frame IDs must be caught
+    // 13. Make animation frames identical: duplicate pixel content must be caught
     {
-      FrameSource a, b;
-      a.id = "dup";
-      b.id = "dup";
-      // Frame distinctness test verifies unique IDs; duplicate IDs would be caught
-      check(a.id == b.id, "identical frames must have matching IDs");
-      std::cout << "  [PASS] Mutation killed: make animation frames identical (frame distinctness tests cover pixel hashes)\n";
+      FrameSource a;
+      a.id = "frame_A";
+      a.image = ImageRgba8{2, 2, ColorSpace::srgb, AlphaMode::straight,
+        {255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255}};
+      a.frame_hash = compute_frame_hash(a.image);
+      FrameSource b;
+      b.id = "frame_B";
+      b.image = ImageRgba8{2, 2, ColorSpace::srgb, AlphaMode::straight, a.image.pixels};
+      b.frame_hash = compute_frame_hash(b.image);
+      // Same pixel content: hashes must match
+      check(a.frame_hash == b.frame_hash, "frames with identical pixels must have same hash");
+
+      // Distinct pixel content: hashes must differ
+      FrameSource c;
+      c.id = "frame_C";
+      c.image = ImageRgba8{2, 2, ColorSpace::srgb, AlphaMode::straight,
+        {0, 255, 0, 255, 255, 0, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255}};
+      c.frame_hash = compute_frame_hash(c.image);
+      check(a.frame_hash != c.frame_hash, "frames with different pixels must have different hash");
+
+      // validate_frame_distinctness detects duplicate content in a clip
+      std::vector<FrameSource> fsrcs{a, b, c};
+      AnimationClip clip;
+      clip.id = "test_clip";
+      clip.frame_ids = {"frame_A", "frame_B"};
+      clip.frame_durations = {1, 1};
+      std::vector<AnimationClip> clips{clip};
+      auto vr = validate_frame_distinctness(fsrcs, clips);
+      bool found_dup = false;
+      for (const auto& d : vr.diagnostics)
+        if (d.code == "SPRITE_ANIMATION_FRAME_DUPLICATE_CONTENT") found_dup = true;
+      check(found_dup, "duplicate frame content in clip must be detected");
+
+      // Distinct-content clip passes
+      AnimationClip ok_clip;
+      ok_clip.id = "ok";
+      ok_clip.frame_ids = {"frame_A", "frame_C"};
+      ok_clip.frame_durations = {1, 1};
+      std::vector<AnimationClip> ok_clips{ok_clip};
+      vr = validate_frame_distinctness(fsrcs, ok_clips);
+      bool no_dup = true;
+      for (const auto& d : vr.diagnostics)
+        if (d.code == "SPRITE_ANIMATION_FRAME_DUPLICATE_CONTENT") no_dup = false;
+      check(no_dup, "distinct frame content in clip must pass validation");
+
+      std::cout << "  [PASS] Mutation killed: make animation frames identical\n";
     }
 
     // 14. Disable collision window: collision window referencing non-existent ability must be caught
@@ -614,6 +654,286 @@ int main() {
       auto v = validate(s);
       check(!v.ok(), "prohibited rights must fail validation");
       std::cout << "  [PASS] Mutation killed: bypass rights validation\n";
+    }
+
+    // 21. Resource limits: seed-level bounds acceptance and rejection
+    {
+      // Boundary: at-limit forms (16)
+      {
+        ResourceLimits limits;
+        SpriteSeed s;
+        s.schema = "gspl.sprite-seed/0.1";
+        s.stable_id = "test.limits.at";
+        s.name = "AtLimit";
+        s.classification = "test.synthetic";
+        s.rights = RightsClass::original_user_creation;
+        s.primary_color = "#FF0000";
+        s.accent_color = "#00FF00";
+        s.abilities = {{"a", "dummy", 1, 1, 1}};
+        for (std::uint32_t i = 0; i < 16; ++i)
+          s.forms.push_back({"f" + std::to_string(i), {}});
+        auto v = enforce_resource_limits(s, limits);
+        check(v.ok(), "16 forms must be accepted at limit");
+      }
+      // Over-boundary: 17 forms
+      {
+        ResourceLimits limits;
+        SpriteSeed s;
+        s.schema = "gspl.sprite-seed/0.1";
+        s.stable_id = "test.limits.over";
+        s.name = "OverLimit";
+        s.classification = "test.synthetic";
+        s.rights = RightsClass::original_user_creation;
+        s.primary_color = "#FF0000";
+        s.accent_color = "#00FF00";
+        s.abilities = {{"a", "dummy", 1, 1, 1}};
+        for (std::uint32_t i = 0; i < 17; ++i)
+          s.forms.push_back({"f" + std::to_string(i), {}});
+        auto v = enforce_resource_limits(s, limits);
+        check(!v.ok(), "17 forms must exceed limit");
+        bool found_code = false;
+        for (const auto& d : v.diagnostics)
+          if (d.code == "RESOURCE_FORMS") found_code = true;
+        check(found_code, "diagnostic must include RESOURCE_FORMS code");
+        check(v.diagnostics.front().message.find("17") != std::string::npos, "diagnostic must include current value");
+        check(v.diagnostics.front().message.find("16") != std::string::npos, "diagnostic must include maximum value");
+      }
+      // Over-boundary: 33 transformations
+      {
+        ResourceLimits limits;
+        SpriteSeed s;
+        s.schema = "gspl.sprite-seed/0.1";
+        s.stable_id = "test.limits.trans";
+        s.name = "TransOver";
+        s.classification = "test.synthetic";
+        s.rights = RightsClass::original_user_creation;
+        s.primary_color = "#FF0000";
+        s.accent_color = "#00FF00";
+        s.abilities = {{"a", "dummy", 1, 1, 1}};
+        s.forms = {{"f0", {"t0"}}, {"f1", {"t0"}}};
+        for (std::uint32_t i = 0; i < 33; ++i)
+          s.transformations.push_back({"t" + std::to_string(i), "f0", "f1", "", 10, 1});
+        auto v = enforce_resource_limits(s, limits);
+        check(!v.ok(), "33 transformations must exceed limit");
+      }
+      // Over-boundary: 65 bones
+      {
+        ResourceLimits limits;
+        SpriteSeed s;
+        s.schema = "gspl.sprite-seed/0.1";
+        s.stable_id = "test.limits.bones";
+        s.name = "BonesOver";
+        s.classification = "test.synthetic";
+        s.rights = RightsClass::original_user_creation;
+        s.primary_color = "#FF0000";
+        s.accent_color = "#00FF00";
+        s.abilities = {{"a", "dummy", 1, 1, 1}};
+        RigDefinition rig;
+        rig.id = "test.rig";
+        for (std::uint32_t i = 0; i < 65; ++i)
+          rig.bones.push_back({"b" + std::to_string(i), i == 0 ? std::optional<std::string>{} : std::optional<std::string>{"b0"}, {0,0,0,1}, 1, {}});
+        s.rig = rig;
+        auto v = enforce_resource_limits(s, limits);
+        check(!v.ok(), "65 bones must exceed limit");
+      }
+      // Over-boundary: 33 sockets
+      {
+        ResourceLimits limits;
+        SpriteSeed s;
+        s.schema = "gspl.sprite-seed/0.1";
+        s.stable_id = "test.limits.sock";
+        s.name = "SockOver";
+        s.classification = "test.synthetic";
+        s.rights = RightsClass::original_user_creation;
+        s.primary_color = "#FF0000";
+        s.accent_color = "#00FF00";
+        s.abilities = {{"a", "dummy", 1, 1, 1}};
+        RigDefinition rig;
+        rig.id = "test.rig";
+        rig.bones = {{"root", {}, {0,0,0,1}, 1, {}}};
+        for (std::uint32_t i = 0; i < 33; ++i)
+          rig.sockets.push_back({"s" + std::to_string(i), "root", {0,0,0,1}});
+        s.rig = rig;
+        auto v = enforce_resource_limits(s, limits);
+        check(!v.ok(), "33 sockets must exceed limit");
+      }
+      // Over-boundary: 33 animation clips
+      {
+        ResourceLimits limits;
+        SpriteSeed s;
+        s.schema = "gspl.sprite-seed/0.1";
+        s.stable_id = "test.limits.clips";
+        s.name = "ClipsOver";
+        s.classification = "test.synthetic";
+        s.rights = RightsClass::original_user_creation;
+        s.primary_color = "#FF0000";
+        s.accent_color = "#00FF00";
+        s.abilities = {{"a", "dummy", 1, 1, 1}};
+        s.rig = RigDefinition{"test.rig", {{"root", {}, {0,0,0,1}, 1, {}}}, {}};
+        for (std::uint32_t i = 0; i < 33; ++i)
+          s.clips.push_back({"c" + std::to_string(i), 10u, true, {{"root", {{0u, {0,0,0,1}}, {10u, {0,0,0,1}}}}}, {}});
+        auto v = enforce_resource_limits(s, limits);
+        check(!v.ok(), "33 clips must exceed limit");
+      }
+      std::cout << "  [PASS] Resource limits: boundary and over-boundary enforcement\n";
+    }
+
+    // 22. Frame hash: schema-bound preimage with canonical RGBA8
+    {
+      const ImageRgba8 ref{2, 2, ColorSpace::srgb, AlphaMode::straight,
+        {255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255}};
+      const auto ref_hash = compute_frame_hash(ref);
+      check(ref_hash.size() == 64, "frame hash must be 64 hex chars");
+      check(ref_hash.find_first_not_of("0123456789abcdef") == std::string::npos, "frame hash must be lowercase hex");
+
+      // Identical canonical frames hash identically
+      const ImageRgba8 same{2, 2, ColorSpace::srgb, AlphaMode::straight,
+        {255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255}};
+      check(compute_frame_hash(ref) == compute_frame_hash(same), "identical frames must hash identically");
+
+      // One-pixel change alters hash
+      ImageRgba8 one_pixel{2, 2, ColorSpace::srgb, AlphaMode::straight, ref.pixels};
+      one_pixel.pixels[0] = 254;
+      check(compute_frame_hash(ref) != compute_frame_hash(one_pixel), "one-pixel change must alter hash");
+
+      // Dimension change alters hash (same pixels, different dimensions)
+      ImageRgba8 diff_dim{1, 4, ColorSpace::srgb, AlphaMode::straight,
+        {255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255}};
+      check(compute_frame_hash(ref) != compute_frame_hash(diff_dim), "dimension change must alter hash");
+
+      // Repeated builds reproduce hashes
+      const auto h1 = compute_frame_hash(ref);
+      const auto h2 = compute_frame_hash(ref);
+      check(h1 == h2, "repeated builds must reproduce hash");
+
+      // FrameSource::frame_hash is set after synthesis
+      {
+        std::uint32_t tmp22 = 100;
+        const auto src = make_random_seed(tmp22);
+        const auto seed = parse_seed(src);
+        const auto ir = compile(seed);
+        const auto result = synthesize_unified_entity(ir);
+        for (const auto& f : result.proj2d_base.source_frames) {
+          check(!f.frame_hash.empty(), ("synthesized frame must have frame_hash: " + f.id).c_str());
+        }
+      }
+
+      // Package serialization preserves frame hashes
+      {
+        std::uint32_t tmp22b = 200;
+        const auto tmp_dir = std::filesystem::temp_directory_path() / "gspl-frame-hash-test";
+        std::filesystem::remove_all(tmp_dir);
+        build_package(parse_seed(make_random_seed(tmp22b)), tmp_dir);
+        auto pkg = verify_package(tmp_dir);
+        check(pkg.ok(), "package verification must pass");
+        std::filesystem::remove_all(tmp_dir);
+      }
+      std::cout << "  [PASS] Frame hash: schema identity, distinctness, synthesis, package\n";
+    }
+
+    // 23. Pixel AABB: bounding box of non-transparent pixels
+    {
+      ImageRgba8 img{4, 4, ColorSpace::srgb, AlphaMode::straight,
+        {0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
+         0,0,0,0, 255,0,0,255, 255,0,0,255, 0,0,0,0,
+         0,0,0,0, 255,0,0,255, 255,0,0,255, 0,0,0,0,
+         0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0}};
+      auto aabb = compute_pixel_aabb(img);
+      check(!aabb.empty, "non-empty image must produce non-empty aabb");
+      check(aabb.min_x == 1 && aabb.min_y == 1 && aabb.max_x == 2 && aabb.max_y == 2,
+            "pixel AABB must enclose non-transparent pixels");
+
+      // Fully transparent frame
+      ImageRgba8 empty{4, 4, ColorSpace::srgb, AlphaMode::straight,
+        std::vector<std::uint8_t>(4*4*4, 0)};
+      auto empty_aabb = compute_pixel_aabb(empty);
+      check(empty_aabb.empty, "fully transparent image must produce empty aabb");
+
+      // One opaque pixel at origin
+      {
+        ImageRgba8 one{4, 4, ColorSpace::srgb, AlphaMode::straight, std::vector<std::uint8_t>(4*4*4, 0)};
+        one.pixels[0] = 255; one.pixels[1] = 0; one.pixels[2] = 0; one.pixels[3] = 255;
+        auto a = compute_pixel_aabb(one);
+        check(!a.empty, "one opaque pixel must produce non-empty aabb");
+        check(a.min_x == 0 && a.min_y == 0 && a.max_x == 0 && a.max_y == 0, "single pixel AABB must be point");
+      }
+
+      // One-pixel image
+      {
+        ImageRgba8 tiny{1, 1, ColorSpace::srgb, AlphaMode::straight, {128, 64, 32, 255}};
+        auto a = compute_pixel_aabb(tiny);
+        check(!a.empty, "one-pixel image must produce non-empty aabb");
+        check(a.min_x == 0 && a.min_y == 0 && a.max_x == 0 && a.max_y == 0, "one-pixel AABB");
+      }
+
+      // Deterministic repeated calculation
+      {
+        ImageRgba8 det{3, 3, ColorSpace::srgb, AlphaMode::straight,
+          {0,0,0,0, 10,20,30,255, 0,0,0,0,
+           40,50,60,255, 70,80,90,255, 100,110,120,255,
+           0,0,0,0, 130,140,150,255, 0,0,0,0}};
+        const auto a1 = compute_pixel_aabb(det);
+        const auto a2 = compute_pixel_aabb(det);
+        check(a1.empty == a2.empty && a1.min_x == a2.min_x && a1.max_x == a2.max_x &&
+              a1.min_y == a2.min_y && a1.max_y == a2.max_y,
+              "pixel AABB must be deterministic");
+      }
+      std::cout << "  [PASS] Pixel AABB: semantics and determinism\n";
+    }
+
+    // 24. Corrupted RGBA data: invariant, pack_atlas, and encode_ppm_p6 reject malformed buffers
+    {
+      // Zero dimensions must fail invariant
+      ImageRgba8 zero_w{0, 1, ColorSpace::srgb, AlphaMode::straight, {0, 0, 0, 0}};
+      check(!zero_w.invariant(), "zero-width image must fail invariant");
+
+      ImageRgba8 zero_h{1, 0, ColorSpace::srgb, AlphaMode::straight, {0, 0, 0, 0}};
+      check(!zero_h.invariant(), "zero-height image must fail invariant");
+
+      // Mismatched pixel count: 2x2 needs 16 bytes, but has only 8
+      ImageRgba8 undersized{2, 2, ColorSpace::srgb, AlphaMode::straight, {255, 0, 0, 255, 0, 255, 0, 255}};
+      check(!undersized.invariant(), "undersized pixel buffer must fail invariant");
+
+      // Oversized pixel buffer
+      ImageRgba8 oversized{2, 2, ColorSpace::srgb, AlphaMode::straight,
+        std::vector<std::uint8_t>(32, 128)};
+      check(!oversized.invariant(), "oversized pixel buffer must fail invariant");
+
+      // pack_atlas must reject frames with invalid invariant
+      {
+        FrameSource bad;
+        bad.id = "corrupt";
+        bad.image = ImageRgba8{2, 2, ColorSpace::srgb, AlphaMode::straight, {255, 0, 0, 255}};
+        bad.duration_ticks = 1;
+        // bad.image has only 4 bytes instead of 16 → invariant() fails
+        check(!bad.image.invariant(), "corrupt frame image must fail invariant");
+        std::vector<FrameSource> bad_frames{bad};
+        try {
+          static_cast<void>(pack_atlas(bad_frames, 64, 64));
+          check(false, "pack_atlas must throw on corrupt frame image");
+        } catch (const std::invalid_argument&) {
+          // expected
+        }
+      }
+
+      // encode_ppm_p6 must reject images with invalid invariant
+      {
+        ImageRgba8 corrupt;
+        corrupt.width = 1;
+        corrupt.height = 1;
+        corrupt.color_space = ColorSpace::srgb;
+        corrupt.alpha_mode = AlphaMode::opaque;
+        corrupt.pixels = {};  // empty buffer for 1x1 image (needs 4 bytes)
+        check(!corrupt.invariant(), "empty pixel buffer must fail invariant");
+        try {
+          static_cast<void>(encode_ppm_p6(corrupt));
+          check(false, "encode_ppm_p6 must throw on corrupt image");
+        } catch (const std::invalid_argument&) {
+          // expected
+        }
+      }
+
+      std::cout << "  [PASS] Mutation killed: corrupted RGBA data\n";
     }
 
     std::cout << "all GSPL Sprites mutation tests passed\n";

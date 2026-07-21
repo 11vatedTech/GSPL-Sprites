@@ -1,6 +1,8 @@
+#include "gspl_sprites/combat.hpp"
 #include "gspl_sprites/core.hpp"
 #include "gspl_sprites/package.hpp"
 #include "gspl_sprites/living_runtime.hpp"
+#include "gspl_sprites/transformation.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -63,7 +65,7 @@ void print_diagnostics(const ValidationResult& vr) {
 }
 
 int headless_main(const PackageVerification& verification) {
-  std::cout << "Package: entity=" << verification.entity_id
+  std::cout << "PACKAGE entity=" << verification.entity_id
             << " identity=" << verification.package_identity
             << " artifacts=" << verification.artifact_count
             << " bytes=" << verification.total_artifact_bytes
@@ -82,33 +84,31 @@ int headless_main(const PackageVerification& verification) {
     {"attack", "defend", 10,
      {{"perception.threat", 500000}},
      {{"confidence.threat", Comparison::greater_equal, 500000}},
-     2, 3, 20, true, {{"release", 0}}}
+      2, 3, 20, true, {{"release", 0}}}
   };
 
   LivingRuntimeState state;
   state.energy = 100;
 
+  std::cout << "HEADLESS_BEGIN\n";
   for (std::uint64_t t = 0; t < 100; ++t) {
     if (t == 5)
       observe(state, prog, {"threat", "enemy", 2, 900000, state.tick, 2});
 
     auto result = step_living_runtime(prog, state);
 
-    if (t % 10 == 0 || t == 99) {
-      std::cout << "tick " << t
-                << " energy=" << state.energy
-                << " action=";
-      if (state.active_action)
-        std::cout << state.active_action->action_id;
-      else
-        std::cout << "(none)";
-      if (result.selected_action)
-        std::cout << " selected=" << *result.selected_action;
-      std::cout << '\n';
-    }
+    std::cout << "TICK " << t
+              << " energy=" << state.energy
+              << " action=";
+    if (state.active_action)
+      std::cout << state.active_action->action_id;
+    else
+      std::cout << "(none)";
+    if (result.selected_action)
+      std::cout << " selected=" << *result.selected_action;
+    std::cout << '\n';
   }
-
-  std::cout << "Completed 100 ticks — energy=" << state.energy << '\n';
+  std::cout << "HEADLESS_END\n";
   return 0;
 }
 
@@ -187,32 +187,52 @@ struct PreviewState {
   std::uint32_t last_fps_time = 0;
 };
 
-static void render_2d(SDL_Renderer* ren, int w, int h) {
+static void render_2d(SDL_Renderer* ren, int w, int h,
+                      const TransformationState& tstate, std::uint64_t tick) {
   SDL_Rect rect = {w / 2 - 100, h / 2 - 80, 200, 160};
-  SDL_SetRenderDrawColor(ren, 0x24, 0x20, 0x38, 255);
-  SDL_RenderFillRect(ren, &rect);
+  bool storm = (tstate.current_form == "Storm");
+  if (tstate.active) {
+    auto total = tstate.active->completes_tick - tstate.active->started_tick;
+    auto elapsed = tick >= tstate.active->started_tick ? tick - tstate.active->started_tick : 0ULL;
+    double progress = total > 0 ? static_cast<double>(elapsed) / total : 0.0;
+    int flash = static_cast<int>(progress * 200) % 256;
+    SDL_SetRenderDrawColor(ren, flash, 200 - flash / 2, 255, 255);
+    SDL_RenderFillRect(ren, &rect);
+  } else if (storm) {
+    SDL_SetRenderDrawColor(ren, 0x80, 0x40, 0xFF, 255);
+    SDL_RenderFillRect(ren, &rect);
+  } else {
+    SDL_SetRenderDrawColor(ren, 0x24, 0x20, 0x38, 255);
+    SDL_RenderFillRect(ren, &rect);
+  }
   SDL_SetRenderDrawColor(ren, 0x56, 0xF1, 0xFF, 255);
   SDL_RenderDrawRect(ren, &rect);
 }
 
-static void render_25d(SDL_Renderer* ren, int w, int h, int tick) {
+static void render_25d(SDL_Renderer* ren, int w, int h, int tick,
+                       const TransformationState& tstate) {
   int offset1 = (tick * 2) % 80;
   int offset2 = (tick * 4) % 120;
   int offset3 = (tick * 1) % 60;
+  bool storm = (tstate.current_form == "Storm");
 
   SDL_SetRenderDrawColor(ren, 0x24, 0x20, 0x38, 180);
   SDL_Rect bg = {0, 0, w, h};
   SDL_RenderFillRect(ren, &bg);
 
-  SDL_SetRenderDrawColor(ren, 0x80, 0x40, 0x20, 160);
+  auto storm_color = [storm](int r, int g, int b, int a) {
+    if (storm) return SDL_SetRenderDrawColor(ren, (std::min)(r + 100, 255), g, (std::min)(b + 100, 255), a);
+    else SDL_SetRenderDrawColor(ren, r, g, b, a);
+  };
+  storm_color(0x80, 0x40, 0x20, 160);
   SDL_Rect l1 = {w / 2 - 180 + offset1 - 40, h / 2 - 60, 120, 80};
   SDL_RenderFillRect(ren, &l1);
 
-  SDL_SetRenderDrawColor(ren, 0x56, 0xF1, 0xFF, 200);
+  storm_color(0x56, 0xF1, 0xFF, 200);
   SDL_Rect l2 = {w / 2 - 60 + offset2 / 2, h / 2 - 40, 100, 60};
   SDL_RenderFillRect(ren, &l2);
 
-  SDL_SetRenderDrawColor(ren, 0x24, 0x20, 0x38, 220);
+  storm_color(0x24, 0x20, 0x38, 220);
   SDL_Rect l3 = {w / 2 - 150 + offset3, h / 2 + 20, 200, 40};
   SDL_RenderFillRect(ren, &l3);
 }
@@ -228,7 +248,8 @@ static Vec3 rotate_y(const Vec3& v, double a) {
   return {v.x * c + v.z * s, v.y, -v.x * s + v.z * c};
 }
 
-static void render_3d(SDL_Renderer* ren, int w, int h, int tick) {
+static void render_3d(SDL_Renderer* ren, int w, int h, int tick,
+                      const TransformationState& tstate) {
   static const Vec3 cube[8] = {
     {-1,-1,-1},{1,-1,-1},{1,1,-1},{-1,1,-1},
     {-1,-1,1},{1,-1,1},{1,1,1},{-1,1,1}
@@ -237,16 +258,19 @@ static void render_3d(SDL_Renderer* ren, int w, int h, int tick) {
     {0,1},{1,2},{2,3},{3,0},{4,5},{5,6},{6,7},{7,4},{0,4},{1,5},{2,6},{3,7}
   };
 
+  bool storm = (tstate.current_form == "Storm");
+  double scale_factor = storm ? 1.3 : 1.0;
   double angle = tick * 0.02;
   Vec3 projected[8];
   for (int i = 0; i < 8; ++i) {
     Vec3 v = rotate_y(rotate_x(cube[i], angle * 0.7), angle);
-    double scale = 80.0 / (v.z + 4.0);
+    double scale = (80.0 * scale_factor) / (v.z + 4.0);
     projected[i].x = w / 2.0 + v.x * scale;
     projected[i].y = h / 2.0 + v.y * scale;
   }
 
-  SDL_SetRenderDrawColor(ren, 0x56, 0xF1, 0xFF, 255);
+  if (storm) SDL_SetRenderDrawColor(ren, 0x80, 0x40, 0xFF, 255);
+  else SDL_SetRenderDrawColor(ren, 0x56, 0xF1, 0xFF, 255);
   for (auto& e : edges) {
     SDL_RenderDrawLine(ren,
       static_cast<int>(projected[e[0]].x), static_cast<int>(projected[e[0]].y),
@@ -256,29 +280,34 @@ static void render_3d(SDL_Renderer* ren, int w, int h, int tick) {
 
 static void render_debug(SDL_Renderer* ren, int w, int h,
                          const PreviewState& ps,
+                         const TransformationState& tstate,
                          const PackageVerification& verification) {
   SDL_SetRenderDrawColor(ren, 0, 0, 0, 180);
-  SDL_Rect bg = {4, 4, 280, 140};
+  SDL_Rect bg = {4, 4, 280, 160};
   SDL_RenderFillRect(ren, &bg);
 
   char line[128];
-  std::snprintf(line, sizeof(line), "Form: %s", verification.entity_id.c_str());
+  std::snprintf(line, sizeof(line), "Form: %s", tstate.current_form.c_str());
   draw_text(ren, 12, 10, line, 86, 241, 255);
 
-  std::snprintf(line, sizeof(line), "HP:  100%%%%");
+  std::snprintf(line, sizeof(line), "Tick: %llu", static_cast<unsigned long long>(ps.tick));
   draw_text(ren, 12, 22, line, 86, 241, 255);
 
-  std::snprintf(line, sizeof(line), "Tick: %llu", static_cast<unsigned long long>(ps.tick));
+  std::snprintf(line, sizeof(line), "FPS:  %d", ps.fps);
   draw_text(ren, 12, 34, line, 86, 241, 255);
 
-  std::snprintf(line, sizeof(line), "FPS:  %d", ps.fps);
-  draw_text(ren, 12, 46, line, 86, 241, 255);
+  draw_text(ren, 12, 50, "Mode: ", 86, 241, 255);
+  draw_text(ren, 12 + 5 * 10, 50, ps.mode_name.c_str(), 255, 200, 100);
 
-  draw_text(ren, 12, 62, "Mode: ", 86, 241, 255);
-  draw_text(ren, 12 + 5 * 10, 62, ps.mode_name.c_str(), 255, 200, 100);
+  if (tstate.active) {
+    std::snprintf(line, sizeof(line), "Transforming: %s -> %s",
+                  tstate.active->from_form.c_str(), tstate.active->to_form.c_str());
+    draw_text(ren, 12, 62, line, 255, 200, 100);
+  }
 
   draw_text(ren, 12, 78, "2-2D 3-3D 5-2.5D", 150, 150, 150);
-  draw_text(ren, 12, 90, "D-debug Q-quit", 150, 150, 150);
+  draw_text(ren, 12, 90, "A-ascend D-descend", 150, 150, 150);
+  draw_text(ren, 12, 102, "Q-quit", 150, 150, 150);
 }
 
 static int sdl_main(const std::filesystem::path& package_path,
@@ -310,6 +339,53 @@ static int sdl_main(const std::filesystem::path& package_path,
   const char* modes[] = {"2D", "2.5D", "3D"};
   ps.mode_name = modes[ps.mode_index];
 
+  // Authoritative combat state
+  CombatProgram cprog;
+  cprog.id = "preview.combat";
+  cprog.maximum_actors = 4;
+  cprog.maximum_statuses_per_actor = 4;
+  cprog.abilities = {
+    {"directional-lightning", CombatTargetRule::enemy, 8, 120, 5000,
+     {{CombatEffectKind::damage, {}, 25, 0}}}
+  };
+
+  CombatState cstate;
+  cstate.tick = 0;
+  cstate.actors.emplace("voltfox", CombatActorState{"voltfox", "heroes", 100, 100, 100, 100, 0, 0, {}, {}});
+  cstate.actors.emplace("enemy", CombatActorState{"enemy", "enemies", 100, 100, 100, 100, 1000, 0, {}, {}});
+
+  // Authoritative transformation state
+  TransformationProgram tprog;
+  tprog.id = "preview.forms";
+  tprog.base_form = "Voltfox";
+  tprog.forms = {
+    {"Voltfox", 0, 0, {"directional-lightning"}},
+    {"Storm", 50, 0, {"directional-lightning"}},
+  };
+  tprog.transformations = {
+    {"ascend", "Voltfox", "Storm", 50, 30, true},
+    {"descend", "Storm", "Voltfox", 0, 30, true},
+  };
+
+  TransformationState tstate;
+  tstate.stable_entity_id = "voltfox";
+  tstate.current_form = "Voltfox";
+  tstate.energy = 100;
+  tstate.maximum_energy = 100;
+
+  // Validate authoritative state
+  {
+    auto vr = validate_transformation_program(tprog, cprog);
+    if (!vr.ok()) {
+      std::cerr << "Transformation program validation failed:\n";
+      for (const auto& d : vr.diagnostics)
+        std::cerr << "  " << d.code << ": " << d.message << '\n';
+      SDL_Quit();
+      return 1;
+    }
+  }
+
+  // Living runtime state
   LivingRuntimeProgram prog;
   prog.id = "voltfox.runtime";
   prog.ticks_per_second = 60;
@@ -323,7 +399,7 @@ static int sdl_main(const std::filesystem::path& package_path,
     {"attack", "defend", 10,
      {{"perception.threat", 500000}},
      {{"confidence.threat", Comparison::greater_equal, 500000}},
-     2, 3, 20, true, {{"release", 0}}}
+      2, 3, 20, true, {{"release", 0}}}
   };
 
   LivingRuntimeState rstate;
@@ -332,7 +408,7 @@ static int sdl_main(const std::filesystem::path& package_path,
   std::cout << "Preview: entity=" << verification.entity_id
             << " package=" << verification.package_identity
             << " artifacts=" << verification.artifact_count << '\n';
-  std::cout << "Controls: 2=2D 3=3D 5=2.5D D=debug Q/ESC=quit\n";
+  std::cout << "Controls: 2=2D 3=3D 5=2.5D A=ascend S=descend D=debug Q/ESC=quit\n";
 
   bool running = true;
   ps.last_fps_time = SDL_GetTicks();
@@ -351,6 +427,14 @@ static int sdl_main(const std::filesystem::path& package_path,
           case SDLK_3: ps.mode_index = 2; ps.mode_name = "3D"; break;
           case SDLK_5: ps.mode_index = 1; ps.mode_name = "2.5D"; break;
           case SDLK_d: ps.debug = !ps.debug; break;
+          case SDLK_a:
+            if (!tstate.active && tstate.current_form == "Voltfox")
+              begin_transformation(tprog, cprog, tstate, "ascend", step);
+            break;
+          case SDLK_s:
+            if (!tstate.active && tstate.current_form == "Storm")
+              begin_transformation(tprog, cprog, tstate, "descend", step);
+            break;
           case SDLK_q:
           case SDLK_ESCAPE: running = false; break;
           default: break;
@@ -361,9 +445,11 @@ static int sdl_main(const std::filesystem::path& package_path,
     if (step == 5)
       observe(rstate, prog, {"threat", "enemy", 2, 900000, rstate.tick, 2});
 
+    // Advance authoritative states
     auto result = step_living_runtime(prog, rstate);
     static_cast<void>(result);
-    ps.tick = rstate.tick;
+    advance_transformation_to(tprog, cprog, tstate, cstate, step);
+    ps.tick = step;
     ++step;
 
     int w, h;
@@ -373,13 +459,13 @@ static int sdl_main(const std::filesystem::path& package_path,
     SDL_RenderClear(ren);
 
     switch (ps.mode_index) {
-      case 0: render_2d(ren, w, h); break;
-      case 1: render_25d(ren, w, h, static_cast<int>(ps.tick)); break;
-      case 2: render_3d(ren, w, h, static_cast<int>(ps.tick)); break;
+      case 0: render_2d(ren, w, h, tstate, ps.tick); break;
+      case 1: render_25d(ren, w, h, static_cast<int>(ps.tick), tstate); break;
+      case 2: render_3d(ren, w, h, static_cast<int>(ps.tick), tstate); break;
     }
 
     if (ps.debug)
-      render_debug(ren, w, h, ps, verification);
+      render_debug(ren, w, h, ps, tstate, verification);
 
     SDL_RenderPresent(ren);
 

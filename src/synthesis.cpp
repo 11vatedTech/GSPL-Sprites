@@ -7,6 +7,7 @@
 #include "gspl_sprites/projection3d.hpp"
 #include "gspl_sprites/sprite2d.hpp"
 #include "gspl_sprites/transformation_manifestation.hpp"
+#include "gspl_sprites/combat.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -118,6 +119,7 @@ std::vector<FrameSource> make_frames(std::string_view prefix, std::string_view f
     frames.push_back({pf + ".transform.2", make_transformed_sprite(32, 32, primary, accent, energy), 16, 16, 1});
     frames.push_back({pf + ".transform.3", make_transformed_sprite(32, 32, primary, accent, energy), 16, 16, 1});
   }
+  for (auto& f : frames) f.frame_hash = compute_frame_hash(f.image);
   return frames;
 }
 
@@ -348,7 +350,7 @@ Projection2dDefinition synthesize_projection2d_voltfox(
         draw_ellipse(canvas, canvas_w/2 + static_cast<int>(e->second.x * 2) + 1, canvas_h/2 - static_cast<int>(e->second.y * 2), 3, 1, 0xFFFFFF00 | 0xFF);
     }
     const char* names[] = {"idle", "idle", "attack", "attack", "hit"};
-    frames.push_back({pf + "." + names[variant] + "." + std::to_string(variant), std::move(canvas), canvas_w/2, canvas_h/2, variant < 4 ? 2u : 1u});
+    frames.push_back({pf + "." + names[variant] + "." + std::to_string(variant), std::move(canvas), canvas_w/2, canvas_h/2, variant < 4 ? 2u : 1u, {}});
   }
 
   // Compile sprite sheet
@@ -380,6 +382,7 @@ Projection2dDefinition synthesize_projection2d_voltfox(
   add_shape("torso", "root");
   add_shape("head", "head");
 
+  for (auto& f : frames) f.frame_hash = compute_frame_hash(f.image);
   std::vector<CollisionWindow> windows;
   return Projection2dDefinition{std::string(pf) + ".2d", std::move(frames), std::move(sheet), std::move(anims),
                                 std::move(channels), rig, std::move(shapes), std::move(windows), 4};
@@ -891,4 +894,35 @@ Projection3dDefinition synthesize_projection3d_voltfox(std::string_view entity_i
   return proj;
 }
 
+ValidationResult enforce_resource_limits(const SpriteSeed& seed,
+                                          const SynthesisResult& result,
+                                          const ResourceLimits& limits) {
+  ValidationResult res = enforce_resource_limits(seed, limits);
+  auto add = [&](bool ok, std::string code, std::string msg) { if (!ok) res.diagnostics.push_back({std::move(code), std::move(msg)}); };
+  add(result.proj2d_base.source_frames.size() <= limits.max_frames, "RESOURCE_FRAMES",
+      "frames count " + std::to_string(result.proj2d_base.source_frames.size()) + " exceeds maximum " + std::to_string(limits.max_frames));
+  for (const auto& f : result.proj2d_base.source_frames) {
+    add(f.image.width <= limits.max_frame_width, "RESOURCE_FRAME_WIDTH",
+        "frame " + f.id + " width " + std::to_string(f.image.width) + " exceeds maximum " + std::to_string(limits.max_frame_width));
+    add(f.image.height <= limits.max_frame_height, "RESOURCE_FRAME_HEIGHT",
+        "frame " + f.id + " height " + std::to_string(f.image.height) + " exceeds maximum " + std::to_string(limits.max_frame_height));
+  }
+  add(result.proj25d_base.planes.size() <= limits.max_25d_planes, "RESOURCE_25D_PLANES",
+      "2.5D planes count " + std::to_string(result.proj25d_base.planes.size()) + " exceeds maximum " + std::to_string(limits.max_25d_planes));
+  std::size_t vertex_count = 0;
+  for (const auto& m : result.proj3d_base.meshes) vertex_count += m.vertices.size();
+  add(vertex_count <= limits.max_vertices, "RESOURCE_VERTICES",
+      "vertices count " + std::to_string(vertex_count) + " exceeds maximum " + std::to_string(limits.max_vertices));
+  std::size_t ir_node_count = 0;
+  const auto& irb = result.proj2d_base;
+  ir_node_count += irb.source_frames.size() + irb.animations.size() + irb.channel_maps.size() + irb.collision_shapes.size() + irb.collision_windows.size();
+  const auto& ir25 = result.proj25d_base;
+  ir_node_count += ir25.planes.size() + ir25.views.size() + ir25.geometry.size() + ir25.collisions.size();
+  const auto& ir3 = result.proj3d_base;
+  for (const auto& m : ir3.meshes) ir_node_count += m.vertices.size() + m.triangle_indices.size();
+  ir_node_count += ir3.materials.size() + ir3.morph_targets.size() + ir3.lods.size() + (ir3.skeleton ? ir3.skeleton->joints.size() : 0);
+  add(ir_node_count <= limits.max_sprite_ir_nodes, "RESOURCE_SPRITE_IR_NODES",
+      "Sprite IR node count " + std::to_string(ir_node_count) + " exceeds maximum " + std::to_string(limits.max_sprite_ir_nodes));
+  return res;
+}
 } // namespace gspl::sprites

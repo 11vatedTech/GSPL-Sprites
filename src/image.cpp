@@ -1,10 +1,13 @@
 #include "gspl_sprites/image.hpp"
+#include "gspl_sprites/core.hpp"
 
 #include <algorithm>
 #include <charconv>
 #include <limits>
 #include <set>
 #include <stdexcept>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace gspl::sprites {
 namespace {
@@ -126,5 +129,71 @@ ValidationResult validate_animation(const AnimationClip& clip, std::span<const A
   if (total == 0 || total > 36000) add("SPRITE_ANIMATION_LENGTH_INVALID", "animation duration must be 1..36000 ticks");
   std::set<std::string> event_keys; for (const auto& event : clip.events) { if (event.id.empty() || event.tick >= total) add("SPRITE_ANIMATION_EVENT_INVALID", "animation event is empty or outside clip"); if (!event_keys.insert(event.id + ":" + std::to_string(event.tick)).second) add("SPRITE_ANIMATION_EVENT_DUPLICATE", "duplicate animation event at tick"); }
   return result;
+}
+ValidationResult validate_frame_distinctness(std::span<const FrameSource> frames, std::span<const AnimationClip> clips) {
+  ValidationResult result;
+  auto add = [&](std::string code, std::string message){ result.diagnostics.push_back({std::move(code), std::move(message)}); };
+  std::unordered_map<std::string_view, std::string_view> frame_hashes;
+  for (const auto& f : frames) frame_hashes[f.id] = f.frame_hash;
+  for (const auto& clip : clips) {
+    if (clip.frame_ids.empty()) continue;
+    std::unordered_set<std::string_view> seen;
+    for (const auto& fid : clip.frame_ids) {
+      auto it = frame_hashes.find(fid);
+      if (it == frame_hashes.end()) {
+        add("SPRITE_ANIMATION_FRAME_MISSING", "clip '" + clip.id + "' references missing frame: " + fid);
+        continue;
+      }
+      if (it->second.empty()) {
+        add("SPRITE_ANIMATION_FRAME_UNHASHED", "frame '" + fid + "' in clip '" + clip.id + "' has no hash");
+        continue;
+      }
+      if (!seen.insert(it->second).second)
+        add("SPRITE_ANIMATION_FRAME_DUPLICATE_CONTENT", "clip '" + clip.id + "' contains frames with duplicate content hash: " + fid);
+    }
+  }
+  return result;
+}
+std::string compute_frame_hash(const ImageRgba8& image) {
+  std::string preimage;
+  preimage += "GSPL_FRAME_V1";
+  preimage += static_cast<char>(image.width & 0xFF);
+  preimage += static_cast<char>((image.width >> 8) & 0xFF);
+  preimage += static_cast<char>((image.width >> 16) & 0xFF);
+  preimage += static_cast<char>((image.width >> 24) & 0xFF);
+  preimage += static_cast<char>(image.height & 0xFF);
+  preimage += static_cast<char>((image.height >> 8) & 0xFF);
+  preimage += static_cast<char>((image.height >> 16) & 0xFF);
+  preimage += static_cast<char>((image.height >> 24) & 0xFF);
+  preimage += "RGBA8";
+  preimage += "RGBA";
+  preimage.append(reinterpret_cast<const char*>(image.pixels.data()), image.pixels.size());
+  return sha256(preimage);
+}
+std::string compute_frame_hash(const FrameSource& frame) {
+  return compute_frame_hash(frame.image);
+}
+PixelAABB compute_pixel_aabb(const ImageRgba8& image) {
+  PixelAABB aabb;
+  if (image.pixels.empty()) return aabb;
+  bool first = true;
+  for (std::uint32_t y = 0; y < image.height; ++y) {
+    for (std::uint32_t x = 0; x < image.width; ++x) {
+      if (image.pixels[(y * image.width + x) * 4 + 3] != 0) {
+        if (first) {
+          aabb.min_x = aabb.max_x = x;
+          aabb.min_y = aabb.max_y = y;
+          first = false;
+        } else {
+          if (x < aabb.min_x) aabb.min_x = x;
+          if (x > aabb.max_x) aabb.max_x = x;
+          if (y < aabb.min_y) aabb.min_y = y;
+          if (y > aabb.max_y) aabb.max_y = y;
+        }
+      }
+    }
+  }
+  if (!first) aabb.empty = false;
+  return aabb;
 }
 } // namespace gspl::sprites

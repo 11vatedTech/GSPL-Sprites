@@ -135,8 +135,8 @@ constexpr std::uint32_t rotr(std::uint32_t x, unsigned n) { return (x >> n) | (x
 }
 
 SpriteSeed parse_seed(std::string_view source) {
-  constexpr std::size_t max_source_bytes = 1U << 20;
-  if (source.size() > max_source_bytes) throw std::runtime_error("source exceeds 1 MiB limit");
+  const auto source_check = enforce_resource_limits_source(source);
+  if (!source_check.ok()) throw std::runtime_error(source_check.diagnostics.front().code + ": " + source_check.diagnostics.front().message);
   SpriteSeed seed;
   std::istringstream stream{std::string(source)};
   std::string line;
@@ -388,6 +388,75 @@ ValidationResult validate(const SpriteSeed& seed) {
       require(seed.runtime->aggression <= 100 && seed.runtime->curiosity <= 100 && seed.runtime->energy <= 100 && seed.runtime->loyalty <= 100, "SPRITE_RUNTIME_BOUNDS", "runtime attributes must be 0..100");
     }
   }
+  if (result.ok()) {
+    const auto rl = enforce_resource_limits(seed);
+    result.diagnostics.insert(result.diagnostics.end(), rl.diagnostics.begin(), rl.diagnostics.end());
+  }
+  return result;
+}
+
+ValidationResult enforce_resource_limits_source(std::string_view source, const ResourceLimits& limits) {
+  ValidationResult result;
+  auto add = [&](bool ok, std::string code, std::string msg) { if (!ok) result.diagnostics.push_back({std::move(code), std::move(msg)}); };
+  add(source.size() <= limits.max_source_bytes, "RESOURCE_SOURCE_SIZE",
+      "source size " + std::to_string(source.size()) + " bytes exceeds maximum " + std::to_string(limits.max_source_bytes) + " bytes");
+  std::size_t token_count = 0;
+  std::size_t max_token_len = 0;
+  std::size_t current_len = 0;
+  for (std::size_t i = 0; i <= source.size(); ++i) {
+    if (i == source.size() || source[i] <= ' ') {
+      if (current_len > 0) {
+        ++token_count;
+        if (current_len > max_token_len) max_token_len = current_len;
+        current_len = 0;
+      }
+    } else {
+      ++current_len;
+    }
+  }
+  add(token_count <= limits.max_token_count, "RESOURCE_TOKEN_COUNT",
+      "token count " + std::to_string(token_count) + " exceeds maximum " + std::to_string(limits.max_token_count));
+  add(max_token_len <= limits.max_token_length, "RESOURCE_TOKEN_LENGTH",
+      "max token length " + std::to_string(max_token_len) + " exceeds maximum " + std::to_string(limits.max_token_length));
+  return result;
+}
+
+ValidationResult enforce_resource_limits(const SpriteSeed& seed, const ResourceLimits& limits) {
+  ValidationResult result;
+  auto add = [&](bool ok, std::string code, std::string msg) { if (!ok) result.diagnostics.push_back({std::move(code), std::move(msg)}); };
+  const auto canonical = canonicalize(seed);
+  add(canonical.size() <= limits.max_seed_bytes, "RESOURCE_SEED_SIZE",
+      "seed serialized size " + std::to_string(canonical.size()) + " bytes exceeds maximum " + std::to_string(limits.max_seed_bytes) + " bytes");
+  add(seed.forms.size() <= limits.max_forms, "RESOURCE_FORMS",
+      "forms count " + std::to_string(seed.forms.size()) + " exceeds maximum " + std::to_string(limits.max_forms));
+  add(seed.transformations.size() <= limits.max_transformations, "RESOURCE_TRANSFORMATIONS",
+      "transformations count " + std::to_string(seed.transformations.size()) + " exceeds maximum " + std::to_string(limits.max_transformations));
+  if (seed.rig) {
+    add(seed.rig->bones.size() <= limits.max_bones, "RESOURCE_BONES",
+        "bones count " + std::to_string(seed.rig->bones.size()) + " exceeds maximum " + std::to_string(limits.max_bones));
+    add(seed.rig->sockets.size() <= limits.max_sockets, "RESOURCE_SOCKETS",
+        "sockets count " + std::to_string(seed.rig->sockets.size()) + " exceeds maximum " + std::to_string(limits.max_sockets));
+  }
+  add(seed.clips.size() <= limits.max_animation_clips, "RESOURCE_CLIPS",
+      "animation clips count " + std::to_string(seed.clips.size()) + " exceeds maximum " + std::to_string(limits.max_animation_clips));
+  auto check_string = [&](std::string_view name, std::string_view val) {
+    add(val.size() <= limits.max_string_length, "RESOURCE_STRING_LENGTH",
+        std::string(name) + " length " + std::to_string(val.size()) + " exceeds maximum " + std::to_string(limits.max_string_length));
+  };
+  check_string("stable_id", seed.stable_id);
+  check_string("name", seed.name);
+  check_string("classification", seed.classification);
+  check_string("primary_color", seed.primary_color);
+  check_string("accent_color", seed.accent_color);
+  check_string("schema", seed.schema);
+  std::size_t gene_count = seed.abilities.size() + seed.storm_abilities.size() +
+                           seed.transformations.size() + seed.forms.size();
+  add(gene_count <= limits.max_gene_count, "RESOURCE_GENE_COUNT",
+      "gene count " + std::to_string(gene_count) + " exceeds maximum " + std::to_string(limits.max_gene_count));
+  std::size_t constraint_count = seed.collision_windows.size();
+  for (const auto& c : seed.clips) constraint_count += c.events.size();
+  add(constraint_count <= limits.max_constraint_count, "RESOURCE_CONSTRAINT_COUNT",
+      "constraint count " + std::to_string(constraint_count) + " exceeds maximum " + std::to_string(limits.max_constraint_count));
   return result;
 }
 
@@ -520,6 +589,8 @@ void build_package(const SpriteSeed& seed, const AuthoredVisualSet& visual_set, 
 }
 
 static void build_package_internal(const SpriteSeed& seed, std::span<const FrameSource> frames, const SpriteSheetOptions& options, std::string_view visual_metadata, std::span<const ChannelMap> channel_maps, std::string_view channel_metadata, const PackageGovernanceEvidence& governance, const std::filesystem::path& output) {
+  const auto limits_validation = enforce_resource_limits(seed);
+  if (!limits_validation.ok()) throw std::invalid_argument(limits_validation.diagnostics.front().code + ": " + limits_validation.diagnostics.front().message);
   const auto ir = compile(seed); const auto canonical = canonicalize(seed); const auto svg = render_svg(ir);
   const auto authoring_evidence_valid =
       governance.authoring_provenance_json == "{\"project\":null,\"references\":[]}" ||
