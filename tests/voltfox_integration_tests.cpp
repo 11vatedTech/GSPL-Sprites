@@ -335,7 +335,78 @@ int main() try {
     std::cout << "  [PASS] Seed-to-synthesis connection (entity_id, rig, collisions propagated)\n";
   }
 
-  // === 8. Negative — parse-time rejections ===
+  // === 8. Cross-representation consistency + frame hash + resource limits ===
+  {
+    const auto seed = parse_seed(voltfox_seed_text());
+    const auto ir = compile(seed);
+    const auto result_1 = synthesize_unified_entity(ir);
+
+    // 8a. All 2D frame hashes are non-empty, 64-hex, lowercase
+    auto check_frames = [](std::string_view label, const std::vector<FrameSource>& frames) {
+      for (const auto& f : frames) {
+        if (f.frame_hash.empty())
+          throw std::runtime_error(std::string(label) + " frame " + f.id + " has empty frame_hash");
+        if (f.frame_hash.size() != 64)
+          throw std::runtime_error(std::string(label) + " frame " + f.id + " hash is not 64 hex chars");
+        for (auto c : f.frame_hash)
+          if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
+            throw std::runtime_error(std::string(label) + " frame " + f.id + " hash is not lowercase hex");
+      }
+    };
+    check_frames("proj2d_base", result_1.proj2d_base.source_frames);
+    check_frames("proj2d_transformed", result_1.proj2d_transformed.source_frames);
+    std::size_t total_2d_frames = result_1.proj2d_base.source_frames.size()
+                                + result_1.proj2d_transformed.source_frames.size();
+    check(total_2d_frames > 0, "expected at least 1 2D frame");
+
+    // 8b. Frame hashes are deterministic (repeat synthesis produces identical hashes)
+    const auto result_2 = synthesize_unified_entity(ir);
+    check(result_1.proj2d_base.source_frames.size() == result_2.proj2d_base.source_frames.size(),
+          "determinism: 2D base frame count mismatch");
+    for (std::size_t i = 0; i < result_1.proj2d_base.source_frames.size(); ++i)
+      check(result_1.proj2d_base.source_frames[i].frame_hash == result_2.proj2d_base.source_frames[i].frame_hash,
+            "determinism: 2D base frame hash mismatch");
+    for (std::size_t i = 0; i < result_1.proj2d_transformed.source_frames.size(); ++i)
+      check(result_1.proj2d_transformed.source_frames[i].frame_hash == result_2.proj2d_transformed.source_frames[i].frame_hash,
+            "determinism: 2D transformed frame hash mismatch");
+
+    // 8c. Structural consistency across 2D base and transformed
+    check(result_1.proj2d_base.rig.bones.size() == result_1.proj2d_transformed.rig.bones.size(),
+          "rig bone count mismatch between base and transformed");
+    check(result_1.proj2d_base.collision_shapes.size() == result_1.proj2d_transformed.collision_shapes.size(),
+          "collision shape count mismatch between base and transformed");
+    check(result_1.proj2d_base.collision_windows.size() == result_1.proj2d_transformed.collision_windows.size(),
+          "collision window count mismatch between base and transformed");
+    for (std::size_t i = 0; i < result_1.proj2d_base.collision_shapes.size(); ++i)
+      check(result_1.proj2d_base.collision_shapes[i].id == result_1.proj2d_transformed.collision_shapes[i].id,
+            "collision shape id mismatch");
+
+    // 8d. Synthesis resource limits pass (three-arg enforce_resource_limits)
+    {
+      ResourceLimits rl;
+      auto vr = enforce_resource_limits(seed, result_1, rl);
+      check(vr.ok(), "synthesis resource limits must pass for voltfox seed");
+    }
+
+    // 8e. Synthesis-level limits do not throw during pipeline execution
+    // (synthesize_unified_entity already enforces limits internally)
+    check(result_1.proj2d_base.source_frames.size() <= ResourceLimits{}.max_frames,
+          "2D base frame count must not exceed limit");
+    for (const auto& f : result_1.proj2d_base.source_frames) {
+      check(f.image.width <= ResourceLimits{}.max_frame_width, "frame width must not exceed limit");
+      check(f.image.height <= ResourceLimits{}.max_frame_height, "frame height must not exceed limit");
+    }
+    std::size_t vertex_count = 0;
+    for (const auto& m : result_1.proj3d_base.meshes) vertex_count += m.vertices.size();
+    check(vertex_count <= ResourceLimits{}.max_vertices, "vertex count must not exceed limit");
+
+    std::cout << "  [PASS] Cross-representation consistency: "
+              << total_2d_frames << " frames, "
+              << result_1.proj2d_base.source_frames[0].frame_hash.substr(0, 8) << "... "
+              << "hashes deterministic, limits OK\n";
+  }
+
+  // === 9. Negative — parse-time rejections ===
   {
     check_throws("invalid rights",
       [] { auto r = parse_seed(
@@ -356,7 +427,7 @@ int main() try {
     std::cout << "  [PASS] Negative — parse-time rejections\n";
   }
 
-  // === 9. Negative — validation failures ===
+  // === 10. Negative — validation failures ===
   {
     auto reject = [](std::string_view label, std::string_view text) {
       const auto s = parse_seed(text);
@@ -383,7 +454,7 @@ int main() try {
     std::cout << "  [PASS] Negative — validation failures\n";
   }
 
-  // === 10. Morphology-driven 3D Voltfox synthesis ===
+  // === 11. Morphology-driven 3D Voltfox synthesis ===
   {
     const std::string morph_seed_text = voltfox_seed_text() + R"(
 [form.Idle]
@@ -506,7 +577,7 @@ rotation=0
               << result.proj3d_base.skeleton->joints.size() << " bones)\n";
   }
 
-  // === 11. Integrity — package corruption ===
+  // === 12. Integrity — package corruption ===
   {
     TestFixture fix;
     const auto seed = parse_seed(voltfox_seed_text());
@@ -527,7 +598,7 @@ rotation=0
     std::cout << "  [PASS] Integrity — corrupted package rejected\n";
   }
 
-  // === 11. Integrity — identity mismatch ===
+  // === 13. Integrity — identity mismatch ===
   {
     TestFixture fix;
     const auto seed_a = parse_seed(voltfox_seed_text());
@@ -549,7 +620,7 @@ rotation=0
     std::cout << "  [PASS] Integrity — identity mismatch between different seeds\n";
   }
 
-  // === 12. 3D animation synthesis and GLB export ===
+  // === 14. 3D animation synthesis and GLB export ===
   {
     const std::string morph_anim_seed = voltfox_seed_text() + R"(
 [form.Idle]
