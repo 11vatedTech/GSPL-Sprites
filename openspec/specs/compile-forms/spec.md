@@ -45,6 +45,13 @@ If a form's `transformations=` field references a transformation name that does 
 - **WHEN** `[form.Idle]` has `transformations=NonExistentTransformation` but no corresponding `[transformation.NonExistentTransformation]` exists
 - **THEN** `compile()` adds a validation error
 
+### Requirement: compile() SHALL enforce resource limits
+The `compile()` function SHALL check each element count (forms, transformations, bones, sockets, clips, abilities) against ResourceLimits before proceeding. If any limit is exceeded, compile() SHALL throw a runtime_error with a RESOURCE_ prefix diagnostic.
+
+#### Scenario: Form count exceeds compile limit
+- **WHEN** a SpriteSeed has more forms than ResourceLimits.max_forms
+- **THEN** `compile()` throws an exception with a diagnostic containing "RESOURCE_FORMS"
+
 ### Requirement: compile() SHALL validate form graph connectivity
 All six forms SHALL be reachable via transformations from at least one other form. An isolated form with no incoming or outgoing transformations SHALL produce a warning.
 

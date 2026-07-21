@@ -20,15 +20,26 @@ Each step of the scenario SHALL emit a timestamped `EvidenceEvent` record contai
 - **WHEN** running the full scenario
 - **THEN** the trace contains >= 6 form-change events (Idle→Running, Running→Hurt, etc.)
 
-### Requirement: Evidence mode SHALL write a JSON trace file
-The `EvidenceTrace` SHALL be serializable to JSON via `write_trace_json()`, producing a file at a specified path. The JSON SHALL contain all event fields as an array of objects.
+### Requirement: Evidence mode SHALL include _schema_version in JSON output
+The `write_trace_json()` output SHALL include a top-level `_schema_version` field set to `"gspl_evidence_v1"`.
 
-#### Scenario: JSON trace file is valid
-- **WHEN** writing the trace to a JSON file
-- **THEN** the file parses as valid JSON and contains the expected number of events
+#### Scenario: JSON contains schema version
+- **WHEN** `write_trace_json()` is called on any EvidenceTrace
+- **THEN** the output JSON matches `"_schema_version": "gspl_evidence_v1"`
+
+### Requirement: Event JSON SHALL include status_id and ability_name
+Each event object in the JSON output SHALL include `status_id` and `ability_name` fields alongside existing tick, kind, form_before, form_after, and health fields.
+
+#### Scenario: Event with non-empty ability name
+- **WHEN** an event has ability_name="take_damage"
+- **THEN** the JSON object SHALL contain `"ability_name": "take_damage"`
+
+#### Scenario: Event with non-empty status_id
+- **WHEN** an event has status_id="stunned"
+- **THEN** the JSON object SHALL contain `"status_id": "stunned"`
 
 ### Requirement: A committed oracle SHALL verify trace determinism
-A reference JSON oracle file SHALL be committed to the repository. A test SHALL run the headless evidence scenario and compare the produced trace against the oracle. Any difference SHALL fail the test.
+A reference JSON oracle file (`tests/evidence_oracle.json`) SHALL be committed to the repository. A test SHALL run the seed=42 headless evidence scenario and compare the produced trace against the oracle byte-for-byte. Any difference SHALL fail the test.
 
 #### Scenario: Trace matches oracle
 - **WHEN** running the headless scenario and comparing to the committed oracle
