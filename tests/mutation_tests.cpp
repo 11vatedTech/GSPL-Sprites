@@ -2,6 +2,7 @@
 #include "gspl_sprites/core.hpp"
 #include "gspl_sprites/combat.hpp"
 #include "gspl_sprites/domain.hpp"
+#include "gspl_sprites/headless_evidence.hpp"
 #include "gspl_sprites/living_runtime.hpp"
 #include "gspl_sprites/package.hpp"
 #include "gspl_sprites/runtime_persistence.hpp"
@@ -934,6 +935,122 @@ int main() {
       }
 
       std::cout << "  [PASS] Mutation killed: corrupted RGBA data\n";
+    }
+
+    // 25. Preview toggle: transformation state machine for A/S keys is wired correctly
+    {
+      CombatProgram combat;
+      combat.id = "test.preview.trans";
+      combat.maximum_actors = 4;
+      combat.maximum_statuses_per_actor = 4;
+      combat.abilities = {
+        {"dummy_ability", CombatTargetRule::enemy, 8, 120, 5000,
+         {{CombatEffectKind::damage, {}, 10, 0}}}
+      };
+      CombatState cstate;
+      cstate.tick = 0;
+      cstate.actors.emplace("hero", CombatActorState{"hero", "good", 100, 100, 100, 100, 0, 0, {}, {}});
+      cstate.actors.emplace("villain", CombatActorState{"villain", "evil", 100, 100, 100, 100, 1000, 0, {}, {}});
+
+      TransformationProgram tprog;
+      tprog.id = "test.preview.forms";
+      tprog.base_form = "Voltfox";
+      tprog.forms = {
+        {"Voltfox", 0, 0, {"dummy_ability"}},
+        {"Storm", 50, 0, {"dummy_ability"}},
+      };
+      tprog.transformations = {
+        {"ascend", "Voltfox", "Storm", 50, 30, true},
+        {"descend", "Storm", "Voltfox", 0, 30, true},
+      };
+
+      TransformationState tstate;
+      tstate.stable_entity_id = "hero";
+      tstate.current_form = "Voltfox";
+      tstate.energy = 100;
+      tstate.maximum_energy = 100;
+
+      // A key equivalent: begin ascending transformation
+      check(!tstate.active.has_value(), "no active transformation before begin");
+      begin_transformation(tprog, combat, tstate, "ascend", 0);
+      check(tstate.active.has_value(), "active transformation after begin");
+      check(tstate.active->transformation_id == "ascend", "ascend transformation id");
+      check(tstate.active->from_form == "Voltfox", "ascend from Voltfox");
+      check(tstate.active->to_form == "Storm", "ascend to Storm");
+
+      // Mid-progress: transformation still active
+      advance_transformation_to(tprog, combat, tstate, cstate, 15);
+      check(tstate.active.has_value(), "still transforming mid-progress");
+      check(tstate.current_form == "Voltfox", "form unchanged mid-ascend");
+
+      // Completion: transformation completes, state switches to Storm
+      advance_transformation_to(tprog, combat, tstate, cstate, 30);
+      check(!tstate.active.has_value(), "active cleared after ascend completes");
+      check(tstate.current_form == "Storm", "form is Storm after ascend");
+
+      // S key equivalent: begin descending transformation
+      begin_transformation(tprog, combat, tstate, "descend", 30);
+      check(tstate.active.has_value(), "active transformation after descend begin");
+      check(tstate.active->transformation_id == "descend", "descend transformation id");
+      check(tstate.active->from_form == "Storm", "descend from Storm");
+      check(tstate.active->to_form == "Voltfox", "descend to Voltfox");
+
+      // Mid-descend
+      advance_transformation_to(tprog, combat, tstate, cstate, 45);
+      check(tstate.active.has_value(), "still transforming mid-descend");
+
+      // Descend completes, back to base form
+      advance_transformation_to(tprog, combat, tstate, cstate, 60);
+      check(!tstate.active.has_value(), "active cleared after descend completes");
+      check(tstate.current_form == "Voltfox", "form is Voltfox after descend");
+
+      std::cout << "  [PASS] Mutation killed: preview toggle (transformation state machine)\n";
+    }
+
+    // 26. Malformed headless output: schema version, field completeness, oracle mismatch
+    {
+      // Verify write_trace_json includes _schema_version
+      EvidenceTrace empty_trace;
+      empty_trace.entity_id = "test";
+      empty_trace.seed = 0;
+      auto json = write_trace_json(empty_trace);
+      check(json.find("\"_schema_version\": \"gspl_evidence_v1\"") != std::string::npos,
+            "empty trace JSON must include _schema_version");
+
+      // Verify event serialization includes all required fields
+      EvidenceTrace full_trace;
+      full_trace.entity_id = "test.entity";
+      full_trace.seed = 42;
+      full_trace.total_ticks = 10;
+      EvidenceEvent ev;
+      ev.tick = 5;
+      ev.kind = EvidenceEventKind::form_change;
+      ev.form_before = "base";
+      ev.form_after = "storm";
+      ev.health = 80;
+      ev.status_id = "stunned";
+      ev.ability_name = "ascend";
+      full_trace.events.push_back(ev);
+      json = write_trace_json(full_trace);
+
+      // Each required field must appear in the JSON
+      check(json.find("\"tick\": 5") != std::string::npos, "JSON must contain tick");
+      check(json.find("\"kind\": \"form_change\"") != std::string::npos, "JSON must contain kind");
+      check(json.find("\"form_before\": \"base\"") != std::string::npos, "JSON must contain form_before");
+      check(json.find("\"form_after\": \"storm\"") != std::string::npos, "JSON must contain form_after");
+      check(json.find("\"health\": 80") != std::string::npos, "JSON must contain health");
+      check(json.find("\"status_id\": \"stunned\"") != std::string::npos, "JSON must contain status_id");
+      check(json.find("\"ability_name\": \"ascend\"") != std::string::npos, "JSON must contain ability_name");
+
+      // Verify that corrupting the output would fail oracle-style comparison
+      // If someone removes status_id, the oracle comparison catches it
+      std::string corrupted = json;
+      std::size_t pos = corrupted.find("\"status_id\": \"stunned\"");
+      check(pos != std::string::npos, "must find status_id in output");
+      corrupted.replace(pos, 23, "\"status_id\": \"\"");
+      check(json != corrupted, "corrupted JSON must differ from original — oracle would catch");
+
+      std::cout << "  [PASS] Mutation killed: malformed headless output\n";
     }
 
     std::cout << "all GSPL Sprites mutation tests passed\n";

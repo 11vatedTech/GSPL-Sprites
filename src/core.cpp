@@ -652,6 +652,20 @@ static void build_package_internal(const SpriteSeed& seed, std::span<const Frame
         {TargetFeature::rights_and_provenance, true}};
     if(!frames.empty())package_requirements.push_back({TargetFeature::raster_2d,true});
     if(ir.rig)package_requirements.push_back({TargetFeature::skeletal_2d,true});
+
+    // Enforce package size limit before rename
+    {
+      std::uint64_t total_bytes = 0;
+      for (const auto& entry : std::filesystem::recursive_directory_iterator(staging)) {
+        if (entry.is_regular_file())
+          total_bytes += static_cast<std::uint64_t>(entry.file_size());
+      }
+      ResourceLimits pkg_rl;
+      if (total_bytes > pkg_rl.max_package_bytes)
+        throw std::runtime_error("RESOURCE_PACKAGE_SIZE: package size " +
+            std::to_string(total_bytes) + " bytes exceeds maximum " +
+            std::to_string(pkg_rl.max_package_bytes) + " bytes");
+    }
     if(ir.animation_graph)package_requirements.push_back({TargetFeature::animation_graph,true});
     if(!ir.collision_shapes.empty()||!ir.collision_windows.empty())package_requirements.push_back({TargetFeature::collision_2d,true});
     if(!channel_maps.empty())package_requirements.push_back({TargetFeature::channel_maps,true});

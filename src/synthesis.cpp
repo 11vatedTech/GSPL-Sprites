@@ -486,6 +486,29 @@ SynthesisResult synthesize_unified_entity(const SpriteIr& ir) {
     result.proj2d_transformed = synthesize_projection2d_voltfox(ir.entity_id, "storm", storm_pal, ir.morphology, rig);
     result.animations3d = synthesize_animation3d_voltfox(ir.entity_id, "base", ir.morphology, ir.clips, ir.animation_intents);
   }
+
+  // Enforce synthesis-level resource limits
+  {
+    ResourceLimits rl;
+    auto limit_check = [&](bool ok, const char* code, const std::string& msg) {
+      if (!ok) throw std::runtime_error(std::string(code) + ": " + msg);
+    };
+    limit_check(result.proj2d_base.source_frames.size() <= rl.max_frames, "RESOURCE_FRAMES",
+        "frames count " + std::to_string(result.proj2d_base.source_frames.size()) + " exceeds maximum " + std::to_string(rl.max_frames));
+    for (const auto& f : result.proj2d_base.source_frames) {
+      limit_check(f.image.width <= rl.max_frame_width, "RESOURCE_FRAME_WIDTH",
+          "frame " + f.id + " width " + std::to_string(f.image.width) + " exceeds maximum " + std::to_string(rl.max_frame_width));
+      limit_check(f.image.height <= rl.max_frame_height, "RESOURCE_FRAME_HEIGHT",
+          "frame " + f.id + " height " + std::to_string(f.image.height) + " exceeds maximum " + std::to_string(rl.max_frame_height));
+    }
+    limit_check(result.proj25d_base.planes.size() <= rl.max_25d_planes, "RESOURCE_25D_PLANES",
+        "2.5D planes count " + std::to_string(result.proj25d_base.planes.size()) + " exceeds maximum " + std::to_string(rl.max_25d_planes));
+    std::size_t vertex_count = 0;
+    for (const auto& m : result.proj3d_base.meshes) vertex_count += m.vertices.size();
+    limit_check(vertex_count <= rl.max_vertices, "RESOURCE_VERTICES",
+        "vertices count " + std::to_string(vertex_count) + " exceeds maximum " + std::to_string(rl.max_vertices));
+  }
+
   return result;
 }
 
