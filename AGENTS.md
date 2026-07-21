@@ -22,16 +22,23 @@ trusted. Do not add network access to the compiler or runtime core.
 
 ### Important Details
 - Repository `https://github.com/11vatedTech/GSPL-Sprites`, branch `main`
-- HEAD = origin/main = `c892679` (0 ahead, 0 behind, working tree clean)
-- GCC 16.1.0 MinGW-W64 with `-Werror`; MSVC via CI (windows-2025 only — project requires Windows x64 for ONNX Runtime)
+- HEAD = origin/main = `a78c387` (0 ahead, 0 behind, working tree clean)
+- GCC 16.1.0 MinGW-W64 with `-Werror` (local); MSVC via GitHub Actions CI (windows-2025 only)
+- Linux GCC not currently supported — ONNX Runtime Windows-x64 dependency boundary
 - Windows Device Guard blocks freshly-linked executables (BAD_COMMAND) on clean rebuild — purely environmental, not code failures
-- CI run #8 (c892679) completed with conclusion: **success** — windows-2025 only, all steps green
 
 ### Archived Changes (4)
 1. `2026-07-19-voltfox-reference-entity` — Reference entity vertical
 2. `2026-07-20-voltfox-living-sprite-vertical` — Living sprite vertical
 3. `2026-07-20-voltfox-living-sprite-vertical-v2` — Living sprite vertical v2
-4. `2026-07-21-generalized-gspl-sprite-compiler` — Generalized sprite compiler (14 main specs, 23/24 tasks, CI green)
+4. `2026-07-21-generalized-gspl-sprite-compiler` — Generalized sprite compiler (14 main specs, 23/24 IMPLEMENTED, 1 APPROVED DEFERRAL, CI green)
 
-### Next Steps
-- (none — all objectives complete)
+### Next Platform Milestone
+- Full GSPL language frontend (grammar, lexer, parser, AST, modules, imports, types, units, expressions)
+- Typed Sprite Genes with composition, inheritance, and registry
+- Compiler-pass architecture with deterministic scheduling and incremental execution
+- Incremental artifact compilation and cache integrity
+- Complete resource-boundary validation
+- Provider abstraction (decouple core from Windows-only inference)
+- Cross-platform strategy (restore portable Linux CI)
+- SDK stabilization and CLI completion

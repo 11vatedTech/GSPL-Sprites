@@ -43,19 +43,17 @@ Complete the GSPL sprite compiler pipeline for production use: deterministic, bo
 
 ## 3. Verification Evidence
 
-### CI Run #8 (final SHA c892679)
-- **Runner:** windows-2025
-- **Configure:** ✅ success
-- **Build:** ✅ success
-- **Test:** ✅ success
-- **Logs:** https://github.com/11vatedTech/GSPL-Sprites/actions/runs/29869377828
+### CI (final SHA a78c387)
+- **MSVC (windows-2025):** CI run #8 (c892679) — Configure ✅ Build ✅ Test ✅
+- **GCC (MinGW):** Validated locally — 48/48 tests, 0 warnings
+- **Linux GCC:** Not currently supported — ONNX Runtime Windows-x64 dependency boundary
 
 ### OpenSpec Validation
 - **`openspec validate --all`:** 15 items pass
 
 ### Task Completion
-- 23 of 24 tasks complete
-- 1 deferred: task 4.4 (Device Guard mitigation docs — environmental, not code)
+- **23/24 IMPLEMENTED**
+- **1 APPROVED DEFERRAL:** task 4.4 (Device Guard mitigation docs — environmental, not code)
 
 ## 4. Known Issues & Gaps
 
@@ -66,9 +64,10 @@ Complete the GSPL sprite compiler pipeline for production use: deterministic, bo
 | MSVC CI confirmed post-push; GCC tested locally only | Verification | CI now windows-2025 only; GCC builds are local-only |
 | ONNX Runtime requires Windows x64 (CMakeLists.txt fatal-errors on Linux) | Platform constraint | CI restricted to windows-2025; documented in build system |
 
-## 5. Commit History (cfc1ef0..c892679)
+## 5. Commit History (cfc1ef0..a78c387)
 
 ```
+a78c387 archive: finalize generalized-gspl-sprite-compiler change
 c892679 ci: restrict to windows-2025 (project requires Windows x64 for ONNX Runtime)
 5b2002c fix: commit missing OpenSpec change artifact files (proposal, design, delta specs)
 fb50907 docs: sync delta specs to main, update task completion status
@@ -80,7 +79,7 @@ cfc1ef0 infra: harden resource limits, frame identity, preview authority, headle
 ## 6. Repository State
 
 - **Branch:** main
-- **HEAD:** c892679 (0 ahead, 0 behind origin/main)
+- **HEAD:** a78c387 (0 ahead, 0 behind origin/main)
 - **Working tree:** clean
 - **Active changes:** none (archived)
 - **Archived changes:** 4 (voltfox-reference-entity, voltfox-living-sprite-vertical, voltfox-living-sprite-vertical-v2, generalized-gspl-sprite-compiler)
