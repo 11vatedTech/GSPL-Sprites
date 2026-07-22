@@ -38,24 +38,27 @@ trusted. Do not add network access to the compiler or runtime core.
 | `gspl-language-and-platform-completion` | Active — implementing full GSPL 1.0 language + platform |
 
 ### Implemented (this session)
-- GSPL 1.0 language frontend core: `SourceManager`, `Lexer`, `Parser`, `AST` (module, entity, gene, form, transformation, morphology, resource, ability, rights)
-- Diagnostics system with typed error codes, severity, JSON output (28 error codes)
-- Module system: `ModulePath`, `ModuleResolver` (cycle detection), `NameResolver` (scope-based name resolution)
-- Type system: `GsplType` (Bool/Int/UInt/Fixed/String/Color/Duration/Distance/Angle/etc.), `TypeChecker` (dimension compatibility, assignability)
-- Expression evaluator: bounded `ExpressionEvaluator` with entropy channels, depth/step/node limits
-- Gene system: `GeneRegistry` with 35 built-in gene kinds, dependency/conflict validation, composition with override
-- Sprite IR: `SpriteIr` data model, `IrSerializer` (serialize/validate/diff)
-- Compiler-pass architecture: `CompilationContext`, `PassManager`, 9 implemented passes (lex/parse/module-resolve/name-resolve/type-check/gene-compose/ir-gen/ir-validate/ir-optimize), topological scheduling
-- CLI: `gsplc` binary with argument parsing, file compilation, pass pipeline, JSON/IR output
-- `include/gspl/` SDK headers (13 headers) + `src/` implementations (11 source files)
-- 20 test groups in `gspl_compiler_tests`, all passing
-- All existing tests continue to pass (core, domain, fuzz, mutation, voltfox)
+- **CanonicalEntity bridge** (`include/gspl/semantics.hpp`, `include/gspl/lowering.hpp`, `src/semantics.cpp`, `src/lowering.cpp`):
+  - `CanonicalEntity`: unified semantic bridge between typed GSPL AST and production `SpriteSeed` (parts, forms, transformations, abilities, morphology, bones, sockets, animation clips/states/transitions, collision shapes/windows, runtime attributes, genes, provenance)
+  - `Canonicalizer`: lowers `ModuleDecl` + `GeneInstance` vector to `CanonicalEntity`
+  - `SpriteIrLowering`: direct `CanonicalEntity` → production `gspl::sprites::SpriteIr` (authoritative path)
+  - `SpriteSeedLowering`: `CanonicalEntity` → `gspl::sprites::SpriteSeed` (compatibility adapter)
+  - `CanonicalEntitySerializer`: to_json / to_yaml / from_json
+  - `CanonicalEntityValidator`: validates required fields, rights, cross-references
+  - `CanonicalEntityIdentity`: deterministic hash from semantic fields (no memory addresses, absolute paths, wall-clock values, or unordered-container iteration order)
+  - `CanonicalEntityDiff`: structured field-by-field comparison with CHANGED/UNCHANGED
+- **Four new compiler passes**: `CanonicalizePhase`, `CanonicalValidatePhase`, `SpriteIrLowerPhase`, `SeedLowerPhase` (added to pass pipeline with topological dependencies)
+- **Production-grade diagnostics**: typed `LoweringDiagnostic` codes (RIGHTS_INVALID, COLOR_INVALID, FORM_UNREPRESENTABLE, SEMANTIC_LOSS, INTERNAL_FAILURE, etc.)
+- **CLI updated**: `gsplc` registers all new passes; default target list includes `canonicalize` → `canonical_validate` → `sprite_ir_lower` → `seed_lower`
+- **Modern GSPL example**: `examples/gspl/voltfox/main.gspl` — Voltfox entity using all supported declaration types
+- **Comprehensive end-to-end test**: `tests/semantic_pipeline_tests.cpp` — 11 tests covering full pipeline, CanonicalEntity serializer/validator/identity/diff, SpriteIrLowering, SpriteSeedLowering, production compile, PassManager topology, and diagnostic reporting
+- **Parser bugfixes**: removed double-advance in `parse_literal()`, added semicolon consumption in `parse_rights()`
+- **CLI bugfix**: fixed `argv[0]` being treated as input file (start loop at index 1)
+- **Lowering enhancement**: RIGHTS_INVALID diagnostic when rights classification is unrecognized
+- **C++23 compat fixes**: `std::divides` replaced with generic lambda; guarded `visit_numeric` against `bool` operand; added `else` branch for C4702 unreachable code
 
-### Next Platform Milestone
-- Grammar feature completion (traits, expressions, operators, morphologies, collisions, joints, sockets, palettes, animations, behaviors, transitions)
-- Full linked-symbol resolver with module-import merging
-- Dimensional safety analysis with unit inference
-- Constraint/bound validation pass with contract enforcement
-- Incremental artifact cache and IR-persistent compilation
-- Provider abstraction to decouple ONNX Runtime dependency
-- Cross-platform: restore portable Linux CI
+### Next Milestones
+- `--package` CLI flag to call `build_package()` after compilation
+- Full AST → CanonicalEntity field population from ability/form body attributes (currently uses defaults)
+- Grammar feature completion (traits, expressions, operators, morphologies, collisions, joints, sockets, palettes, animations, behaviors, transitions, hyphenated identifiers)
+- Provider abstraction to decouple ONNX Runtime dependency (GSPL_CORE_ONLY build profile)
