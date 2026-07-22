@@ -2,6 +2,7 @@
 #include "gspl/ir.hpp"
 #include "gspl/ast.hpp"
 #include "gspl/expressions.hpp"
+#include "gspl/semantics.hpp"
 #include "gspl/diagnostics.hpp"
 #include <cstdint>
 #include <string>
@@ -12,7 +13,9 @@ namespace gspl {
 enum class PassKind : std::uint8_t {
     lex, parse, module_resolve, name_resolve, type_check,
     gene_composition, ir_gen, ir_validate, ir_optimize,
-    representation_plan, runtime_plan, package_plan, emit
+    representation_plan, runtime_plan, package_plan, emit,
+    canonicalize, canonical_validate, sprite_ir_lower, seed_lower,
+    sprite_compile, package_build
 };
 
 struct PassDescriptor {
@@ -29,6 +32,7 @@ public:
     std::vector<Token> tokens;
     std::unique_ptr<ModuleDecl> ast;
     SpriteIr ir;
+    CanonicalEntity canonical;
     DiagnosticResult diagnostics;
     ExpressionConfig expr_config;
     std::unordered_map<PassKind, PassDescriptor> pass_registry;
@@ -108,6 +112,30 @@ public:
 class IrOptimizePhase final : public CompilerPass {
 public:
     IrOptimizePhase() : CompilerPass(PassKind::ir_optimize) {}
+    DiagnosticResult execute(CompilationContext& ctx) override;
+};
+
+class CanonicalizePhase final : public CompilerPass {
+public:
+    CanonicalizePhase() : CompilerPass(PassKind::canonicalize) {}
+    DiagnosticResult execute(CompilationContext& ctx) override;
+};
+
+class CanonicalValidatePhase final : public CompilerPass {
+public:
+    CanonicalValidatePhase() : CompilerPass(PassKind::canonical_validate) {}
+    DiagnosticResult execute(CompilationContext& ctx) override;
+};
+
+class SpriteIrLowerPhase final : public CompilerPass {
+public:
+    SpriteIrLowerPhase() : CompilerPass(PassKind::sprite_ir_lower) {}
+    DiagnosticResult execute(CompilationContext& ctx) override;
+};
+
+class SeedLowerPhase final : public CompilerPass {
+public:
+    SeedLowerPhase() : CompilerPass(PassKind::seed_lower) {}
     DiagnosticResult execute(CompilationContext& ctx) override;
 };
 

@@ -3,6 +3,10 @@
 #include "gspl/parser.hpp"
 #include "gspl/modules.hpp"
 #include "gspl/types.hpp"
+#include "gspl/semantics.hpp"
+#include "gspl/lowering.hpp"
+#include "gspl_sprites/core.hpp"
+#include "gspl_sprites/package.hpp"
 #include <deque>
 #include <functional>
 #include <ranges>
@@ -47,6 +51,10 @@ DiagnosticResult PassManager::register_pass(std::unique_ptr<CompilerPass> pass) 
     case PassKind::ir_gen: desc.dependencies = {PassKind::gene_composition}; break;
     case PassKind::ir_validate: desc.dependencies = {PassKind::ir_gen}; break;
     case PassKind::ir_optimize: desc.dependencies = {PassKind::ir_validate}; break;
+    case PassKind::canonicalize: desc.dependencies = {PassKind::name_resolve, PassKind::type_check, PassKind::gene_composition}; break;
+    case PassKind::canonical_validate: desc.dependencies = {PassKind::canonicalize}; break;
+    case PassKind::sprite_ir_lower: desc.dependencies = {PassKind::canonical_validate}; break;
+    case PassKind::seed_lower: desc.dependencies = {PassKind::canonicalize}; break;
     default: break;
     }
     descriptors_[kind] = desc;
@@ -172,6 +180,118 @@ DiagnosticResult IrValidatePhase::execute(CompilationContext& ctx) {
 
 DiagnosticResult IrOptimizePhase::execute(CompilationContext& ctx) {
     (void)ctx;
+    return {};
+}
+
+DiagnosticResult CanonicalizePhase::execute(CompilationContext& ctx) {
+    if (!ctx.ast) {
+        Diagnostic d;
+        d.code = DiagnosticCode::GSPL_MODULE_UNRESOLVED;
+        d.severity = DiagnosticSeverity::error;
+        d.message = "Cannot canonicalize: no AST";
+        return DiagnosticResult{{d}};
+    }
+    // Require preceding semantic passes to have completed
+    if (ctx.has_fatal_errors()) {
+        Diagnostic d;
+        d.code = DiagnosticCode::GSPL_TYPE_MISMATCH;
+        d.severity = DiagnosticSeverity::error;
+        d.message = "Cannot canonicalize: preceding semantic passes have errors";
+        return DiagnosticResult{{d}};
+    }
+    GeneRegistry registry;
+    auto gene_result = registry.validate_composition({});
+    auto has_errors = std::any_of(gene_result.diagnostics.begin(), gene_result.diagnostics.end(),
+        [](auto const& d) { return d.severity >= DiagnosticSeverity::error; });
+    if (has_errors) {
+        for (auto const& gd : gene_result.diagnostics) ctx.diagnostics.add(gd);
+        return ctx.diagnostics;
+    }
+    Canonicalizer canonicalizer(ctx.sources);
+    ctx.canonical = canonicalizer.lower(*ctx.ast, {});
+    for (auto const& d : canonicalizer.diagnostics().diagnostics) ctx.diagnostics.add(d);
+    return {};
+}
+
+DiagnosticResult CanonicalValidatePhase::execute(CompilationContext& ctx) {
+    CanonicalEntityValidator validator;
+    auto result = validator.validate(ctx.canonical);
+    for (auto& d : result.diagnostics) ctx.diagnostics.add(d);
+    return {};
+}
+
+DiagnosticResult SpriteIrLowerPhase::execute(CompilationContext& ctx) {
+    auto lowering_result = SpriteIrLowering::lower(ctx.canonical);
+    for (auto const& ld : lowering_result.diagnostics) {
+        Diagnostic diag;
+        switch (ld.code) {
+        case LoweringDiagnostic::Code::RIGHTS_INVALID:
+            diag.code = DiagnosticCode::GSPL_RIGHTS_VIOLATION; break;
+        case LoweringDiagnostic::Code::COLOR_INVALID:
+            diag.code = DiagnosticCode::GSPL_TYPE_INVALID_CONVERSION; break;
+        case LoweringDiagnostic::Code::SEMANTIC_LOSS:
+        case LoweringDiagnostic::Code::INTERNAL_FAILURE:
+            diag.code = DiagnosticCode::GSPL_TYPE_MISMATCH; break;
+        default:
+            diag.code = DiagnosticCode::GSPL_TYPE_MISMATCH; break;
+        }
+        diag.severity = ld.is_error() ? DiagnosticSeverity::error : DiagnosticSeverity::warning;
+        diag.message = ld.message;
+        ctx.diagnostics.add(diag);
+    }
+    // Store the lowered production SpriteIr into the existing CompilationContext
+    // (We can't store gspl::sprites::SpriteIr directly, so we just validate it compiled)
+    try {
+        // Lower via SpriteSeed for compatibility and run through production compile()
+        auto seed = SpriteSeedLowering::lower(ctx.canonical);
+        auto validation = gspl::sprites::validate(seed);
+        if (!validation.ok()) {
+            for (auto& d : validation.diagnostics) {
+                Diagnostic diag;
+                diag.code = DiagnosticCode::GSPL_TYPE_MISMATCH;
+                diag.severity = DiagnosticSeverity::error;
+                diag.message = d.message;
+                ctx.diagnostics.add(diag);
+            }
+            return ctx.diagnostics;
+        }
+        auto prod_ir = gspl::sprites::compile(seed);
+        ctx.ir.entity_id = prod_ir.entity_id;
+        ctx.ir.seed_identity = prod_ir.seed_identity;
+    } catch (std::exception const& e) {
+        Diagnostic d;
+        d.code = DiagnosticCode::GSPL_TYPE_MISMATCH;
+        d.severity = DiagnosticSeverity::error;
+        d.message = std::string("Production compilation failed: ") + e.what();
+        return DiagnosticResult{{d}};
+    }
+    return {};
+}
+
+DiagnosticResult SeedLowerPhase::execute(CompilationContext& ctx) {
+    auto seed = SpriteSeedLowering::lower(ctx.canonical);
+    try {
+        auto validation = gspl::sprites::validate(seed);
+        if (!validation.ok()) {
+            for (auto& d : validation.diagnostics) {
+                Diagnostic diag;
+                diag.code = DiagnosticCode::GSPL_TYPE_MISMATCH;
+                diag.severity = DiagnosticSeverity::error;
+                diag.message = d.message;
+                ctx.diagnostics.add(diag);
+            }
+            return ctx.diagnostics;
+        }
+        auto prod_ir = gspl::sprites::compile(seed);
+        ctx.ir.entity_id = prod_ir.entity_id;
+        ctx.ir.seed_identity = prod_ir.seed_identity;
+    } catch (std::exception const& e) {
+        Diagnostic d;
+        d.code = DiagnosticCode::GSPL_TYPE_MISMATCH;
+        d.severity = DiagnosticSeverity::error;
+        d.message = std::string("Sprite seed compilation failed: ") + e.what();
+        return DiagnosticResult{{d}};
+    }
     return {};
 }
 
