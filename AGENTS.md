@@ -35,7 +35,7 @@ trusted. Do not add network access to the compiler or runtime core.
 | `voltfox-living-sprite-vertical` | Archived |
 | `voltfox-living-sprite-vertical-v2` | Archived |
 | `generalized-gspl-sprite-compiler` | Archived (23/24 IMPLEMENTED, 1 APPROVED DEFERRAL) |
-| `gspl-language-and-platform-completion` | Active — implementing full GSPL 1.0 language + platform |
+| `gspl-language-and-platform-completion` | Archived (all tasks complete) |
 
 ### Implemented (this session)
 - **Section 2 (UTF-8)**: `include/gspl/utf8.hpp` `src/utf8.cpp` — BOM detection/stripping, UTF-8 validation (overlong, surrogate, continuation, truncated, null bytes, >U+10FFFF), `from_file()` strips BOM, lexer validates in constructor (`GSPL_LEX_INVALID_UTF8`), `next()` uses `classify_utf8_byte()`, multi-byte in `lex_identifier_or_keyword()`. 21 tests in `tests/utf8_tests.cpp`
@@ -62,6 +62,4 @@ trusted. Do not add network access to the compiler or runtime core.
 - **61/61 tests pass** (0 failures, 0 warnings MSVC 19.44)
 
 ### Next Milestones
-- Commit to make HEAD == origin/main with clean working tree
-- CI config for Linux CORE_ONLY profile
-- Archive change and produce final report
+- (none — all changes complete and archived)
