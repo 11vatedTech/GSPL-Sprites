@@ -58,20 +58,22 @@ EvalResult ExpressionEvaluator::eval_binary(TokenKind op, EvalResult const& left
         return std::visit([&](auto const& l, auto const& r) -> EvalResult {
             using L = std::decay_t<decltype(l)>;
             using R = std::decay_t<decltype(r)>;
-            if constexpr (std::is_arithmetic_v<L> && std::is_arithmetic_v<R>) {
+            if constexpr (std::is_arithmetic_v<L> && std::is_arithmetic_v<R>
+                          && !std::is_same_v<L, bool> && !std::is_same_v<R, bool>) {
                 auto result = fn(l, r);
                 if (left.type.base == BaseType::Fixed || right.type.base == BaseType::Fixed)
                     return {static_cast<double>(result), GsplType::make_fixed()};
                 return {static_cast<std::int64_t>(result), GsplType::make_int()};
+            } else {
+                return {std::int64_t(0), GsplType::make_int()};
             }
-            return {std::int64_t(0), GsplType::make_int()};
         }, left.value, right.value);
     };
     switch (op) {
     case TokenKind::plus: return visit_numeric(std::plus<>{});
     case TokenKind::minus: return visit_numeric(std::minus<>{});
     case TokenKind::star: return visit_numeric(std::multiplies<>{});
-    case TokenKind::slash: return visit_numeric(std::divides<>{});
+    case TokenKind::slash: return visit_numeric([](auto a, auto b) { return a / b; });
     default: return {std::int64_t(0), GsplType::make_int()};
     }
 }

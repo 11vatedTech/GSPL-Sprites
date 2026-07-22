@@ -77,7 +77,6 @@ std::unique_ptr<LiteralNode> Parser::parse_literal() {
         tok.kind == TokenKind::boolean_literal || tok.kind == TokenKind::duration_literal ||
         tok.kind == TokenKind::distance_literal || tok.kind == TokenKind::angle_literal ||
         tok.kind == TokenKind::percentage_literal || tok.kind == TokenKind::color_literal) {
-        advance();
         return std::make_unique<LiteralNode>(tok.kind, tok.text);
     }
     return nullptr;
@@ -225,6 +224,7 @@ std::unique_ptr<RightsDecl> Parser::parse_rights() {
     advance();
     auto classification = parse_identifier()->name;
     auto code = parse_identifier()->name;
+    match(TokenKind::semicolon);
     return std::make_unique<RightsDecl>(classification + "/" + code);
 }
 

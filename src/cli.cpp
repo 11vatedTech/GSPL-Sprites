@@ -11,7 +11,7 @@ Cli::ParseResult Cli::parse(int argc, char* argv[]) {
     ParseResult result;
     CliOptions opts;
 
-    for (std::size_t i = 0; i < static_cast<std::size_t>(argc); ++i) {
+    for (std::size_t i = 1; i < static_cast<std::size_t>(argc); ++i) {
         std::string_view arg = argv[i];
         if (arg == "--help" || arg == "-h") { print_help(); result.success = true; return result; }
         if (arg == "--version" || arg == "-v") { print_version(); result.success = true; return result; }
@@ -99,13 +99,19 @@ DiagnosticResult Cli::compile_source(SourceBuffer source, CliOptions const& opts
     pm.register_pass(std::make_unique<IrGenPhase>());
     pm.register_pass(std::make_unique<IrValidatePhase>());
     pm.register_pass(std::make_unique<IrOptimizePhase>());
+    pm.register_pass(std::make_unique<CanonicalizePhase>());
+    pm.register_pass(std::make_unique<CanonicalValidatePhase>());
+    pm.register_pass(std::make_unique<SpriteIrLowerPhase>());
+    pm.register_pass(std::make_unique<SeedLowerPhase>());
 
     std::vector<PassKind> targets;
     if (opts.stop_after.empty()) {
         targets = {PassKind::lex, PassKind::parse, PassKind::module_resolve,
                    PassKind::name_resolve, PassKind::type_check,
                    PassKind::gene_composition, PassKind::ir_gen,
-                   PassKind::ir_validate, PassKind::ir_optimize};
+                   PassKind::ir_validate, PassKind::ir_optimize,
+                   PassKind::canonicalize, PassKind::canonical_validate,
+                   PassKind::sprite_ir_lower, PassKind::seed_lower};
     } else {
         targets = opts.stop_after;
     }
