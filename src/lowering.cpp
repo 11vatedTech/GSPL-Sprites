@@ -76,9 +76,12 @@ SpriteIrLowering::Result SpriteIrLowering::lower(CanonicalEntity const& entity) 
         g.initial_state = entity.initial_state;
         for (auto const& s : entity.states) g.states.push_back(lower_state(s));
         for (auto const& t : entity.transitions) {
-            if (g.states.empty()) break;
-            auto& last_state = g.states.back();
-            last_state.transitions.push_back(lower_transition(t));
+            for (auto& state : g.states) {
+                if (state.id == t.from_state) {
+                    state.transitions.push_back(lower_transition(t));
+                    break;
+                }
+            }
         }
         ir.animation_graph = std::move(g);
     }
@@ -303,6 +306,34 @@ gspl::sprites::RuntimeAttributes SpriteSeedLowering::lower_runtime(CanonicalRunt
     return SpriteIrLowering::lower_runtime(runtime);
 }
 
+gspl::sprites::BoneDefinition SpriteSeedLowering::lower_bone(CanonicalSkeletalBone const& bone) {
+    return SpriteIrLowering::lower_bone(bone);
+}
+
+gspl::sprites::SocketDefinition SpriteSeedLowering::lower_socket(CanonicalSocket const& socket) {
+    return SpriteIrLowering::lower_socket(socket);
+}
+
+gspl::sprites::SkeletalClip SpriteSeedLowering::lower_clip(CanonicalAnimationClip const& clip) {
+    return SpriteIrLowering::lower_clip(clip);
+}
+
+gspl::sprites::AnimationState SpriteSeedLowering::lower_state(CanonicalAnimationState const& state) {
+    return SpriteIrLowering::lower_state(state);
+}
+
+gspl::sprites::AnimationTransition SpriteSeedLowering::lower_transition(CanonicalTransition const& trans) {
+    return SpriteIrLowering::lower_transition(trans);
+}
+
+gspl::sprites::CollisionShape SpriteSeedLowering::lower_collision_shape(CanonicalCollisionShape const& shape) {
+    return SpriteIrLowering::lower_collision_shape(shape);
+}
+
+gspl::sprites::CollisionWindow SpriteSeedLowering::lower_collision_window(CanonicalCollisionWindow const& window) {
+    return SpriteIrLowering::lower_collision_window(window);
+}
+
 gspl::sprites::SpriteSeed SpriteSeedLowering::lower(CanonicalEntity const& entity) {
     gspl::sprites::SpriteSeed seed;
     seed.schema = "gspl.sprite-seed/0.2";
@@ -340,6 +371,38 @@ gspl::sprites::SpriteSeed SpriteSeedLowering::lower(CanonicalEntity const& entit
         for (auto const& [name, part] : overrides)
             seed.form_morphology_overrides[form_name][name] = lower_part(part);
     }
+
+    // Lower rig (bones + sockets)
+    if (!entity.bones.empty() || !entity.sockets.empty()) {
+        gspl::sprites::RigDefinition rig;
+        rig.id = entity.stable_id + ".rig";
+        for (auto const& b : entity.bones) rig.bones.push_back(lower_bone(b));
+        for (auto const& s : entity.sockets) rig.sockets.push_back(lower_socket(s));
+        seed.rig = std::move(rig);
+    }
+
+    // Lower animation clips
+    for (auto const& c : entity.clips) seed.clips.push_back(lower_clip(c));
+
+    // Lower animation state graph
+    if (!entity.states.empty()) {
+        gspl::sprites::AnimationStateGraph g;
+        g.initial_state = entity.initial_state;
+        for (auto const& s : entity.states) g.states.push_back(lower_state(s));
+        for (auto const& t : entity.transitions) {
+            for (auto& state : g.states) {
+                if (state.id == t.from_state) {
+                    state.transitions.push_back(lower_transition(t));
+                    break;
+                }
+            }
+        }
+        seed.animation_graph = std::move(g);
+    }
+
+    // Lower collision
+    for (auto const& s : entity.collision_shapes) seed.collision_shapes.push_back(lower_collision_shape(s));
+    for (auto const& w : entity.collision_windows) seed.collision_windows.push_back(lower_collision_window(w));
 
     if (entity.runtime)
         seed.runtime = lower_runtime(*entity.runtime);

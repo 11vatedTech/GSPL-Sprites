@@ -1,0 +1,153 @@
+module drone;
+
+entity Drone {
+    rights ORIGINAL_USER_CREATION PUBLIC;
+
+    gene identity {
+        stable_id: "reference.mechanical.drone";
+        name: "Surveillance Drone";
+    };
+
+    gene classification {
+        taxonomy: "mechanical.aerial.drone.surveillance";
+    };
+
+    gene appearance {
+        primary_color: "#2F4F4F";
+        accent_color: "#708090";
+        emissive_color: "#00FF00";
+        aura_color: "#90EE90";
+    };
+
+    form base {
+        resource_capacity: 60;
+        collision_scale: 0.8;
+        ability_envelope: 0.6;
+        max_health: 60;
+        transformations: "overclock";
+    };
+
+    form overclocked {
+        resource_capacity: 100;
+        collision_scale: 0.9;
+        ability_envelope: 1.0;
+        max_health: 80;
+        transformations: "overclock";
+    };
+
+    transformation overclock base overclocked {
+        duration: 10;
+        resource_cost: 60;
+    };
+
+    ability scan {
+        effect: "sensor.scan.area";
+        cost: 5;
+        cooldown_ticks: 4;
+        active_ticks: 2;
+    };
+
+    ability emp_burst {
+        effect: "electric.emp.area";
+        cost: 30;
+        cooldown_ticks: 15;
+        active_ticks: 1;
+        origin_socket: "core";
+    };
+
+    ability data_transmit {
+        effect: "communication.data.transmit";
+        cost: 10;
+        cooldown_ticks: 8;
+        active_ticks: 3;
+    };
+
+    resource battery resource {
+        min: 0;
+        max: 100;
+        initial: 100;
+    };
+
+    resource signal resource {
+        min: 0;
+        max: 100;
+        initial: 80;
+    };
+
+    morphology {
+        chassis {
+            x: 0; y: 0; z: 0;
+            size_x: 30; size_y: 10; size_z: 20;
+            color: "#2F4F4F";
+            parent: "root";
+        };
+        sensor_array {
+            x: 0; y: 8; z: 5;
+            size_x: 12; size_y: 4; size_z: 10;
+            color: "#708090";
+            parent: "chassis";
+        };
+        left_wing {
+            x: -20; y: 2; z: 10;
+            size_x: 20; size_y: 2; size_z: 8;
+            color: "#4A6A6A";
+            parent: "chassis";
+        };
+        right_wing {
+            x: 20; y: 2; z: 10;
+            size_x: 20; size_y: 2; size_z: 8;
+            color: "#4A6A6A";
+            parent: "chassis";
+        };
+        left_rotor {
+            x: -20; y: 12; z: 10;
+            size_x: 4; size_y: 6; size_z: 4;
+            color: "#A0A0A0";
+            parent: "left_wing";
+        };
+        right_rotor {
+            x: 20; y: 12; z: 10;
+            size_x: 4; size_y: 6; size_z: 4;
+            color: "#A0A0A0";
+            parent: "right_wing";
+        };
+        core {
+            x: 0; y: 0; z: 5;
+            size_x: 10; size_y: 6; size_z: 10;
+            color: "#00FF00";
+            parent: "chassis";
+            emissive: true;
+        };
+        antenna {
+            x: 0; y: 10; z: 10;
+            size_x: 2; size_y: 8; size_z: 2;
+            color: "#C0C0C0";
+            parent: "chassis";
+        };
+        landing_gear_left {
+            x: -8; y: -8; z: 5;
+            size_x: 6; size_y: 4; size_z: 6;
+            color: "#1A1A1A";
+            parent: "chassis";
+        };
+        landing_gear_right {
+            x: 8; y: -8; z: 5;
+            size_x: 6; size_y: 4; size_z: 6;
+            color: "#1A1A1A";
+            parent: "chassis";
+        };
+        tail_fin {
+            x: 0; y: 5; z: -15;
+            size_x: 8; size_y: 6; size_z: 4;
+            color: "#3A5A5A";
+            parent: "chassis";
+        };
+        optical_lens {
+            x: 0; y: 9; z: 12;
+            size_x: 6; size_y: 3; size_z: 6;
+            color: "#87CEEB";
+            parent: "sensor_array";
+            emissive: true;
+        };
+    };
+};

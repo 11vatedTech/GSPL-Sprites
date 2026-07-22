@@ -16,6 +16,9 @@ struct CliOptions {
     bool emit_ir{false};
     bool validate_only{false};
     bool verbose{false};
+    bool package_output{false};
+    bool verify{false};
+    std::filesystem::path package_dir;
     bool deterministic_seed{false};
     std::uint64_t deterministic_entropy{42};
     std::optional<std::uint32_t> max_threads;
@@ -23,6 +26,11 @@ struct CliOptions {
     std::string model_id;
     bool preserve_artifact_cache{true};
     bool no_network{true};
+    bool migrate{false};
+    std::filesystem::path migrate_output_dir;
+    bool graph{false};
+    bool migrate_dry_run{false};
+    bool migrate_overwrite{false};
 };
 
 struct SourceFile {

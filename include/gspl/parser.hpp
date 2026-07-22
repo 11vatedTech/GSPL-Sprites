@@ -44,6 +44,7 @@ private:
     std::unique_ptr<ResourceDecl> parse_resource();
     std::unique_ptr<AbilityDecl> parse_ability();
     std::unique_ptr<RightsDecl> parse_rights();
+    std::unique_ptr<GenericBlock> parse_generic_block(std::string const& block_type);
     std::unique_ptr<AstNode> parse_declaration();
     std::unique_ptr<BlockNode> parse_block();
 };

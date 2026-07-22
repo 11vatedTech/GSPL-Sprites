@@ -234,6 +234,7 @@ private:
     void lower_ability(AbilityDecl const& ability, CanonicalEntity& out);
     void lower_rights(RightsDecl const& rights, CanonicalEntity& out);
     void lower_resource(ResourceDecl const& resource, CanonicalEntity& out);
+    void lower_generic_block(GenericBlock const& block, CanonicalEntity& out);
     void apply_genes(std::vector<GeneInstance> const& genes, CanonicalEntity& out);
 };
 

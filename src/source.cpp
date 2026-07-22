@@ -1,4 +1,5 @@
 #include "gspl/source.hpp"
+#include "gspl/utf8.hpp"
 #include <algorithm>
 #include <fstream>
 #include <sstream>
@@ -22,6 +23,7 @@ SourceBuffer SourceBuffer::from_file(std::filesystem::path path) {
     buf.identifier_ = std::move(ident);
     buf.content_.resize(size);
     file.read(buf.content_.data(), static_cast<std::streamsize>(size));
+    buf.content_ = strip_bom(std::move(buf.content_));
     return buf;
 }
 

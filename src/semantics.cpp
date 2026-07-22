@@ -1,4 +1,5 @@
 #include "gspl/semantics.hpp"
+#include "gspl/ast.hpp"
 #include "gspl/genes.hpp"
 #include <algorithm>
 #include <iomanip>
@@ -187,6 +188,8 @@ void Canonicalizer::lower_form(FormDecl const& form, CanonicalEntity& out) {
             if (attr->key == "transformations" && attr->value) {
                 if (auto const* lit = dynamic_cast<LiteralNode const*>(attr->value.get())) {
                     std::string s = lit->value;
+                    if (s.size() >= 2 && s.front() == '"' && s.back() == '"')
+                        s = s.substr(1, s.size() - 2);
                     std::size_t pos = 0;
                     while ((pos = s.find(',')) != std::string::npos) {
                         cf.transformation_ids.push_back(s.substr(0, pos));
@@ -210,15 +213,37 @@ void Canonicalizer::lower_transformation(TransformationDecl const& trans, Canoni
         if (auto const* lit = dynamic_cast<LiteralNode const*>(trans.duration.get()))
             ct.duration_ticks = static_cast<std::uint32_t>(std::stoul(lit->value));
     }
+    if (trans.resource_cost) {
+        if (auto const* lit = dynamic_cast<LiteralNode const*>(trans.resource_cost.get()))
+            ct.resource_cost = static_cast<std::uint32_t>(std::stoul(lit->value));
+    }
     out.transformations.push_back(std::move(ct));
 }
 
 void Canonicalizer::lower_morphology(MorphologyDecl const& morph, CanonicalEntity& out) {
     for (auto const& child : morph.parts) {
-        (void)child;
+        auto const* part = dynamic_cast<PartDecl const*>(child.get());
+        if (!part) continue;
         CanonicalPart cp;
-        cp.name = "part_" + std::to_string(out.morphology.size() + 1);
+        cp.name = part->name;
         cp.color = "#888888";
+        for (auto const& attr : part->attributes) {
+            auto const* a = dynamic_cast<AttributeNode const*>(attr.get());
+            if (!a || !a->value) continue;
+            auto const* lit = dynamic_cast<LiteralNode const*>(a->value.get());
+            if (!lit) continue;
+            if (a->key == "x") cp.x = std::stod(lit->value);
+            else if (a->key == "y") cp.y = std::stod(lit->value);
+            else if (a->key == "z") cp.z = std::stod(lit->value);
+            else if (a->key == "size_x") cp.size_x = std::stod(lit->value);
+            else if (a->key == "size_y") cp.size_y = std::stod(lit->value);
+            else if (a->key == "size_z") cp.size_z = std::stod(lit->value);
+            else if (a->key == "color") cp.color = lit->value;
+            else if (a->key == "rotation_degrees") cp.rotation_degrees = std::stod(lit->value);
+            else if (a->key == "parent") cp.parent = lit->value;
+            else if (a->key == "emissive") cp.emissive = (lit->value == "true");
+            else if (a->key == "electrical_marking") cp.electrical_marking = (lit->value == "true");
+        }
         out.morphology[cp.name] = std::move(cp);
     }
 }
@@ -230,6 +255,21 @@ void Canonicalizer::lower_ability(AbilityDecl const& ability, CanonicalEntity& o
     ca.cost = 20;
     ca.cooldown_ticks = 10;
     ca.active_ticks = 4;
+    for (auto const& child : ability.body) {
+        auto const* attr = dynamic_cast<AttributeNode const*>(child.get());
+        if (!attr || !attr->value) continue;
+        auto const* lit = dynamic_cast<LiteralNode const*>(attr->value.get());
+        if (!lit) continue;
+        if (attr->key == "effect") ca.effect = lit->value;
+        else if (attr->key == "cost") ca.cost = static_cast<std::uint32_t>(std::stoul(lit->value));
+        else if (attr->key == "cooldown_ticks") ca.cooldown_ticks = static_cast<std::uint32_t>(std::stoul(lit->value));
+        else if (attr->key == "active_ticks") ca.active_ticks = static_cast<std::uint32_t>(std::stoul(lit->value));
+        else if (attr->key == "origin_socket") ca.origin_socket = lit->value;
+        else if (attr->key == "speed_mm_per_tick") ca.speed_mm_per_tick = std::stod(lit->value);
+        else if (attr->key == "collision_radius_mm") ca.collision_radius_mm = std::stod(lit->value);
+        else if (attr->key == "status_id") ca.status_id = lit->value;
+        else if (attr->key == "status_duration_ticks") ca.status_duration_ticks = static_cast<std::uint32_t>(std::stoul(lit->value));
+    }
     out.abilities.push_back(std::move(ca));
 }
 
@@ -246,12 +286,147 @@ void Canonicalizer::lower_entity(EntityDecl const& entity, CanonicalEntity& out)
         else if (auto const* t = dynamic_cast<TransformationDecl const*>(child_ptr.get())) lower_transformation(*t, out);
         else if (auto const* m = dynamic_cast<MorphologyDecl const*>(child_ptr.get())) lower_morphology(*m, out);
         else if (auto const* a = dynamic_cast<AbilityDecl const*>(child_ptr.get())) lower_ability(*a, out);
-        else if (auto const* r = dynamic_cast<RightsDecl const*>(child_ptr.get())) lower_rights(*r, out);
+        else if (auto const* ri = dynamic_cast<RightsDecl const*>(child_ptr.get())) lower_rights(*ri, out);
+        else if (auto const* rs = dynamic_cast<ResourceDecl const*>(child_ptr.get())) lower_resource(*rs, out);
+        else if (auto const* gb = dynamic_cast<GenericBlock const*>(child_ptr.get())) lower_generic_block(*gb, out);
     }
 }
 
 void Canonicalizer::lower_gene_decl(GeneDecl const&, CanonicalEntity&) {}
-void Canonicalizer::lower_resource(ResourceDecl const&, CanonicalEntity&) {}
+
+void Canonicalizer::lower_resource(ResourceDecl const& resource, CanonicalEntity& out) {
+    CanonicalResource cr;
+    cr.id = resource.name;
+    cr.resource_type = resource.resource_type;
+    for (auto const& child : resource.body) {
+        auto const* attr = dynamic_cast<AttributeNode const*>(child.get());
+        if (!attr || !attr->value) continue;
+        auto const* lit = dynamic_cast<LiteralNode const*>(attr->value.get());
+        if (!lit) continue;
+        if (attr->key == "min") cr.min = static_cast<std::uint32_t>(std::stoul(lit->value));
+        else if (attr->key == "max") cr.max = static_cast<std::uint32_t>(std::stoul(lit->value));
+        else if (attr->key == "initial") cr.initial = static_cast<std::uint32_t>(std::stoul(lit->value));
+    }
+    out.resources.push_back(std::move(cr));
+}
+
+static std::string strip_quotes(std::string const& s) {
+    if (s.size() >= 2 && s.front() == '"' && s.back() == '"') return s.substr(1, s.size() - 2);
+    return s;
+}
+
+static double parse_double(std::string const& s) {
+    try { return std::stod(s); } catch (...) { return 0.0; }
+}
+
+static std::uint32_t parse_uint(std::string const& s) {
+    try { return static_cast<std::uint32_t>(std::stoul(s)); } catch (...) { return 0; }
+}
+
+void Canonicalizer::lower_generic_block(GenericBlock const& block, CanonicalEntity& out) {
+    auto get_attr = [&](std::string const& key) -> std::string {
+        for (auto const& attr_ptr : block.attributes) {
+            auto const* a = dynamic_cast<AttributeNode const*>(attr_ptr.get());
+            if (a && a->key == key && a->value) {
+                auto const* lit = dynamic_cast<LiteralNode const*>(a->value.get());
+                if (lit) return strip_quotes(lit->value);
+            }
+        }
+        return {};
+    };
+
+    if (block.block_type == "bone" || block.block_type == "Bone") {
+        CanonicalSkeletalBone bone;
+        bone.id = block.name;
+        bone.parent = get_attr("parent");
+        bone.x = parse_double(get_attr("x"));
+        bone.y = parse_double(get_attr("y"));
+        bone.z = parse_double(get_attr("z"));
+        bone.scale_x = parse_double(get_attr("scale_x"));
+        if (bone.scale_x == 0.0) bone.scale_x = 1.0;
+        bone.scale_y = parse_double(get_attr("scale_y"));
+        if (bone.scale_y == 0.0) bone.scale_y = 1.0;
+        bone.length_mm = parse_double(get_attr("length_mm"));
+        bone.min_rotation = parse_double(get_attr("min_rotation"));
+        bone.max_rotation = parse_double(get_attr("max_rotation"));
+        out.bones.push_back(std::move(bone));
+    } else if (block.block_type == "socket" || block.block_type == "Socket") {
+        CanonicalSocket socket;
+        socket.id = block.name;
+        socket.bone = get_attr("bone");
+        socket.x = parse_double(get_attr("x"));
+        socket.y = parse_double(get_attr("y"));
+        socket.z = parse_double(get_attr("z"));
+        socket.scale_x = parse_double(get_attr("scale_x"));
+        if (socket.scale_x == 0.0) socket.scale_x = 1.0;
+        socket.scale_y = parse_double(get_attr("scale_y"));
+        if (socket.scale_y == 0.0) socket.scale_y = 1.0;
+        out.sockets.push_back(std::move(socket));
+    } else if (block.block_type == "clip" || block.block_type == "Clip") {
+        CanonicalAnimationClip clip;
+        clip.name = block.name;
+        for (auto const& attr_ptr : block.attributes) {
+            auto const* gb = dynamic_cast<GenericBlock const*>(attr_ptr.get());
+            if (gb && (gb->block_type == "track" || gb->block_type == "Track")) {
+                CanonicalAnimationClip::Track track;
+                track.bone = gb->name;
+                for (auto const& key_attr_ptr : gb->attributes) {
+                    auto const* ka = dynamic_cast<AttributeNode const*>(key_attr_ptr.get());
+                    if (ka && ka->key == "tick" && ka->value) {
+                        auto const* kl = dynamic_cast<LiteralNode const*>(ka->value.get());
+                        if (kl) {
+                            auto tick = parse_uint(kl->value);
+                            track.keys.push_back({tick, strip_quotes(get_attr("transform"))});
+                        }
+                    }
+                }
+                clip.tracks.push_back(std::move(track));
+            }
+        }
+        out.clips.push_back(std::move(clip));
+    } else if (block.block_type == "state" || block.block_type == "State") {
+        CanonicalAnimationState state;
+        state.name = block.name;
+        state.clip_name = get_attr("clip");
+        out.states.push_back(std::move(state));
+    } else if (block.block_type == "transition" || block.block_type == "Transition") {
+        CanonicalTransition transition;
+        transition.from_state = block.name;
+        transition.to_state = get_attr("to");
+        transition.ability_id = get_attr("ability");
+        transition.threshold = parse_uint(get_attr("threshold"));
+        transition.resource_cost = parse_uint(get_attr("resource_cost"));
+        transition.cooldown_ticks = parse_uint(get_attr("cooldown_ticks"));
+        out.transitions.push_back(std::move(transition));
+    } else if (block.block_type == "collision" || block.block_type == "Collision") {
+        CanonicalCollisionShape shape;
+        shape.id = block.name;
+        shape.socket = get_attr("socket");
+        shape.shape_type = get_attr("type");
+        if (shape.shape_type.empty()) shape.shape_type = "CIRCLE";
+        shape.radius_mm = parse_double(get_attr("radius_mm"));
+        shape.offset_x = parse_double(get_attr("offset_x"));
+        shape.offset_y = parse_double(get_attr("offset_y"));
+        out.collision_shapes.push_back(std::move(shape));
+    } else if (block.block_type == "window" || block.block_type == "Window") {
+        CanonicalCollisionWindow window;
+        window.ability_id = block.name;
+        window.shape_id = get_attr("shape");
+        window.start_tick = parse_uint(get_attr("start_tick"));
+        window.duration_ticks = parse_uint(get_attr("duration_ticks"));
+        window.active = (get_attr("active") != "false");
+        out.collision_windows.push_back(std::move(window));
+    } else if (block.block_type == "runtime" || block.block_type == "Runtime") {
+        CanonicalRuntime rt;
+        rt.aggression = parse_uint(get_attr("aggression"));
+        rt.curiosity = parse_uint(get_attr("curiosity"));
+        rt.energy = parse_uint(get_attr("energy"));
+        rt.loyalty = parse_uint(get_attr("loyalty"));
+        out.runtime = rt;
+    } else if (block.block_type == "rig" || block.block_type == "Rig") {
+        // Rig is a container for bones/sockets; nested blocks are already parsed as children
+    }
+}
 
 void Canonicalizer::apply_genes(std::vector<GeneInstance> const& genes, CanonicalEntity& out) {
     for (auto const& g : genes) {

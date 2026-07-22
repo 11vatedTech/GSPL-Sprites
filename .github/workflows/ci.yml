@@ -18,3 +18,15 @@ jobs:
         run: cmake --build build
       - name: Test
         run: ctest --test-dir build --output-on-failure
+  core-only-linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Configure (CORE_ONLY)
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DGSPL_CORE_ONLY=ON
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure

@@ -38,27 +38,30 @@ trusted. Do not add network access to the compiler or runtime core.
 | `gspl-language-and-platform-completion` | Active — implementing full GSPL 1.0 language + platform |
 
 ### Implemented (this session)
-- **CanonicalEntity bridge** (`include/gspl/semantics.hpp`, `include/gspl/lowering.hpp`, `src/semantics.cpp`, `src/lowering.cpp`):
-  - `CanonicalEntity`: unified semantic bridge between typed GSPL AST and production `SpriteSeed` (parts, forms, transformations, abilities, morphology, bones, sockets, animation clips/states/transitions, collision shapes/windows, runtime attributes, genes, provenance)
-  - `Canonicalizer`: lowers `ModuleDecl` + `GeneInstance` vector to `CanonicalEntity`
-  - `SpriteIrLowering`: direct `CanonicalEntity` → production `gspl::sprites::SpriteIr` (authoritative path)
-  - `SpriteSeedLowering`: `CanonicalEntity` → `gspl::sprites::SpriteSeed` (compatibility adapter)
-  - `CanonicalEntitySerializer`: to_json / to_yaml / from_json
-  - `CanonicalEntityValidator`: validates required fields, rights, cross-references
-  - `CanonicalEntityIdentity`: deterministic hash from semantic fields (no memory addresses, absolute paths, wall-clock values, or unordered-container iteration order)
-  - `CanonicalEntityDiff`: structured field-by-field comparison with CHANGED/UNCHANGED
-- **Four new compiler passes**: `CanonicalizePhase`, `CanonicalValidatePhase`, `SpriteIrLowerPhase`, `SeedLowerPhase` (added to pass pipeline with topological dependencies)
-- **Production-grade diagnostics**: typed `LoweringDiagnostic` codes (RIGHTS_INVALID, COLOR_INVALID, FORM_UNREPRESENTABLE, SEMANTIC_LOSS, INTERNAL_FAILURE, etc.)
-- **CLI updated**: `gsplc` registers all new passes; default target list includes `canonicalize` → `canonical_validate` → `sprite_ir_lower` → `seed_lower`
-- **Modern GSPL example**: `examples/gspl/voltfox/main.gspl` — Voltfox entity using all supported declaration types
-- **Comprehensive end-to-end test**: `tests/semantic_pipeline_tests.cpp` — 11 tests covering full pipeline, CanonicalEntity serializer/validator/identity/diff, SpriteIrLowering, SpriteSeedLowering, production compile, PassManager topology, and diagnostic reporting
+- **Section 2 (UTF-8)**: `include/gspl/utf8.hpp` `src/utf8.cpp` — BOM detection/stripping, UTF-8 validation (overlong, surrogate, continuation, truncated, null bytes, >U+10FFFF), `from_file()` strips BOM, lexer validates in constructor (`GSPL_LEX_INVALID_UTF8`), `next()` uses `classify_utf8_byte()`, multi-byte in `lex_identifier_or_keyword()`. 21 tests in `tests/utf8_tests.cpp`
+- **Section 3 (Module tests)**: `tests/module_tests.cpp` — 10 tests (path construction/parsing/round-trip, resolver register+resolve, duplicate detection, name resolution, pipeline, form extension error, source root)
+- **Section 4 (Type system tests)**: `tests/type_system_tests.cpp` — 9 tests (primitives, composites, equality, string rep, dimension compat, assignability, TypeRef resolve, type-check pipeline, serialization)
+- **Section 5 (Expression + entropy)**: `tests/expression_tests.cpp` — 13 tests (literal eval, entropy channel, channel isolation, depth limit, step counting, deterministic seed, INT64_MAX, zero)
+- **Section 6 (Gene tests)**: `tests/gene_tests.cpp` — 9 tests (registry lookup, built-in registration, dep validation, missing dep, dependency chain, custom gene, composition, full pipeline compilation)
+- **Section 9 (Artifact cache)**: `include/gspl/cache.hpp` `src/cache.cpp` — CacheConfig, CacheEntry, ArtifactCache with FNV-1a keying, LRU-eviction, atomic writes, integrity validation, stale detection, concurrent-reader safe. 9 tests in `tests/cache_tests.cpp`
+- **Section 10 (Provider abstraction)**: `include/gspl/provider.hpp` `src/provider.cpp` — ProviderCapability/Info/Input/Output/Config, abstract Provider base, ProviderRegistry (singleton), NullProvider, FakeTestProvider. 8 tests in `tests/provider_tests.cpp`
+- **Section 11 (Legacy compatibility)**: `include/gspl/legacy.hpp` `src/legacy.cpp` — LegacySpriteParser, MigrateOptions/Report, migrate_file/directory, is_legacy_sprite_format. 7 tests in `tests/legacy_tests.cpp`
+- **Section 14 (Resource limit tests)**: `tests/resource_limit_tests.cpp` — 13 tests (defaults, source/token/form/string size boundaries, zero-length, large seed, gene count)
+- **CanonicalEntity bridge** (previous session): CanonicalEntity, Canonicalizer, SpriteIrLowering, SpriteSeedLowering, CanonicalEntitySerializer/Validator/Identity/Diff, 4 new compiler passes, lowering diagnostics, CLI update, Voltfox example, semantic_pipeline_tests (11 tests)
 - **Parser bugfixes**: removed double-advance in `parse_literal()`, added semicolon consumption in `parse_rights()`
 - **CLI bugfix**: fixed `argv[0]` being treated as input file (start loop at index 1)
-- **Lowering enhancement**: RIGHTS_INVALID diagnostic when rights classification is unrecognized
-- **C++23 compat fixes**: `std::divides` replaced with generic lambda; guarded `visit_numeric` against `bool` operand; added `else` branch for C4702 unreachable code
+- **C++23 compat fixes**: `std::divides` → generic lambda; guarded `visit_numeric` against `bool`; added `else` for C4702 unreachable code
+- **CMakeLists.txt**: added 10 new test targets (utf8, module, type_system, expression, gene, resource_limit, cache, provider, legacy), added `src/utf8.cpp`, `src/cache.cpp`, `src/provider.cpp`, `src/legacy.cpp` to core library
+- **ONNX decoupling**: added `GSPL_CORE_ONLY` build profile (`option(GSPL_CORE_ONLY)`), `src/inference_stub.cpp` stub, conditional ONNX FetchContent/linking/staging, guarded inference tests
+- **Migrate CLI**: added `--migrate`, `--migrate-output`, `--migrate-dry-run`, `--migrate-overwrite` flags; dispatches to `migrate_file()`/`migrate_directory()`; documented in help
+- **Graph CLI**: added `--graph` flag that prints pass dependency graph in DOT format
+- **SDK stabilization**: `include/gspl/sdk.hpp` `src/sdk.cpp` — GsplContext RAII context, `include/gspl/STABILITY.md` API stability policy, header self-containment tests
+- **CLI tests**: `tests/cli_comprehensive_tests.cpp` — 11 scenarios (flags, migrate dry-run, parse/run)
+- **Coverage matrix**: `openspec/.../coverage_matrix.md` — exhaustive test coverage documentation
+- **OpenSpec validation**: fixed all 8 spec files to delta format (## ADDED Requirements + Scenario blocks)
+- **61/61 tests pass** (0 failures, 0 warnings MSVC 19.44)
 
 ### Next Milestones
-- `--package` CLI flag to call `build_package()` after compilation
-- Full AST → CanonicalEntity field population from ability/form body attributes (currently uses defaults)
-- Grammar feature completion (traits, expressions, operators, morphologies, collisions, joints, sockets, palettes, animations, behaviors, transitions, hyphenated identifiers)
-- Provider abstraction to decouple ONNX Runtime dependency (GSPL_CORE_ONLY build profile)
+- Commit to make HEAD == origin/main with clean working tree
+- CI config for Linux CORE_ONLY profile
+- Archive change and produce final report

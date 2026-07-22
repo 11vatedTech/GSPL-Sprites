@@ -56,6 +56,7 @@ struct EntityDecl;
 struct GeneDecl;
 struct FormDecl;
 struct TransformationDecl;
+struct PartDecl;
 struct MorphologyDecl;
 struct ResourceDecl;
 struct AbilityDecl;
@@ -98,9 +99,15 @@ struct TransformationDecl : AstNode {
     std::string from_form;
     std::string to_form;
     std::unique_ptr<AstNode> duration;
-    std::unique_ptr<AstNode> animation;
+    std::unique_ptr<AstNode> resource_cost;
     TransformationDecl(std::string n, std::string from, std::string to)
         : name(std::move(n)), from_form(std::move(from)), to_form(std::move(to)) { kind = AstKind::transformation; }
+};
+
+struct PartDecl : AstNode {
+    std::string name;
+    std::vector<std::unique_ptr<AstNode>> attributes;
+    explicit PartDecl(std::string n) : name(std::move(n)) { kind = AstKind::part; }
 };
 
 struct MorphologyDecl : AstNode {
@@ -125,6 +132,14 @@ struct RightsDecl : AstNode {
     std::string classification;
     std::string code;
     explicit RightsDecl(std::string c) : classification(std::move(c)) { kind = AstKind::rights; }
+};
+
+struct GenericBlock : AstNode {
+    std::string block_type;
+    std::string name;
+    std::vector<std::string> secondary_names;
+    std::vector<std::unique_ptr<AstNode>> attributes;
+    GenericBlock(std::string t) : block_type(std::move(t)) { kind = AstKind::block; }
 };
 
 struct BlockNode : AstNode {

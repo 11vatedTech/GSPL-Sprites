@@ -1,11 +1,22 @@
 #include "gspl/lexer.hpp"
+#include "gspl/utf8.hpp"
 #include <cctype>
 #include <cstdlib>
 
 namespace gspl {
 
 Lexer::Lexer(SourceBuffer const& source, LexerConfig config)
-    : source_(source), config_(config) {}
+    : source_(source), config_(config) {
+    std::size_t search_start = 0;
+    while (true) {
+        auto uresult = validate_utf8(source_.content(), search_start);
+        if (uresult.valid) break;
+        add_error(DiagnosticCode::GSPL_LEX_INVALID_UTF8,
+                  "Invalid UTF-8 at byte " + std::to_string(uresult.offset) + ": " + uresult.message);
+        search_start = uresult.offset + 1;
+        if (search_start >= source_.content().size()) break;
+    }
+}
 
 char Lexer::peek(std::uint64_t ahead) const {
     auto idx = offset_ + ahead;
@@ -49,11 +60,18 @@ Token Lexer::next() {
         return Token(TokenKind::end_of_file, {source_.id(), loc, loc, offset_, 0}, "");
     }
     auto c = peek();
-    if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') return lex_identifier_or_keyword();
-    if (std::isdigit(static_cast<unsigned char>(c))) return lex_number();
+    auto cat = classify_utf8_byte(c);
+    if (cat == UnicodeCategory::LETTER || cat == UnicodeCategory::UNDERSCORE) return lex_identifier_or_keyword();
+    if (cat == UnicodeCategory::DIGIT) return lex_number();
     if (c == '"') return lex_string();
     if (c == '/' && peek(1) == '/') return lex_comment_line();
     if (c == '/' && peek(1) == '*') return lex_comment_block();
+    if (cat == UnicodeCategory::CONTINUATION) {
+        add_error(DiagnosticCode::GSPL_LEX_INVALID_UTF8,
+                  "Unexpected continuation byte at position " + std::to_string(offset_));
+        advance();
+        return Token(TokenKind::error_token, make_span(offset_ - 1, offset_, line_, column_), std::string(1, c));
+    }
     return lex_operator_or_delimiter();
 }
 
@@ -61,8 +79,16 @@ Token Lexer::lex_identifier_or_keyword() {
     auto start_off = offset_;
     auto start_line = line_;
     auto start_col = column_;
-    while (std::isalnum(static_cast<unsigned char>(peek())) || peek() == '_' || peek() == '.') {
-        advance();
+    while (true) {
+        auto cat = classify_utf8_byte(peek());
+        if (cat == UnicodeCategory::LETTER || cat == UnicodeCategory::DIGIT ||
+            cat == UnicodeCategory::UNDERSCORE || peek() == '.') {
+            advance();
+        } else if (cat == UnicodeCategory::CONTINUATION) {
+            advance();
+        } else {
+            break;
+        }
     }
     auto text = std::string(source_.content().substr(start_off, offset_ - start_off));
 

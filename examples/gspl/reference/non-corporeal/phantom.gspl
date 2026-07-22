@@ -1,0 +1,155 @@
+module phantom;
+
+entity Phantom {
+    rights ORIGINAL_USER_CREATION PUBLIC;
+
+    gene identity {
+        stable_id: "reference.non-corporeal.phantom";
+        name: "Shadow Phantom";
+    };
+
+    gene classification {
+        taxonomy: "non-corporeal.spectral.phantom.shadow";
+    };
+
+    gene appearance {
+        primary_color: "#1A0030";
+        accent_color: "#994DFF";
+        emissive_color: "#BB88FF";
+        aura_color: "#7733CC";
+    };
+
+    form base {
+        resource_capacity: 200;
+        collision_scale: 0.5;
+        ability_envelope: 2.0;
+        max_health: 50;
+        transformations: "manifest";
+    };
+
+    form manifested {
+        resource_capacity: 300;
+        collision_scale: 1.0;
+        ability_envelope: 1.5;
+        max_health: 100;
+        transformations: "manifest";
+    };
+
+    transformation manifest base manifested {
+        duration: 8;
+        resource_cost: 80;
+    };
+
+    ability haunt {
+        effect: "psychic.haunt.curse";
+        cost: 20;
+        cooldown_ticks: 10;
+        active_ticks: 5;
+    };
+
+    ability phase_shift {
+        effect: "dimensional.phase.shift";
+        cost: 30;
+        cooldown_ticks: 15;
+        active_ticks: 2;
+    };
+
+    ability spectral_wail {
+        effect: "sonic.spectral.wail";
+        cost: 40;
+        cooldown_ticks: 20;
+        active_ticks: 4;
+    };
+
+    resource essence resource {
+        min: 0;
+        max: 200;
+        initial: 200;
+    };
+
+    morphology {
+        core_aura {
+            x: 0; y: 0; z: 0;
+            size_x: 20; size_y: 30; size_z: 20;
+            color: "#1A0030";
+            parent: "root";
+        };
+        inner_glow {
+            x: 0; y: 0; z: 0;
+            size_x: 12; size_y: 18; size_z: 12;
+            color: "#994DFF";
+            parent: "core_aura";
+            emissive: true;
+        };
+        left_wisp {
+            x: -15; y: 5; z: 0;
+            size_x: 8; size_y: 12; size_z: 8;
+            color: "#7733CC";
+            parent: "core_aura";
+            emissive: true;
+        };
+        right_wisp {
+            x: 15; y: 5; z: 0;
+            size_x: 8; size_y: 12; size_z: 8;
+            color: "#7733CC";
+            parent: "core_aura";
+            emissive: true;
+        };
+        upper_halo {
+            x: 0; y: 20; z: 0;
+            size_x: 16; size_y: 4; size_z: 16;
+            color: "#BB88FF";
+            parent: "core_aura";
+            emissive: true;
+        };
+        lower_trail {
+            x: 0; y: -18; z: 0;
+            size_x: 10; size_y: 6; size_z: 10;
+            color: "#551188";
+            parent: "core_aura";
+            electrical_marking: true;
+        };
+        left_eye {
+            x: -5; y: 5; z: 12;
+            size_x: 3; size_y: 3; size_z: 3;
+            color: "#FF44FF";
+            parent: "inner_glow";
+            emissive: true;
+        };
+        right_eye {
+            x: 5; y: 5; z: 12;
+            size_x: 3; size_y: 3; size_z: 3;
+            color: "#FF44FF";
+            parent: "inner_glow";
+            emissive: true;
+        };
+        tendril_1 {
+            x: -10; y: -10; z: 0;
+            size_x: 4; size_y: 20; size_z: 4;
+            color: "#8822CC";
+            parent: "core_aura";
+            electrical_marking: true;
+        };
+        tendril_2 {
+            x: 10; y: -10; z: 0;
+            size_x: 4; size_y: 20; size_z: 4;
+            color: "#8822CC";
+            parent: "core_aura";
+            electrical_marking: true;
+        };
+        tendril_3 {
+            x: 0; y: -10; z: -10;
+            size_x: 4; size_y: 18; size_z: 4;
+            color: "#8822CC";
+            parent: "core_aura";
+            electrical_marking: true;
+        };
+        distortion_field {
+            x: 0; y: 5; z: 0;
+            size_x: 30; size_y: 35; size_z: 30;
+            color: "#331166";
+            parent: "core_aura";
+            emissive: true;
+        };
+    };
+};

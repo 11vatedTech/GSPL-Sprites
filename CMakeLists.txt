@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.25)
 project(gspl_sprites VERSION 0.1.0 LANGUAGES C CXX)
 
 option(BUILD_PREVIEW "Build the preview executable" OFF)
+option(GSPL_CORE_ONLY "Build GSPL core without ONNX Runtime dependency (portable)" OFF)
 
 set(GSPL_EXPECT_COMPILER "" CACHE STRING "Expected CXX compiler ID: MSVC, GNU, Clang, AppleClang")
 if(GSPL_EXPECT_COMPILER AND NOT CMAKE_CXX_COMPILER_ID MATCHES "${GSPL_EXPECT_COMPILER}")
@@ -37,46 +38,51 @@ target_include_directories(gspl_spng PUBLIC ${gspl_libspng_SOURCE_DIR}/spng)
 target_compile_definitions(gspl_spng PUBLIC SPNG_STATIC)
 target_link_libraries(gspl_spng PRIVATE ZLIB::ZLIBSTATIC)
 
-if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
-  message(FATAL_ERROR "The initial governed ONNX Runtime provider currently supports Windows x64 only")
-endif()
-FetchContent_Declare(gspl_onnxruntime
-  URL https://github.com/microsoft/onnxruntime/releases/download/v1.26.0/onnxruntime-win-x64-1.26.0.zip
-  URL_HASH SHA256=6ebe99b5564bf4d029b6e93eac9ff423682b6212eade769e9ca3f685eaf500b4
-  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-  SOURCE_SUBDIR __gspl_prebuilt_distribution__
-)
-FetchContent_MakeAvailable(gspl_onnxruntime)
-add_library(gspl_onnxruntime_cpu SHARED IMPORTED GLOBAL)
-set_target_properties(gspl_onnxruntime_cpu PROPERTIES
-  IMPORTED_LOCATION "${gspl_onnxruntime_SOURCE_DIR}/lib/onnxruntime.dll"
-  INTERFACE_INCLUDE_DIRECTORIES "${gspl_onnxruntime_SOURCE_DIR}/include"
-)
-if(MINGW)
-  if(EXISTS "${gspl_onnxruntime_SOURCE_DIR}/lib/onnxruntime.dll.a")
-    set_target_properties(gspl_onnxruntime_cpu PROPERTIES
-      IMPORTED_IMPLIB "${gspl_onnxruntime_SOURCE_DIR}/lib/onnxruntime.dll.a")
-  else()
-    message(STATUS "Generating MinGW import library for ONNX Runtime...")
-    find_program(GENDEF gendef)
-    if(GENDEF)
-      execute_process(COMMAND ${GENDEF} - "${gspl_onnxruntime_SOURCE_DIR}/lib/onnxruntime.dll"
-        OUTPUT_FILE "${gspl_onnxruntime_SOURCE_DIR}/lib/onnxruntime.def"
-        ERROR_QUIET)
-    endif()
-    if(EXISTS "${gspl_onnxruntime_SOURCE_DIR}/lib/onnxruntime.def")
-      execute_process(COMMAND ${CMAKE_DLLTOOL} -d "${gspl_onnxruntime_SOURCE_DIR}/lib/onnxruntime.def"
-        -l "${gspl_onnxruntime_SOURCE_DIR}/lib/onnxruntime.dll.a" -k)
+if(GSPL_CORE_ONLY)
+  message(STATUS "GSPL_CORE_ONLY: skipping ONNX Runtime dependency")
+  target_compile_definitions(gspl_spng INTERFACE GSPL_CORE_ONLY)
+else()
+  if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+    message(FATAL_ERROR "The initial governed ONNX Runtime provider currently supports Windows x64 only")
+  endif()
+  FetchContent_Declare(gspl_onnxruntime
+    URL https://github.com/microsoft/onnxruntime/releases/download/v1.26.0/onnxruntime-win-x64-1.26.0.zip
+    URL_HASH SHA256=6ebe99b5564bf4d029b6e93eac9ff423682b6212eade769e9ca3f685eaf500b4
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    SOURCE_SUBDIR __gspl_prebuilt_distribution__
+  )
+  FetchContent_MakeAvailable(gspl_onnxruntime)
+  add_library(gspl_onnxruntime_cpu SHARED IMPORTED GLOBAL)
+  set_target_properties(gspl_onnxruntime_cpu PROPERTIES
+    IMPORTED_LOCATION "${gspl_onnxruntime_SOURCE_DIR}/lib/onnxruntime.dll"
+    INTERFACE_INCLUDE_DIRECTORIES "${gspl_onnxruntime_SOURCE_DIR}/include"
+  )
+  if(MINGW)
+    if(EXISTS "${gspl_onnxruntime_SOURCE_DIR}/lib/onnxruntime.dll.a")
       set_target_properties(gspl_onnxruntime_cpu PROPERTIES
         IMPORTED_IMPLIB "${gspl_onnxruntime_SOURCE_DIR}/lib/onnxruntime.dll.a")
     else()
-      set_target_properties(gspl_onnxruntime_cpu PROPERTIES
-        IMPORTED_IMPLIB "${gspl_onnxruntime_SOURCE_DIR}/lib/onnxruntime.lib")
+      message(STATUS "Generating MinGW import library for ONNX Runtime...")
+      find_program(GENDEF gendef)
+      if(GENDEF)
+        execute_process(COMMAND ${GENDEF} - "${gspl_onnxruntime_SOURCE_DIR}/lib/onnxruntime.dll"
+          OUTPUT_FILE "${gspl_onnxruntime_SOURCE_DIR}/lib/onnxruntime.def"
+          ERROR_QUIET)
+      endif()
+      if(EXISTS "${gspl_onnxruntime_SOURCE_DIR}/lib/onnxruntime.def")
+        execute_process(COMMAND ${CMAKE_DLLTOOL} -d "${gspl_onnxruntime_SOURCE_DIR}/lib/onnxruntime.def"
+          -l "${gspl_onnxruntime_SOURCE_DIR}/lib/onnxruntime.dll.a" -k)
+        set_target_properties(gspl_onnxruntime_cpu PROPERTIES
+          IMPORTED_IMPLIB "${gspl_onnxruntime_SOURCE_DIR}/lib/onnxruntime.dll.a")
+      else()
+        set_target_properties(gspl_onnxruntime_cpu PROPERTIES
+          IMPORTED_IMPLIB "${gspl_onnxruntime_SOURCE_DIR}/lib/onnxruntime.lib")
+      endif()
     endif()
+  else()
+    set_target_properties(gspl_onnxruntime_cpu PROPERTIES
+      IMPORTED_IMPLIB "${gspl_onnxruntime_SOURCE_DIR}/lib/onnxruntime.lib")
   endif()
-else()
-  set_target_properties(gspl_onnxruntime_cpu PROPERTIES
-    IMPORTED_IMPLIB "${gspl_onnxruntime_SOURCE_DIR}/lib/onnxruntime.lib")
 endif()
 
 set(CMAKE_CXX_STANDARD 23)
@@ -93,7 +99,6 @@ add_library(gspl_sprites_core
   src/model.cpp
   src/jobs.cpp
   src/image_png.cpp
-  src/inference_onnx.cpp
   src/sprite2d.cpp
   src/visual_set.cpp
   src/channel_map.cpp
@@ -126,6 +131,7 @@ add_library(gspl_sprites_core
   src/synthesis.cpp
   src/headless_evidence.cpp
   src/source.cpp
+  src/utf8.cpp
   src/diagnostics.cpp
   src/lexer.cpp
   src/parser.cpp
@@ -137,26 +143,44 @@ add_library(gspl_sprites_core
   src/passes.cpp
   src/semantics.cpp
   src/lowering.cpp
+  src/cache.cpp
+  src/provider.cpp
+  src/legacy.cpp
+  src/sdk.cpp
   src/cli.cpp
 )
+if(GSPL_CORE_ONLY)
+  target_sources(gspl_sprites_core PRIVATE src/inference_stub.cpp)
+  target_compile_definitions(gspl_sprites_core PRIVATE GSPL_CORE_ONLY)
+else()
+  target_sources(gspl_sprites_core PRIVATE src/inference_onnx.cpp)
+endif()
 target_include_directories(gspl_sprites_core PUBLIC include)
 if(MSVC)
   target_compile_options(gspl_sprites_core PRIVATE /W4 /WX /permissive- /EHsc)
 else()
   target_compile_options(gspl_sprites_core PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
-target_link_libraries(gspl_sprites_core PRIVATE gspl_spng gspl_onnxruntime_cpu)
+if(GSPL_CORE_ONLY)
+  target_link_libraries(gspl_sprites_core PRIVATE gspl_spng)
+else()
+  target_link_libraries(gspl_sprites_core PRIVATE gspl_spng gspl_onnxruntime_cpu)
+endif()
 
 function(gspl_stage_onnxruntime target)
-  add_custom_command(TARGET ${target} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      "$<TARGET_FILE:gspl_onnxruntime_cpu>" "$<TARGET_FILE_DIR:${target}>"
-  )
+  if(NOT GSPL_CORE_ONLY)
+    add_custom_command(TARGET ${target} POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_FILE:gspl_onnxruntime_cpu>" "$<TARGET_FILE_DIR:${target}>"
+    )
+  endif()
 endfunction()
 
 add_executable(gspl-sprites src/main.cpp)
 target_link_libraries(gspl-sprites PRIVATE gspl_sprites_core)
-gspl_stage_onnxruntime(gspl-sprites)
+if(NOT GSPL_CORE_ONLY)
+  gspl_stage_onnxruntime(gspl-sprites)
+endif()
 
 add_executable(gsplc src/gsplc_main.cpp)
 target_link_libraries(gsplc PRIVATE gspl_sprites_core)
@@ -190,10 +214,12 @@ add_executable(gspl_sprites_job_tests tests/job_tests.cpp)
 target_link_libraries(gspl_sprites_job_tests PRIVATE gspl_sprites_core)
 add_test(NAME gspl_sprites_job_tests COMMAND gspl_sprites_job_tests)
 
-add_executable(gspl_sprites_inference_tests tests/inference_tests.cpp)
-target_link_libraries(gspl_sprites_inference_tests PRIVATE gspl_sprites_core)
-gspl_stage_onnxruntime(gspl_sprites_inference_tests)
-add_test(NAME gspl_sprites_inference_tests COMMAND gspl_sprites_inference_tests)
+if(NOT GSPL_CORE_ONLY)
+  add_executable(gspl_sprites_inference_tests tests/inference_tests.cpp)
+  target_link_libraries(gspl_sprites_inference_tests PRIVATE gspl_sprites_core)
+  gspl_stage_onnxruntime(gspl_sprites_inference_tests)
+  add_test(NAME gspl_sprites_inference_tests COMMAND gspl_sprites_inference_tests)
+endif()
 
 add_executable(gspl_sprites_2d_tests tests/sprite2d_tests.cpp)
 target_link_libraries(gspl_sprites_2d_tests PRIVATE gspl_sprites_core)
@@ -349,6 +375,42 @@ target_compile_definitions(gspl_sprites_headless_evidence_tests PRIVATE
   GSPL_SPRITES_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 add_test(NAME gspl_sprites_headless_evidence_tests COMMAND gspl_sprites_headless_evidence_tests)
 
+add_executable(gspl_sprites_utf8_tests tests/utf8_tests.cpp)
+target_link_libraries(gspl_sprites_utf8_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_utf8_tests COMMAND gspl_sprites_utf8_tests)
+
+add_executable(gspl_sprites_module_tests tests/module_tests.cpp)
+target_link_libraries(gspl_sprites_module_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_module_tests COMMAND gspl_sprites_module_tests)
+
+add_executable(gspl_sprites_type_system_tests tests/type_system_tests.cpp)
+target_link_libraries(gspl_sprites_type_system_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_type_system_tests COMMAND gspl_sprites_type_system_tests)
+
+add_executable(gspl_sprites_expression_tests tests/expression_tests.cpp)
+target_link_libraries(gspl_sprites_expression_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_expression_tests COMMAND gspl_sprites_expression_tests)
+
+add_executable(gspl_sprites_gene_tests tests/gene_tests.cpp)
+target_link_libraries(gspl_sprites_gene_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_gene_tests COMMAND gspl_sprites_gene_tests)
+
+add_executable(gspl_sprites_resource_limit_tests tests/resource_limit_tests.cpp)
+target_link_libraries(gspl_sprites_resource_limit_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_resource_limit_tests COMMAND gspl_sprites_resource_limit_tests)
+
+add_executable(gspl_sprites_cache_tests tests/cache_tests.cpp)
+target_link_libraries(gspl_sprites_cache_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_cache_tests COMMAND gspl_sprites_cache_tests)
+
+add_executable(gspl_sprites_provider_tests tests/provider_tests.cpp)
+target_link_libraries(gspl_sprites_provider_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_provider_tests COMMAND gspl_sprites_provider_tests)
+
+add_executable(gspl_sprites_legacy_tests tests/legacy_tests.cpp)
+target_link_libraries(gspl_sprites_legacy_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_legacy_tests COMMAND gspl_sprites_legacy_tests)
+
 add_executable(gspl_sprites_fuzz_parsing_tests tests/fuzz_parsing_tests.cpp)
 target_link_libraries(gspl_sprites_fuzz_parsing_tests PRIVATE gspl_sprites_core)
 add_test(NAME gspl_sprites_fuzz_parsing_tests COMMAND gspl_sprites_fuzz_parsing_tests)
@@ -364,6 +426,14 @@ add_test(NAME gspl_sprites_compiler_tests COMMAND gspl_sprites_compiler_tests)
 add_executable(gspl_sprites_semantic_pipeline_tests tests/semantic_pipeline_tests.cpp)
 target_link_libraries(gspl_sprites_semantic_pipeline_tests PRIVATE gspl_sprites_core)
 add_test(NAME gspl_sprites_semantic_pipeline_tests COMMAND gspl_sprites_semantic_pipeline_tests)
+
+add_executable(gspl_sprites_cli_comprehensive_tests tests/cli_comprehensive_tests.cpp)
+target_link_libraries(gspl_sprites_cli_comprehensive_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_cli_comprehensive_tests COMMAND gspl_sprites_cli_comprehensive_tests)
+
+add_executable(gspl_sprites_header_tests tests/header_self_containment_tests.cpp)
+target_link_libraries(gspl_sprites_header_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_header_tests COMMAND gspl_sprites_header_tests)
 
 if(BUILD_PREVIEW)
   find_package(SDL2 QUIET)

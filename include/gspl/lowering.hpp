@@ -46,7 +46,6 @@ public:
     static gspl::sprites::FormAttributes lower_form_attributes(CanonicalForm const& form);
     static gspl::sprites::RuntimeAttributes lower_runtime(CanonicalRuntime const& runtime);
     static std::uint64_t parse_hex_color(std::string const& hex, std::vector<LoweringDiagnostic>& diags);
-private:
     static gspl::sprites::BoneDefinition lower_bone(CanonicalSkeletalBone const& bone);
     static gspl::sprites::SocketDefinition lower_socket(CanonicalSocket const& socket);
     static gspl::sprites::SkeletalClip lower_clip(CanonicalAnimationClip const& clip);
@@ -70,6 +69,13 @@ private:
     static gspl::sprites::MorphologyPart lower_part(CanonicalPart const& part);
     static gspl::sprites::FormAttributes lower_form_attributes(CanonicalForm const& form);
     static gspl::sprites::RuntimeAttributes lower_runtime(CanonicalRuntime const& runtime);
+    static gspl::sprites::BoneDefinition lower_bone(CanonicalSkeletalBone const& bone);
+    static gspl::sprites::SocketDefinition lower_socket(CanonicalSocket const& socket);
+    static gspl::sprites::SkeletalClip lower_clip(CanonicalAnimationClip const& clip);
+    static gspl::sprites::AnimationState lower_state(CanonicalAnimationState const& state);
+    static gspl::sprites::AnimationTransition lower_transition(CanonicalTransition const& trans);
+    static gspl::sprites::CollisionShape lower_collision_shape(CanonicalCollisionShape const& shape);
+    static gspl::sprites::CollisionWindow lower_collision_window(CanonicalCollisionWindow const& window);
 };
 
 } // namespace gspl

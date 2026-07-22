@@ -1,0 +1,157 @@
+module wolf;
+
+entity Wolf {
+    rights ORIGINAL_USER_CREATION PUBLIC;
+
+    gene identity {
+        stable_id: "reference.biological.wolf";
+        name: "Timber Wolf";
+    };
+
+    gene classification {
+        taxonomy: "biological.mammal.canid.wolf";
+    };
+
+    gene appearance {
+        primary_color: "#4A4A4A";
+        accent_color: "#8B8B8B";
+        emissive_color: "#000000";
+        aura_color: "#C0C0C0";
+    };
+
+    form base {
+        resource_capacity: 80;
+        collision_scale: 1.0;
+        ability_envelope: 0.8;
+        max_health: 120;
+        transformations: "enrage";
+    };
+
+    form enraged {
+        resource_capacity: 120;
+        collision_scale: 1.1;
+        ability_envelope: 1.2;
+        max_health: 160;
+        transformations: "enrage";
+    };
+
+    transformation enrage base enraged {
+        duration: 20;
+        resource_cost: 40;
+    };
+
+    ability bite {
+        effect: "melee.bite.physical";
+        cost: 10;
+        cooldown_ticks: 6;
+        active_ticks: 1;
+        origin_socket: "muzzle";
+    };
+
+    ability howl {
+        effect: "sonic.howl.buff";
+        cost: 15;
+        cooldown_ticks: 20;
+        active_ticks: 3;
+    };
+
+    ability pounce {
+        effect: "melee.pounce.physical";
+        cost: 20;
+        cooldown_ticks: 12;
+        active_ticks: 2;
+    };
+
+    resource stamina resource {
+        min: 0;
+        max: 100;
+        initial: 100;
+    };
+
+    resource hunger resource {
+        min: 0;
+        max: 100;
+        initial: 30;
+    };
+
+    morphology {
+        torso {
+            x: 0; y: 0; z: 0;
+            size_x: 50; size_y: 25; size_z: 30;
+            color: "#4A4A4A";
+            parent: "root";
+        };
+        head {
+            x: 30; y: 15; z: 5;
+            size_x: 20; size_y: 18; size_z: 16;
+            color: "#5A5A5A";
+            parent: "torso";
+        };
+        left_ear {
+            x: 25; y: 28; z: 10;
+            size_x: 6; size_y: 12; size_z: 4;
+            color: "#6A6A6A";
+            parent: "head";
+        };
+        right_ear {
+            x: 35; y: 28; z: 10;
+            size_x: 6; size_y: 12; size_z: 4;
+            color: "#6A6A6A";
+            parent: "head";
+        };
+        left_eye {
+            x: 32; y: 18; z: 14;
+            size_x: 4; size_y: 4; size_z: 3;
+            color: "#FFD700";
+            parent: "head";
+        };
+        right_eye {
+            x: 38; y: 18; z: 14;
+            size_x: 4; size_y: 4; size_z: 3;
+            color: "#FFD700";
+            parent: "head";
+        };
+        muzzle {
+            x: 35; y: 12; z: 18;
+            size_x: 14; size_y: 8; size_z: 8;
+            color: "#8B8B8B";
+            parent: "head";
+        };
+        tail {
+            x: -35; y: -5; z: 0;
+            size_x: 5; size_y: 25; size_z: 5;
+            color: "#3A3A3A";
+            parent: "torso";
+        };
+        left_front_leg {
+            x: -15; y: -20; z: 10;
+            size_x: 8; size_y: 25; size_z: 8;
+            color: "#4A4A4A";
+            parent: "torso";
+        };
+        right_front_leg {
+            x: -15; y: -20; z: 20;
+            size_x: 8; size_y: 25; size_z: 8;
+            color: "#4A4A4A";
+            parent: "torso";
+        };
+        left_hind_leg {
+            x: 15; y: -20; z: 10;
+            size_x: 10; size_y: 22; size_z: 8;
+            color: "#3A3A3A";
+            parent: "torso";
+        };
+        right_hind_leg {
+            x: 15; y: -20; z: 20;
+            size_x: 10; size_y: 22; size_z: 8;
+            color: "#3A3A3A";
+            parent: "torso";
+        };
+        fur_mane {
+            x: 25; y: 20; z: 0;
+            size_x: 18; size_y: 10; size_z: 12;
+            color: "#2A2A2A";
+            parent: "head";
+        };
+    };
+};

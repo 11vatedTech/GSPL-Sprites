@@ -426,6 +426,70 @@ int main() {
             check(has_rights_diag, "Lowering should produce RIGHTS_INVALID diagnostic for invalid rights");
         }
 
+        // ---- 12. GenericBlock lowering (bones, sockets, clips, states, transitions, collisions) ----
+        {
+            gspl::CompilationContext ctx;
+            auto buf = gspl::SourceBuffer::from_string("generic.gspl",
+                "module generic;\n"
+                "entity GenericEntity {\n"
+                "  rights ORIGINAL_USER_CREATION PUBLIC;\n"
+                "  bone torso { parent: \"root\"; x: 0; y: 0; z: 0; length_mm: 50; }\n"
+                "  socket muzzle { bone: \"torso\"; x: 10; y: 5; z: 0; }\n"
+                "  clip idle {\n"
+                "    track root { tick: 0; }\n"
+                "    track root { tick: 10; }\n"
+                "  }\n"
+                "  state idle_state { clip: \"idle\"; }\n"
+                "  transition idle_ready { to: \"ready\"; ability: \"test\"; threshold: 50; }\n"
+                "  collision hitbox { type: \"CIRCLE\"; socket: \"torso\"; radius_mm: 20; }\n"
+                "  window test_ability { shape: \"hitbox\"; start_tick: 2; duration_ticks: 5; }\n"
+                "  runtime { aggression: 80; curiosity: 20; }\n"
+                "  morphology {}\n"
+                "}\n");
+
+            ctx.sources.register_buffer(std::move(buf));
+            gspl::LexPhase lex; lex.execute(ctx);
+            gspl::ParsePhase parse; parse.execute(ctx);
+            check(ctx.ast != nullptr, "Generic block test should produce AST");
+
+            ctx.diagnostics = {};
+            gspl::NameResolvePhase name_res; name_res.execute(ctx);
+            ctx.diagnostics = {};
+            gspl::TypeCheckPhase type_check; type_check.execute(ctx);
+            ctx.diagnostics = {};
+            gspl::GeneCompositionPhase gene_comp; gene_comp.execute(ctx);
+            gspl::CanonicalizePhase canon; canon.execute(ctx);
+
+            auto const& ce = ctx.canonical;
+            check(ce.bones.size() == 1, "Should have 1 bone");
+            check(ce.bones[0].id == "torso", "Bone should be 'torso'");
+            check(ce.bones[0].parent == "root", "Bone parent should be 'root'");
+
+            check(ce.sockets.size() == 1, "Should have 1 socket");
+            check(ce.sockets[0].id == "muzzle", "Socket should be 'muzzle'");
+            check(ce.sockets[0].bone == "torso", "Socket bone should be 'torso'");
+
+            check(ce.clips.size() == 1, "Should have 1 clip");
+            check(ce.clips[0].name == "idle", "Clip should be 'idle'");
+
+            check(ce.states.size() == 1, "Should have 1 state");
+            check(ce.states[0].name == "idle_state", "State should be 'idle_state'");
+            check(!ce.states[0].clip_name.empty(), "State should have clip_name");
+
+            check(ce.transitions.size() == 1, "Should have 1 transition");
+            check(ce.transitions[0].from_state == "idle_ready", "Transition from_state should be 'idle_ready'");
+            check(ce.transitions[0].to_state == "ready", "Transition to_state should be 'ready'");
+
+            check(ce.collision_shapes.size() == 1, "Should have 1 collision shape");
+            check(ce.collision_shapes[0].id == "hitbox", "Collision shape should be 'hitbox'");
+
+            check(ce.collision_windows.size() == 1, "Should have 1 collision window");
+            check(ce.collision_windows[0].ability_id == "test_ability", "Collision window ability should be 'test_ability'");
+
+            check(ce.runtime.has_value(), "Should have runtime attributes");
+            check(ce.runtime->aggression == 80, "Runtime aggression should be 80");
+        }
+
         std::cout << "ALL SEMANTIC PIPELINE TESTS PASSED\n";
         return 0;
     } catch (std::exception const& e) {

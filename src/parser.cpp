@@ -88,8 +88,19 @@ std::unique_ptr<AstNode> Parser::parse_attribute() {
     expect(TokenKind::colon, DiagnosticCode::GSPL_PARSE_UNEXPECTED_TOKEN, "Expected ':'");
     auto val = parse_literal();
     if (!val) {
-        if (check(TokenKind::identifier)) val = std::make_unique<LiteralNode>(TokenKind::identifier, peek().text);
-        else val = std::make_unique<LiteralNode>(TokenKind::boolean_literal, "true");
+        if (check(TokenKind::identifier)) {
+            val = std::make_unique<LiteralNode>(TokenKind::identifier, peek().text);
+        } else if (match(TokenKind::minus)) {
+            auto n = parse_literal();
+            if (n) {
+                n->value = "-" + n->value;
+                val = std::move(n);
+            } else {
+                val = std::make_unique<LiteralNode>(TokenKind::integer_literal, "0");
+            }
+        } else {
+            val = std::make_unique<LiteralNode>(TokenKind::identifier, peek().text);
+        }
     }
     advance();
     return std::make_unique<AttributeNode>(key.text, std::move(val));
@@ -122,6 +133,7 @@ std::unique_ptr<EntityDecl> Parser::parse_entity() {
         else advance();
     }
     expect(TokenKind::rbrace, DiagnosticCode::GSPL_PARSE_UNBALANCED_BRACE, "Expected '}'");
+    match(TokenKind::semicolon);
     return decl;
 }
 
@@ -142,6 +154,7 @@ std::unique_ptr<GeneDecl> Parser::parse_gene() {
         else advance();
     }
     expect(TokenKind::rbrace, DiagnosticCode::GSPL_PARSE_UNBALANCED_BRACE, "Expected '}'");
+    match(TokenKind::semicolon);
     return decl;
 }
 
@@ -155,11 +168,13 @@ std::unique_ptr<FormDecl> Parser::parse_form() {
     auto decl = std::make_unique<FormDecl>(name, ext);
     expect(TokenKind::lbrace, DiagnosticCode::GSPL_PARSE_UNBALANCED_BRACE, "Expected '{'");
     while (!check(TokenKind::rbrace) && !check(TokenKind::end_of_file)) {
-        auto child = parse_declaration();
-        if (child) decl->body.push_back(std::move(child));
+        if (match(TokenKind::semicolon)) continue;
+        auto attr = parse_attribute();
+        if (attr) decl->body.push_back(std::move(attr));
         else advance();
     }
     expect(TokenKind::rbrace, DiagnosticCode::GSPL_PARSE_UNBALANCED_BRACE, "Expected '}'");
+    match(TokenKind::semicolon);
     return decl;
 }
 
@@ -171,9 +186,24 @@ std::unique_ptr<TransformationDecl> Parser::parse_transformation() {
     auto decl = std::make_unique<TransformationDecl>(name, from, to);
     if (!check(TokenKind::semicolon)) {
         expect(TokenKind::lbrace, DiagnosticCode::GSPL_PARSE_UNBALANCED_BRACE, "Expected '{'");
-        while (!check(TokenKind::rbrace) && !check(TokenKind::end_of_file)) advance();
+        while (!check(TokenKind::rbrace) && !check(TokenKind::end_of_file)) {
+            if (match(TokenKind::semicolon)) continue;
+            auto attr = parse_attribute();
+            if (attr) {
+                auto const* a = static_cast<AttributeNode const*>(attr.get());
+                if (a->key == "duration" && a->value) {
+                    auto const* lit = dynamic_cast<LiteralNode const*>(a->value.get());
+                    if (lit) decl->duration = std::make_unique<LiteralNode>(lit->literal_kind, lit->value);
+                }
+                if (a->key == "resource_cost" && a->value) {
+                    auto const* lit = dynamic_cast<LiteralNode const*>(a->value.get());
+                    if (lit) decl->resource_cost = std::make_unique<LiteralNode>(lit->literal_kind, lit->value);
+                }
+            } else advance();
+        }
         expect(TokenKind::rbrace, DiagnosticCode::GSPL_PARSE_UNBALANCED_BRACE, "Expected '}'");
     }
+    match(TokenKind::semicolon);
     return decl;
 }
 
@@ -183,16 +213,32 @@ std::unique_ptr<MorphologyDecl> Parser::parse_morphology() {
     expect(TokenKind::lbrace, DiagnosticCode::GSPL_PARSE_UNBALANCED_BRACE, "Expected '{'");
     while (!check(TokenKind::rbrace) && !check(TokenKind::end_of_file)) {
         if (match(TokenKind::semicolon)) continue;
-        advance();
+        if (!check(TokenKind::identifier)) { advance(); continue; }
+        auto part_name = parse_identifier()->name;
+        auto part = std::make_unique<PartDecl>(part_name);
+        if (!check(TokenKind::semicolon)) {
+            expect(TokenKind::lbrace, DiagnosticCode::GSPL_PARSE_UNBALANCED_BRACE, "Expected '{'");
+            while (!check(TokenKind::rbrace) && !check(TokenKind::end_of_file)) {
+                if (match(TokenKind::semicolon)) continue;
+                auto attr = parse_attribute();
+                if (attr) part->attributes.push_back(std::move(attr));
+                else advance();
+            }
+            expect(TokenKind::rbrace, DiagnosticCode::GSPL_PARSE_UNBALANCED_BRACE, "Expected '}'");
+        }
+        decl->parts.push_back(std::move(part));
     }
     expect(TokenKind::rbrace, DiagnosticCode::GSPL_PARSE_UNBALANCED_BRACE, "Expected '}'");
+    match(TokenKind::semicolon);
     return decl;
 }
 
 std::unique_ptr<ResourceDecl> Parser::parse_resource() {
     advance();
     auto name = parse_identifier()->name;
-    auto type_tok = expect(TokenKind::identifier, DiagnosticCode::GSPL_PARSE_UNEXPECTED_TOKEN,
+    Token type_tok;
+    if (check(TokenKind::identifier)) type_tok = advance();
+    else type_tok = expect(TokenKind::keyword_resource, DiagnosticCode::GSPL_PARSE_UNEXPECTED_TOKEN,
                             "Expected resource type");
     auto decl = std::make_unique<ResourceDecl>(name, type_tok.text);
     expect(TokenKind::lbrace, DiagnosticCode::GSPL_PARSE_UNBALANCED_BRACE, "Expected '{'");
@@ -203,6 +249,7 @@ std::unique_ptr<ResourceDecl> Parser::parse_resource() {
         else advance();
     }
     expect(TokenKind::rbrace, DiagnosticCode::GSPL_PARSE_UNBALANCED_BRACE, "Expected '}'");
+    match(TokenKind::semicolon);
     return decl;
 }
 
@@ -212,11 +259,13 @@ std::unique_ptr<AbilityDecl> Parser::parse_ability() {
     auto decl = std::make_unique<AbilityDecl>(name);
     expect(TokenKind::lbrace, DiagnosticCode::GSPL_PARSE_UNBALANCED_BRACE, "Expected '{'");
     while (!check(TokenKind::rbrace) && !check(TokenKind::end_of_file)) {
-        auto child = parse_declaration();
-        if (child) decl->body.push_back(std::move(child));
+        if (match(TokenKind::semicolon)) continue;
+        auto attr = parse_attribute();
+        if (attr) decl->body.push_back(std::move(attr));
         else advance();
     }
     expect(TokenKind::rbrace, DiagnosticCode::GSPL_PARSE_UNBALANCED_BRACE, "Expected '}'");
+    match(TokenKind::semicolon);
     return decl;
 }
 
@@ -226,6 +275,35 @@ std::unique_ptr<RightsDecl> Parser::parse_rights() {
     auto code = parse_identifier()->name;
     match(TokenKind::semicolon);
     return std::make_unique<RightsDecl>(classification + "/" + code);
+}
+
+std::unique_ptr<GenericBlock> Parser::parse_generic_block(std::string const& block_type) {
+    advance();
+    auto decl = std::make_unique<GenericBlock>(block_type);
+    if (check(TokenKind::identifier)) decl->name = parse_identifier()->name;
+    while (check(TokenKind::identifier)) {
+        decl->secondary_names.push_back(parse_identifier()->name);
+    }
+    if (!check(TokenKind::semicolon)) {
+        expect(TokenKind::lbrace, DiagnosticCode::GSPL_PARSE_UNBALANCED_BRACE, "Expected '{'");
+        while (!check(TokenKind::rbrace) && !check(TokenKind::end_of_file)) {
+            if (match(TokenKind::semicolon)) continue;
+            if (check(TokenKind::identifier)) {
+                if (peek(1).kind == TokenKind::identifier || peek(1).kind == TokenKind::lbrace) {
+                    auto nested = parse_generic_block(peek().text);
+                    if (nested) decl->attributes.push_back(std::move(nested));
+                } else {
+                    auto attr = parse_attribute();
+                    if (attr) decl->attributes.push_back(std::move(attr));
+                }
+            } else {
+                advance();
+            }
+        }
+        expect(TokenKind::rbrace, DiagnosticCode::GSPL_PARSE_UNBALANCED_BRACE, "Expected '}'");
+    }
+    match(TokenKind::semicolon);
+    return decl;
 }
 
 std::unique_ptr<AstNode> Parser::parse_declaration() {
@@ -247,11 +325,35 @@ std::unique_ptr<AstNode> Parser::parse_declaration() {
     case TokenKind::keyword_resource: result = parse_resource(); break;
     case TokenKind::keyword_ability: result = parse_ability(); break;
     case TokenKind::keyword_rights: result = parse_rights(); break;
+    case TokenKind::keyword_socket: result = parse_generic_block("socket"); break;
+    case TokenKind::keyword_joint: result = parse_generic_block("joint"); break;
+    case TokenKind::keyword_part: result = parse_generic_block("part"); break;
+    case TokenKind::keyword_material: result = parse_generic_block("material"); break;
+    case TokenKind::keyword_palette: result = parse_generic_block("palette"); break;
+    case TokenKind::keyword_animation: result = parse_generic_block("animation"); break;
+    case TokenKind::keyword_behavior: result = parse_generic_block("behavior"); break;
+    case TokenKind::keyword_collision: result = parse_generic_block("collision"); break;
     default:
-        diags_.add_error(DiagnosticCode::GSPL_PARSE_INVALID_DECLARATION,
-                         "Unexpected token in declaration: " + std::string(token_kind_name(peek().kind)),
-                         peek().span);
-        advance();
+        if (check(TokenKind::identifier)) {
+            std::string text = peek().text;
+            if (text == "bone" || text == "clip" || text == "state" ||
+                text == "transition" || text == "runtime" || text == "rig" ||
+                text == "track" || text == "event" || text == "window" ||
+                text == "initial" || text == "part" || text == "material" ||
+                text == "palette") {
+                result = parse_generic_block(text);
+            } else {
+                diags_.add_error(DiagnosticCode::GSPL_PARSE_INVALID_DECLARATION,
+                    "Unexpected token in declaration: " + std::string(token_kind_name(peek().kind)),
+                    peek().span);
+                advance();
+            }
+        } else {
+            diags_.add_error(DiagnosticCode::GSPL_PARSE_INVALID_DECLARATION,
+                "Unexpected token in declaration: " + std::string(token_kind_name(peek().kind)),
+                peek().span);
+            advance();
+        }
         break;
     }
     --nesting_depth_;

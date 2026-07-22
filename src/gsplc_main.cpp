@@ -8,6 +8,6 @@ int main(int argc, char* argv[]) {
         if (!parsed.error.empty()) std::cerr << "gsplc: " << parsed.error << "\n";
         return 1;
     }
-    if (parsed.options.input_files.empty()) return 0;
+    if (parsed.options.input_files.empty() && !parsed.options.graph && !parsed.options.migrate) return 0;
     return cli.run(parsed.options);
 }
