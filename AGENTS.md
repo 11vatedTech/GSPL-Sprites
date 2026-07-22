@@ -22,9 +22,9 @@ trusted. Do not add network access to the compiler or runtime core.
 - Release-closure final report: `openspec/changes/archive/2026-07-21-generalized-gspl-sprite-compiler/release-closure-report.md`
 
 ### Important Details
-- Repository `https://github.com/11vatedTech/GSPL-Sprites`, branch `main`
-- GCC 16.1.0 MinGW-W64 with `-Werror` (local); MSVC via GitHub Actions CI (windows-2025 only)
-- Linux GCC not currently supported — ONNX Runtime Windows-x64 dependency boundary
+- Repository `https://github.com/11vatedTech/GSPL-Sprites`, branch `main` (HEAD = d37b88e)
+- GCC 16.1.0 MinGW-W64 with `-Werror` (local); MSVC via GitHub Actions CI (windows-2025 only); Linux CORE_ONLY via GitHub Actions CI (ubuntu-24.04)
+- Linux GCC supported via `GSPL_CORE_ONLY` build profile (no ONNX Runtime dependency)
 - Windows Device Guard blocks freshly-linked executables (BAD_COMMAND) on clean rebuild — purely environmental, not code failures
 
 ### Changes
