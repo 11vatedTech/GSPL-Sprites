@@ -135,6 +135,8 @@ add_library(gspl_sprites_core
   src/genes.cpp
   src/ir.cpp
   src/passes.cpp
+  src/semantics.cpp
+  src/lowering.cpp
   src/cli.cpp
 )
 target_include_directories(gspl_sprites_core PUBLIC include)
@@ -358,6 +360,10 @@ add_test(NAME gspl_sprites_mutation_tests COMMAND gspl_sprites_mutation_tests)
 add_executable(gspl_sprites_compiler_tests tests/gspl_compiler_tests.cpp)
 target_link_libraries(gspl_sprites_compiler_tests PRIVATE gspl_sprites_core)
 add_test(NAME gspl_sprites_compiler_tests COMMAND gspl_sprites_compiler_tests)
+
+add_executable(gspl_sprites_semantic_pipeline_tests tests/semantic_pipeline_tests.cpp)
+target_link_libraries(gspl_sprites_semantic_pipeline_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_semantic_pipeline_tests COMMAND gspl_sprites_semantic_pipeline_tests)
 
 if(BUILD_PREVIEW)
   find_package(SDL2 QUIET)

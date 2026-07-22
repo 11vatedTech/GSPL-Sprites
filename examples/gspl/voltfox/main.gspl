@@ -1,0 +1,54 @@
+module voltfox;
+
+import gspl.std.types;
+import gspl.std.genes;
+
+entity Voltfox {
+    rights ORIGINAL_USER_CREATION PROHIBITED;
+
+    gene identity {
+        stable_id: "original.voltfox";
+        name: "Voltfox";
+    };
+
+    gene classification {
+        taxonomy: "biological.fictional.electric-fox";
+    };
+
+    gene appearance {
+        primary_color: "#242038";
+        accent_color: "#56F1FF";
+        emissive_color: "#00FFFF";
+        aura_color: "#56F1FF";
+    };
+
+    form base {
+        transformations: "ascend";
+        resource_capacity: 100;
+        collision_scale: 1.0;
+        ability_envelope: 1.0;
+        max_health: 100;
+    };
+
+    form storm {
+        transformations: "descend";
+        resource_capacity: 150;
+        collision_scale: 1.3;
+        ability_envelope: 1.5;
+        max_health: 150;
+    };
+
+    transformation ascend base storm {};
+    transformation descend storm base {};
+
+    ability directional_lightning {};
+    ability storm_lightning {};
+
+    resource energy resource {
+        min: 0;
+        max: 100;
+        initial: 100;
+    };
+
+    morphology {};
+};
