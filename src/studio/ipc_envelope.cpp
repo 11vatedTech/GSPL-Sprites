@@ -76,7 +76,35 @@ auto IpcEnvelope::deserialize(std::string_view data) -> IpcEnvelope {
             std::string val;
             while (pos < data.size() && data[pos] != '"') {
                 if (data[pos] == '\\' && pos + 1 < data.size()) {
-                    val += data[pos + 1];
+                    char esc = data[pos + 1];
+                    switch (esc) {
+                        case '"': val += '"'; break;
+                        case '\\': val += '\\'; break;
+                        case '/': val += '/'; break;
+                        case 'n': val += '\n'; break;
+                        case 'r': val += '\r'; break;
+                        case 't': val += '\t'; break;
+                        case 'b': val += '\b'; break;
+                        case 'f': val += '\f'; break;
+                        case 'u': {
+                            if (pos + 5 < data.size()) {
+                                unsigned cp = 0;
+                                for (int j = 0; j < 4; ++j) {
+                                    auto h = data[pos + 2 + j];
+                                    cp <<= 4;
+                                    if (h >= '0' && h <= '9') cp |= static_cast<unsigned>(h - '0');
+                                    else if (h >= 'a' && h <= 'f') cp |= static_cast<unsigned>(h - 'a' + 10);
+                                    else if (h >= 'A' && h <= 'F') cp |= static_cast<unsigned>(h - 'A' + 10);
+                                }
+                                if (cp < 0x80) val += static_cast<char>(cp);
+                                else if (cp < 0x800) { val += static_cast<char>(0xC0 | (cp >> 6)); val += static_cast<char>(0x80 | (cp & 0x3F)); }
+                                else { val += static_cast<char>(0xE0 | (cp >> 12)); val += static_cast<char>(0x80 | ((cp >> 6) & 0x3F)); val += static_cast<char>(0x80 | (cp & 0x3F)); }
+                                pos += 5;
+                            }
+                            break;
+                        }
+                        default: val += esc; break;
+                    }
                     pos += 2;
                 } else {
                     val += data[pos];
@@ -107,7 +135,7 @@ auto IpcEnvelope::deserialize(std::string_view data) -> IpcEnvelope {
     env.version = static_cast<std::uint32_t>(num_val("version"));
     env.message_id = num_val("message_id");
     env.method = extract("method");
-    env.payload = json_unescape(extract("payload"));
+    env.payload = extract("payload");
     env.has_shared_memory = bool_val("has_shared_memory");
     env.shared_memory_key = extract("shared_memory_key");
     env.shared_memory_size = num_val("shared_memory_size");

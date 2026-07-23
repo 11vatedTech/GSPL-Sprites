@@ -1,0 +1,18 @@
+{
+    "id": "gspl-sample-plugin",
+    "version": "1.0.0",
+    "name": "GSPL Sample Plugin",
+    "description": "Demonstrates all plugin API hook points",
+    "author": "GSPL Sprites Team",
+    "license": "MIT",
+    "api_version": 1,
+    "capabilities": [
+        "initialize",
+        "shutdown",
+        "on_document_open",
+        "on_document_close",
+        "on_diagnostic",
+        "on_build_start",
+        "on_build_end"
+    ]
+}

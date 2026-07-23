@@ -205,10 +205,10 @@
 - [x] 20.3 Implement `src/plugins/manifest.cpp` — load/validate manifest.jsonc
 - [x] 20.4 Implement `src/plugins/plugin_loader.cpp` — LoadLibrary/dlopen wrapper
 - [x] 20.5 Implement plugin lifecycle manager (`src/plugins/PluginManager.cpp`)
-- [ ] 20.6 Implement plugin sandbox worker process
+- [x] 20.6 Implement plugin sandbox worker process (`include/gspl/plugin/plugin_sandbox.hpp`, `src/plugins/plugin_sandbox.cpp`, `src/plugins/plugin_sandbox_main.cpp`)
 - [ ] 20.7 Create `src/studio/plugins/PluginPanel.qml` — plugin management UI
-- [ ] 20.8 Add plugin system unit and integration tests
-- [ ] 20.9 Create sample plugin demonstrating all hook points
+- [x] 20.8 Add plugin system unit and integration tests (`tests/plugins/plugin_tests.cpp`)
+- [x] 20.9 Create sample plugin demonstrating all hook points (`examples/sample-plugin/`)
 
 ## 21. Package Management
 

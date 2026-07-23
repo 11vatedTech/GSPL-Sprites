@@ -26,7 +26,7 @@ trusted. Do not add network access to the compiler or runtime core.
 - MSVC 19.44 via Visual Studio 2022 Build Tools (local); MSVC via GitHub Actions CI (windows-2025); Linux CORE_ONLY via GitHub Actions CI (ubuntu-24.04)
 - Linux GCC supported via `GSPL_CORE_ONLY` build profile (no ONNX Runtime dependency)
 - Studio requires Qt6 (`GSPL_BUILD_STUDIO=ON`) — not available locally; core-only builds unaffected
-- 68/68 tests pass (MSVC 19.44) — including gspl_sprites_ls_tests, ls_full_tests, environment_tests, studio_core_tests, property_based_tests, fuzz_studio_tests, adapter_tests, e2e_workflow_tests
+- 87/87 tests pass (MSVC 19.44, CORE_ONLY) — existing 68 + 18 plugin tests + gspl_sprites_plugin_sandbox.exe builds
 
 
 ### Changes
@@ -38,7 +38,7 @@ trusted. Do not add network access to the compiler or runtime core.
 | `voltfox-living-sprite-vertical-v2` | Archived |
 | `generalized-gspl-sprite-compiler` | Archived |
 | `gspl-language-and-platform-completion` | Archived |
-| `gspl-authoring-studio-and-production-ecosystem` | In progress (all 4 spec artifacts done, 131 of 263 tasks, Qt6 build pending) |
+| `gspl-authoring-studio-and-production-ecosystem` | In progress (all 4 spec artifacts done, 135 of 263 tasks, Qt6 build pending) |
 
 ### Implemented (this session) — Authoring Studio & Production Ecosystem
 
@@ -84,6 +84,9 @@ trusted. Do not add network access to the compiler or runtime core.
 - `include/gspl/plugin/plugin_api.h` — Stable C ABI (GsplPluginInfo, GsplPluginCallbacks)
 - `include/gspl/plugin/manifest.hpp` `src/plugins/manifest.cpp` — JSONC manifest with dependency constraints
 - `include/gspl/plugin/plugin_manager.hpp` `src/plugins/plugin_manager.cpp` — Lifecycle manager (discover/load/activate/deactivate/unload)
+- `include/gspl/plugin/plugin_sandbox.hpp` `src/plugins/plugin_sandbox.cpp` — Plugin sandbox worker with stdin/stdout IPC
+- `src/plugins/plugin_sandbox_main.cpp` — Sandbox executable entry point
+- `examples/sample-plugin/` — Sample plugin demonstrating all hook points
 
 **Package Management (pure C++23)**:
 - `include/gspl/package/manifest.hpp` `src/studio/packages/manifest.cpp` — PackageManifest with semver, signature
@@ -118,7 +121,7 @@ trusted. Do not add network access to the compiler or runtime core.
 - `tests/ls/ls_tests.cpp` — Initialize, completions, diagnostics, symbol info, location JSON
 - `tests/plugins/` — (directory ready for plugin tests)
 
-**Tests (this session — 4 new targets, 39 test functions)**:
+**Tests (this session — 5 new targets, 57 test functions)**:
 - `tests/ls/ls_full_tests.cpp` — 24 tests: JSON serialization, filtering, LS lifecycle, diagnostics, navigation stubs
 - `tests/studio/environment_tests.cpp` — 14 tests: allowlist, override, unset-vs-empty, path validation, determinism
 - `tests/studio/studio_core_tests.cpp` — 30 tests: publishing CRUD, target adapter lifecycle, theme color/contrast/built-in
@@ -126,9 +129,10 @@ trusted. Do not add network access to the compiler or runtime core.
 - `tests/studio/fuzz_studio_tests.cpp` — 4 tests: random hex colors, contrast bounds, theme load/activation
 - `tests/studio/adapter_tests.cpp` — 12 tests: Godot/Unity/Unreal export, validation, consistency
 - `tests/e2e_workflow_tests.cpp` — 8 tests: lex→parse→diagnose→symbols, large module stress
+- `tests/plugins/plugin_tests.cpp` — 18 tests: manifest validation, PluginManager lifecycle, IPC envelope roundtrip, sandbox config
 
 **Build System**:
-- `CMakeLists.txt` — Added `GSPL_BUILD_STUDIO` option, `add_subdirectory(src/studio)`, 12 new source files in `gspl_sprites_core`, `gspl_sprites_ls_tests` target, 4 new test targets
+- `CMakeLists.txt` — Added `GSPL_BUILD_STUDIO` option, `add_subdirectory(src/studio)`, 14 new source files in `gspl_sprites_core`, `gspl_sprites_ls_tests` target, 5 new test targets, `gspl_sprites_plugin_sandbox` executable
 - `src/studio/CMakeLists.txt` — Qt6 find_package, gspl_studio library target with Qt6 deps, test target
 
 ### Remaining for Gate Completion (requires Qt6 for full build)

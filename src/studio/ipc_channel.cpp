@@ -304,31 +304,4 @@ void IpcChannel::stop_async() {
     }
 }
 
-std::string IpcEnvelope::serialize() const {
-    std::ostringstream json;
-    json << "{\"magic\":" << magic
-         << ",\"version\":" << version
-         << ",\"message_id\":" << message_id
-         << ",\"method\":\"" << escape_json(method)
-         << "\",\"payload\":\"" << escape_json(payload)
-         << "\",\"has_shared_memory\":" << (has_shared_memory ? "true" : "false")
-         << ",\"shared_memory_key\":\"" << escape_json(shared_memory_key)
-         << "\",\"shared_memory_size\":" << shared_memory_size
-         << "}";
-    return json.str();
-}
-
-auto IpcEnvelope::deserialize(std::string_view data) -> IpcEnvelope {
-    IpcEnvelope env;
-    env.magic = static_cast<std::uint32_t>(find_json_number_field(data, "\"magic\""));
-    env.version = static_cast<std::uint32_t>(find_json_number_field(data, "\"version\""));
-    env.message_id = find_json_number_field(data, "\"message_id\"");
-    env.method = find_json_string_field(data, "\"method\"");
-    env.payload = find_json_string_field(data, "\"payload\"");
-    env.has_shared_memory = find_json_bool_field(data, "\"has_shared_memory\"");
-    env.shared_memory_key = find_json_string_field(data, "\"shared_memory_key\"");
-    env.shared_memory_size = find_json_number_field(data, "\"shared_memory_size\"");
-    return env;
-}
-
 } // namespace gspl::studio

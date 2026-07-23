@@ -167,6 +167,9 @@ add_library(gspl_sprites_core
   src/studio/adapters/godot_adapter.cpp
   src/studio/adapters/unity_adapter.cpp
   src/studio/adapters/unreal_adapter.cpp
+  src/studio/ipc_envelope.cpp
+  src/studio/ipc_channel.cpp
+  src/plugins/plugin_sandbox.cpp
 )
 if(GSPL_CORE_ONLY)
   target_sources(gspl_sprites_core PRIVATE src/inference_stub.cpp)
@@ -485,6 +488,29 @@ add_test(NAME gspl_sprites_adapter_tests COMMAND gspl_sprites_adapter_tests)
 add_executable(gspl_sprites_e2e_workflow_tests tests/e2e_workflow_tests.cpp)
 target_link_libraries(gspl_sprites_e2e_workflow_tests PRIVATE gspl_sprites_core)
 add_test(NAME gspl_sprites_e2e_workflow_tests COMMAND gspl_sprites_e2e_workflow_tests)
+
+# Plugin sandbox worker executable
+add_executable(gspl_sprites_plugin_sandbox src/plugins/plugin_sandbox_main.cpp)
+target_link_libraries(gspl_sprites_plugin_sandbox PRIVATE gspl_sprites_core)
+
+# Plugin system tests
+add_executable(gspl_sprites_plugin_tests tests/plugins/plugin_tests.cpp)
+target_link_libraries(gspl_sprites_plugin_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_plugin_tests COMMAND gspl_sprites_plugin_tests)
+
+# Sample plugin (optional, built as a shared library when requested)
+option(GSPL_BUILD_SAMPLE_PLUGIN "Build the sample GSPL plugin" OFF)
+if(GSPL_BUILD_SAMPLE_PLUGIN)
+    add_library(gspl_sample_plugin SHARED examples/sample-plugin/plugin.c)
+    target_include_directories(gspl_sample_plugin PRIVATE include)
+    if(WIN32)
+        set_target_properties(gspl_sample_plugin PROPERTIES SUFFIX ".dll")
+    elseif(APPLE)
+        set_target_properties(gspl_sample_plugin PROPERTIES SUFFIX ".dylib")
+    else()
+        set_target_properties(gspl_sample_plugin PROPERTIES SUFFIX ".so")
+    endif()
+endif()
 
 add_subdirectory(src/studio)
 
