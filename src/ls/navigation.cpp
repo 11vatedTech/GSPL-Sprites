@@ -55,19 +55,4 @@ std::string reference_to_json(const Reference& ref) {
     return oss.str();
 }
 
-std::string hover_info_to_json(const HoverInfo& hover) {
-    std::ostringstream oss;
-    oss << "{\"contents\":{\"kind\":\"markdown\",\"value\":\"" << hover.contents << "\"}";
-    if (hover.range.start.line != 0 || hover.range.end.line != 0) {
-        oss << ",\"range\":{"
-            << "\"start\":{\"line\":" << hover.range.start.line
-            << ",\"character\":" << hover.range.start.column << "},"
-            << "\"end\":{\"line\":" << hover.range.end.line
-            << ",\"character\":" << hover.range.end.column << "}"
-            << "}";
-    }
-    oss << "}";
-    return oss.str();
-}
-
 } // namespace gspl::ls

@@ -22,11 +22,11 @@ trusted. Do not add network access to the compiler or runtime core.
 - Previous change archive: `openspec/changes/archive/2026-07-22-gspl-language-and-platform-completion/`
 
 ### Important Details
-- Repository `https://github.com/11vatedTech/GSPL-Sprites`, branch `main` (HEAD = 40f771e)
+- Repository `https://github.com/11vatedTech/GSPL-Sprites`, branch `main` (HEAD = e8b6936)
 - MSVC 19.44 via Visual Studio 2022 Build Tools (local); MSVC via GitHub Actions CI (windows-2025); Linux CORE_ONLY via GitHub Actions CI (ubuntu-24.04)
 - Linux GCC supported via `GSPL_CORE_ONLY` build profile (no ONNX Runtime dependency)
 - Studio requires Qt6 (`GSPL_BUILD_STUDIO=ON`) — not available locally; core-only builds unaffected
-- 61/61 tests pass (MSVC 19.44) — including gspl_sprites_ls_tests
+- 68/68 tests pass (MSVC 19.44) — including gspl_sprites_ls_tests, ls_full_tests, environment_tests, studio_core_tests, property_based_tests, fuzz_studio_tests, adapter_tests, e2e_workflow_tests
 
 
 ### Changes
@@ -38,7 +38,7 @@ trusted. Do not add network access to the compiler or runtime core.
 | `voltfox-living-sprite-vertical-v2` | Archived |
 | `generalized-gspl-sprite-compiler` | Archived |
 | `gspl-language-and-platform-completion` | Archived |
-| `gspl-authoring-studio-and-production-ecosystem` | In progress (all 4 spec artifacts done, 132 new files, Qt6 build pending) |
+| `gspl-authoring-studio-and-production-ecosystem` | In progress (all 4 spec artifacts done, 131 of 263 tasks, Qt6 build pending) |
 
 ### Implemented (this session) — Authoring Studio & Production Ecosystem
 
@@ -64,10 +64,12 @@ trusted. Do not add network access to the compiler or runtime core.
 - `src/studio/shell/CommandPalette.qml`, `StartupWizard.qml`, `PreferencesDialog.qml`, `AboutDialog.qml`
 
 **Language Service (pure C++23, no Qt)**:
-- `include/gspl/ls/ls_server.hpp` `src/ls/ls_server.cpp` — LSP-compatible server with 12+ methods
-- `include/gspl/ls/diagnostic.hpp` `src/ls/diagnostic.cpp` — Diagnostic with range/severity/message
-- `include/gspl/ls/completion.hpp` `src/ls/completion.cpp` — CompletionItem with kind/detail/insert
+- `include/gspl/ls/ls_server.hpp` `src/ls/ls_server.cpp` — LSP-compatible server with 12+ methods (rewritten diagnose/build_symbol_index with production SourceManager/Lexer/Parser)
+- `include/gspl/ls/diagnostic.hpp` `src/ls/diagnostic.cpp` — Diagnostic with range/severity/message; `from_compile_error` maps real `gspl::Diagnostic` fields
+- `include/gspl/ls/completion.hpp` `src/ls/completion.cpp` — CompletionItem with kind/detail/insert; `filter` with UB-safe `::tolower`
 - `include/gspl/ls/navigation.hpp` `src/ls/navigation.cpp` — Location, SymbolInfo, Reference, HoverInfo with JSON serialization
+- `include/gspl/ls/hover.hpp` `src/ls/hover.cpp` — Hover info generator with keyword docs, declaration lookup, JSON serialization
+- `include/gspl/ls/document_symbols.hpp` `src/ls/document_symbols.cpp` — Symbol tree from parsed module via production compiler frontend
 
 **Visual Editors (QML, Qt6-dependent)**:
 - `src/studio/visual/GeneEditor.qml`, `MorphologyEditor.qml`, `FormEditor.qml`
@@ -87,13 +89,19 @@ trusted. Do not add network access to the compiler or runtime core.
 - `include/gspl/package/manifest.hpp` `src/studio/packages/manifest.cpp` — PackageManifest with semver, signature
 - `include/gspl/package/package_manager.hpp` `src/studio/packages/package_manager.cpp` — Install/update/remove with DFS dependency resolution
 
-**Remaining Components (all implemented)**:
+**Studio Core (pure C++23, no Qt)**:
+- `include/gspl/studio/environment_provider.hpp` `src/studio/environment_provider.cpp` — Typed environment access with allowlist and injectable overrides
 - `include/gspl/studio/publishing.hpp` `src/studio/publishing_manager.cpp` — Publish/rollback to local/GitHub/spriteforge targets
 - `include/gspl/studio/target_adapter.hpp` `src/studio/target_adapter_manager.cpp` — Build profiles, SDK detection, cross-compilation
 - `include/gspl/studio/theme.hpp` `src/studio/theme_manager.cpp` — Light/dark/high-contrast themes with WCAG contrast ratio computation
 - `include/gspl/studio/git_integration.hpp` `src/studio/git_integration.cpp` — Git CLI wrapper (status, diff, stage, commit, blame)
 - `src/studio/publishing/PublishWizard.qml`, `TargetPanel.qml`, `GitPanel.qml`,
   `ProviderPanel.qml`, `PackagePanel.qml`
+
+**Engine Adapters (pure C++23, no Qt)**:
+- `include/gspl/studio/adapters/godot_adapter.hpp` `src/studio/adapters/godot_adapter.cpp` — Godot Engine 4.x export (tres, gd script, animation library)
+- `include/gspl/studio/adapters/unity_adapter.hpp` `src/studio/adapters/unity_adapter.cpp` — Unity Engine 2022 LTS export (ScriptableObject, animation controller)
+- `include/gspl/studio/adapters/unreal_adapter.hpp` `src/studio/adapters/unreal_adapter.cpp` — Unreal Engine 5.x export (DataAsset, module descriptor, uplugin)
 
 **Reference Workspaces**:
 - `examples/blank-workspace/` — Minimal GSPL project template
@@ -110,8 +118,17 @@ trusted. Do not add network access to the compiler or runtime core.
 - `tests/ls/ls_tests.cpp` — Initialize, completions, diagnostics, symbol info, location JSON
 - `tests/plugins/` — (directory ready for plugin tests)
 
+**Tests (this session — 4 new targets, 39 test functions)**:
+- `tests/ls/ls_full_tests.cpp` — 24 tests: JSON serialization, filtering, LS lifecycle, diagnostics, navigation stubs
+- `tests/studio/environment_tests.cpp` — 14 tests: allowlist, override, unset-vs-empty, path validation, determinism
+- `tests/studio/studio_core_tests.cpp` — 30 tests: publishing CRUD, target adapter lifecycle, theme color/contrast/built-in
+- `tests/ls/property_based_tests.cpp` — 15 tests: LS determinism, idempotency, stability, monotonicity
+- `tests/studio/fuzz_studio_tests.cpp` — 4 tests: random hex colors, contrast bounds, theme load/activation
+- `tests/studio/adapter_tests.cpp` — 12 tests: Godot/Unity/Unreal export, validation, consistency
+- `tests/e2e_workflow_tests.cpp` — 8 tests: lex→parse→diagnose→symbols, large module stress
+
 **Build System**:
-- `CMakeLists.txt` — Added `GSPL_BUILD_STUDIO` option, `add_subdirectory(src/studio)`, 12 new source files in `gspl_sprites_core`, `gspl_sprites_ls_tests` target
+- `CMakeLists.txt` — Added `GSPL_BUILD_STUDIO` option, `add_subdirectory(src/studio)`, 12 new source files in `gspl_sprites_core`, `gspl_sprites_ls_tests` target, 4 new test targets
 - `src/studio/CMakeLists.txt` — Qt6 find_package, gspl_studio library target with Qt6 deps, test target
 
 ### Remaining for Gate Completion (requires Qt6 for full build)

@@ -149,6 +149,7 @@ add_library(gspl_sprites_core
   src/ls/ls_server.cpp
   src/ls/navigation.cpp
   src/ls/document_symbols.cpp
+  src/ls/hover.cpp
   src/cache.cpp
   src/provider.cpp
   src/legacy.cpp
@@ -163,6 +164,9 @@ add_library(gspl_sprites_core
   src/studio/publishing_manager.cpp
   src/studio/target_adapter_manager.cpp
   src/studio/theme_manager.cpp
+  src/studio/adapters/godot_adapter.cpp
+  src/studio/adapters/unity_adapter.cpp
+  src/studio/adapters/unreal_adapter.cpp
 )
 if(GSPL_CORE_ONLY)
   target_sources(gspl_sprites_core PRIVATE src/inference_stub.cpp)
@@ -465,6 +469,22 @@ add_test(NAME gspl_sprites_cli_comprehensive_tests COMMAND gspl_sprites_cli_comp
 add_executable(gspl_sprites_header_tests tests/header_self_containment_tests.cpp)
 target_link_libraries(gspl_sprites_header_tests PRIVATE gspl_sprites_core)
 add_test(NAME gspl_sprites_header_tests COMMAND gspl_sprites_header_tests)
+
+add_executable(gspl_sprites_property_based_tests tests/ls/property_based_tests.cpp)
+target_link_libraries(gspl_sprites_property_based_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_property_based_tests COMMAND gspl_sprites_property_based_tests)
+
+add_executable(gspl_sprites_fuzz_studio_tests tests/studio/fuzz_studio_tests.cpp)
+target_link_libraries(gspl_sprites_fuzz_studio_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_fuzz_studio_tests COMMAND gspl_sprites_fuzz_studio_tests)
+
+add_executable(gspl_sprites_adapter_tests tests/studio/adapter_tests.cpp)
+target_link_libraries(gspl_sprites_adapter_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_adapter_tests COMMAND gspl_sprites_adapter_tests)
+
+add_executable(gspl_sprites_e2e_workflow_tests tests/e2e_workflow_tests.cpp)
+target_link_libraries(gspl_sprites_e2e_workflow_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_e2e_workflow_tests COMMAND gspl_sprites_e2e_workflow_tests)
 
 add_subdirectory(src/studio)
 

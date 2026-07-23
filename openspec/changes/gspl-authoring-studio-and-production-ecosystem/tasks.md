@@ -64,9 +64,11 @@
 - [x] 6.8 Implement `src/ls/navigation.cpp` — symbol index with source spans
 - [x] 6.9 Implement `include/gspl/ls/document_symbols.hpp` — outline tree builder
 - [x] 6.10 Implement `src/ls/document_symbols.cpp` — symbol tree from parsed module
-- [ ] 6.11 Implement hover info (`include/gspl/ls/hover.hpp`, `src/ls/hover.cpp`)
+- [x] 6.11 Implement hover info (`include/gspl/ls/hover.hpp`, `src/ls/hover.cpp`)
 - [x] 6.12 Create standalone LsServer main (`src/ls/main.cpp`) for external editors
 - [x] 6.13 Add language service unit and integration tests
+- [x] 6.14 Add property-based tests for LS determinism, idempotency, and stability (`tests/ls/property_based_tests.cpp`)
+- [x] 6.15 Add end-to-end workflow tests (lex → parse → diagnose → symbols) (`tests/e2e_workflow_tests.cpp`)
 
 ## 7. Text Authoring
 
@@ -238,7 +240,10 @@
 - [x] 23.4 Create `src/studio/targets/TargetPanel.qml` — target configuration UI
 - [x] 23.5 Implement target SDK detection and validation
 - [x] 23.6 Implement cross-compilation profile application
-- [ ] 23.7 Add target adapter unit tests
+- [x] 23.7 Add target adapter unit tests (Godot/Unity/Unreal engine adapters with file-export validation)
+- [x] 23.8 Create Godot 4.x engine adapter (`include/gspl/studio/adapters/godot_adapter.hpp`, `src/studio/adapters/godot_adapter.cpp`)
+- [x] 23.9 Create Unity 2022 LTS engine adapter (`include/gspl/studio/adapters/unity_adapter.hpp`, `src/studio/adapters/unity_adapter.cpp`)
+- [x] 23.10 Create Unreal Engine 5.x engine adapter (`include/gspl/studio/adapters/unreal_adapter.hpp`, `src/studio/adapters/unreal_adapter.cpp`)
 
 ## 24. Git Integration
 
@@ -312,7 +317,8 @@
 - [ ] 30.4 Implement provider inference latency benchmark
 - [ ] 30.5 Implement memory usage tracking benchmark
 - [ ] 30.6 Implement regression detection against stored baselines
-- [ ] 30.7 Add benchmark CI step
+- [x] 30.7 Add fuzz tests for studio components (theme color parsing, contrast ratios, theme switching) (`tests/studio/fuzz_studio_tests.cpp`)
+- [ ] 30.8 Add benchmark CI step
 
 ## 31. CMake & Build System
 
@@ -324,6 +330,7 @@
 - [x] 31.6 Create LS test CMakeLists (`tests/ls/CMakeLists.txt`)
 - [ ] 31.7 Add install rules for studio binary
 - [x] 31.8 Verify CORE_ONLY build still succeeds with no Qt dependency
+- [x] 31.9 Add 4 new test targets to CMakeLists.txt: property_based_tests, fuzz_studio_tests, adapter_tests, e2e_workflow_tests
 
 ## 32. CI & Release
 
