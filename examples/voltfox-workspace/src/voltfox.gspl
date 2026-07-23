@@ -1,0 +1,23 @@
+module voltfox
+
+entity Voltfox {
+    gene core.identity
+    gene core.visual.mammalian
+    gene voltfox.morphology.fox
+    gene voltfox.animation.agile
+    gene voltfox.behavior.curious
+    gene voltfox.combat.swift
+    
+    form {
+        primary_color: #ff6600
+        secondary_color: #ffffff
+        accent_color: #ff3300
+        scale: 1.0
+    }
+    
+    morphology {
+        limbs: 4
+        tail: true
+        ears: "pointed"
+    }
+}

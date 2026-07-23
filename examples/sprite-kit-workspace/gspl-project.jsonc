@@ -1,0 +1,8 @@
+{
+    "name": "sprite-kit-workspace",
+    "version": "1.0.0",
+    "description": "Design patterns and templates for GSPL sprite development",
+    "authors": ["GSPL"],
+    "gspl_version": "1.0",
+    "dependencies": []
+}

@@ -18,6 +18,19 @@ jobs:
         run: cmake --build build
       - name: Test
         run: ctest --test-dir build --output-on-failure
+  studio:
+    name: Studio (Windows MSVC + Qt6)
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Install Qt6
+        run: choco install qt6-win64 --version 6.8.0 --no-progress -y
+      - name: Configure CMake
+        run: cmake -B build -S . -DGSPL_BUILD_STUDIO=ON
+      - name: Build
+        run: cmake --build build --config Release
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
   core-only-linux:
     runs-on: ubuntu-24.04
     steps:

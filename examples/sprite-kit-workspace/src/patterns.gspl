@@ -1,0 +1,20 @@
+module sprite_kit.patterns
+
+// Common entity templates for rapid development
+entity HumanoidBase {
+    gene core.identity
+    gene core.visual.bipedal
+    gene kit.morphology.humanoid
+}
+
+entity QuadrupedBase {
+    gene core.identity
+    gene core.visual.mammalian
+    gene kit.morphology.quadruped
+}
+
+entity FlyingBase {
+    gene core.identity
+    gene core.visual.avian
+    gene kit.morphology.flying
+}

@@ -1,0 +1,11 @@
+{
+    "name": "voltfox-workspace",
+    "version": "1.0.0",
+    "description": "Voltfox living sprite reference workspace",
+    "authors": ["11vatedTech"],
+    "gspl_version": "1.0",
+    "dependencies": [
+        "gspl/core@^1.0",
+        "gspl/animations@^1.0"
+    ]
+}

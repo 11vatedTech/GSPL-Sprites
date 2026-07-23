@@ -3,6 +3,7 @@ project(gspl_sprites VERSION 0.1.0 LANGUAGES C CXX)
 
 option(BUILD_PREVIEW "Build the preview executable" OFF)
 option(GSPL_CORE_ONLY "Build GSPL core without ONNX Runtime dependency (portable)" OFF)
+option(GSPL_BUILD_STUDIO "Build the GSPL Authoring Studio (requires Qt6)" OFF)
 
 set(GSPL_EXPECT_COMPILER "" CACHE STRING "Expected CXX compiler ID: MSVC, GNU, Clang, AppleClang")
 if(GSPL_EXPECT_COMPILER AND NOT CMAKE_CXX_COMPILER_ID MATCHES "${GSPL_EXPECT_COMPILER}")
@@ -143,11 +144,25 @@ add_library(gspl_sprites_core
   src/passes.cpp
   src/semantics.cpp
   src/lowering.cpp
+  src/ls/completion.cpp
+  src/ls/diagnostic.cpp
+  src/ls/ls_server.cpp
+  src/ls/navigation.cpp
+  src/ls/document_symbols.cpp
   src/cache.cpp
   src/provider.cpp
   src/legacy.cpp
   src/sdk.cpp
   src/cli.cpp
+  src/plugins/manifest.cpp
+  src/plugins/plugin_manager.cpp
+  src/studio/environment_provider.cpp
+  src/studio/git_integration.cpp
+  src/studio/packages/manifest.cpp
+  src/studio/packages/package_manager.cpp
+  src/studio/publishing_manager.cpp
+  src/studio/target_adapter_manager.cpp
+  src/studio/theme_manager.cpp
 )
 if(GSPL_CORE_ONLY)
   target_sources(gspl_sprites_core PRIVATE src/inference_stub.cpp)
@@ -329,6 +344,22 @@ add_executable(gspl_sprites_lod_quality_tests tests/lod_quality_tests.cpp)
 target_link_libraries(gspl_sprites_lod_quality_tests PRIVATE gspl_sprites_core)
 add_test(NAME gspl_sprites_lod_quality_tests COMMAND gspl_sprites_lod_quality_tests)
 
+add_executable(gspl_sprites_ls_tests tests/ls/ls_tests.cpp)
+target_link_libraries(gspl_sprites_ls_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_ls_tests COMMAND gspl_sprites_ls_tests)
+
+add_executable(gspl_sprites_ls_full_tests tests/ls/ls_full_tests.cpp)
+target_link_libraries(gspl_sprites_ls_full_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_ls_full_tests COMMAND gspl_sprites_ls_full_tests)
+
+add_executable(gspl_sprites_environment_tests tests/studio/environment_tests.cpp)
+target_link_libraries(gspl_sprites_environment_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_environment_tests COMMAND gspl_sprites_environment_tests)
+
+add_executable(gspl_sprites_studio_core_tests tests/studio/studio_core_tests.cpp)
+target_link_libraries(gspl_sprites_studio_core_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_studio_core_tests COMMAND gspl_sprites_studio_core_tests)
+
 add_executable(gspl_sprites_runtime25d_tests tests/runtime25d_tests.cpp)
 target_link_libraries(gspl_sprites_runtime25d_tests PRIVATE gspl_sprites_core)
 add_test(NAME gspl_sprites_runtime25d_tests COMMAND gspl_sprites_runtime25d_tests)
@@ -434,6 +465,8 @@ add_test(NAME gspl_sprites_cli_comprehensive_tests COMMAND gspl_sprites_cli_comp
 add_executable(gspl_sprites_header_tests tests/header_self_containment_tests.cpp)
 target_link_libraries(gspl_sprites_header_tests PRIVATE gspl_sprites_core)
 add_test(NAME gspl_sprites_header_tests COMMAND gspl_sprites_header_tests)
+
+add_subdirectory(src/studio)
 
 if(BUILD_PREVIEW)
   find_package(SDL2 QUIET)

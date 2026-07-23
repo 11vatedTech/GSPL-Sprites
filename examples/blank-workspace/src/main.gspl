@@ -1,0 +1,6 @@
+module blank_project
+
+entity BlankSprite {
+    gene core.identity
+    gene core.visual.basic
+}

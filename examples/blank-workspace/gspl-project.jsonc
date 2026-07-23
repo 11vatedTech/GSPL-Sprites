@@ -1,0 +1,8 @@
+{
+    "name": "blank-project",
+    "version": "0.1.0",
+    "description": "Blank GSPL project template",
+    "authors": [],
+    "gspl_version": "1.0",
+    "dependencies": []
+}

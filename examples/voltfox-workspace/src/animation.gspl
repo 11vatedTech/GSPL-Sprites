@@ -1,0 +1,9 @@
+module voltfox.animation
+
+gene agile {
+    description: "Agile movement animations"
+    walk_cycle: "bouncy"
+    run_cycle: "sprint"
+    idle_animation: "alert"
+    special: "pounce"
+}

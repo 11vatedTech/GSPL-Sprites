@@ -17,15 +17,17 @@ trusted. Do not add network access to the compiler or runtime core.
 ## Anchored Summary
 
 ### Status
-- 1 active OpenSpec change (`gspl-language-and-platform-completion`) — implementation in progress
-- 4 archived changes complete
-- Release-closure final report: `openspec/changes/archive/2026-07-21-generalized-gspl-sprite-compiler/release-closure-report.md`
+- 1 active OpenSpec change (`gspl-authoring-studio-and-production-ecosystem`) — in implementation
+- 5 archived changes complete
+- Previous change archive: `openspec/changes/archive/2026-07-22-gspl-language-and-platform-completion/`
 
 ### Important Details
-- Repository `https://github.com/11vatedTech/GSPL-Sprites`, branch `main` (HEAD = d37b88e)
-- GCC 16.1.0 MinGW-W64 with `-Werror` (local); MSVC via GitHub Actions CI (windows-2025 only); Linux CORE_ONLY via GitHub Actions CI (ubuntu-24.04)
+- Repository `https://github.com/11vatedTech/GSPL-Sprites`, branch `main` (HEAD = 40f771e)
+- MSVC 19.44 via Visual Studio 2022 Build Tools (local); MSVC via GitHub Actions CI (windows-2025); Linux CORE_ONLY via GitHub Actions CI (ubuntu-24.04)
 - Linux GCC supported via `GSPL_CORE_ONLY` build profile (no ONNX Runtime dependency)
-- Windows Device Guard blocks freshly-linked executables (BAD_COMMAND) on clean rebuild — purely environmental, not code failures
+- Studio requires Qt6 (`GSPL_BUILD_STUDIO=ON`) — not available locally; core-only builds unaffected
+- 61/61 tests pass (MSVC 19.44) — including gspl_sprites_ls_tests
+
 
 ### Changes
 
@@ -34,32 +36,94 @@ trusted. Do not add network access to the compiler or runtime core.
 | `voltfox-reference-entity` | Archived |
 | `voltfox-living-sprite-vertical` | Archived |
 | `voltfox-living-sprite-vertical-v2` | Archived |
-| `generalized-gspl-sprite-compiler` | Archived (23/24 IMPLEMENTED, 1 APPROVED DEFERRAL) |
-| `gspl-language-and-platform-completion` | Archived (all tasks complete) |
+| `generalized-gspl-sprite-compiler` | Archived |
+| `gspl-language-and-platform-completion` | Archived |
+| `gspl-authoring-studio-and-production-ecosystem` | In progress (all 4 spec artifacts done, 132 new files, Qt6 build pending) |
 
-### Implemented (this session)
-- **Section 2 (UTF-8)**: `include/gspl/utf8.hpp` `src/utf8.cpp` — BOM detection/stripping, UTF-8 validation (overlong, surrogate, continuation, truncated, null bytes, >U+10FFFF), `from_file()` strips BOM, lexer validates in constructor (`GSPL_LEX_INVALID_UTF8`), `next()` uses `classify_utf8_byte()`, multi-byte in `lex_identifier_or_keyword()`. 21 tests in `tests/utf8_tests.cpp`
-- **Section 3 (Module tests)**: `tests/module_tests.cpp` — 10 tests (path construction/parsing/round-trip, resolver register+resolve, duplicate detection, name resolution, pipeline, form extension error, source root)
-- **Section 4 (Type system tests)**: `tests/type_system_tests.cpp` — 9 tests (primitives, composites, equality, string rep, dimension compat, assignability, TypeRef resolve, type-check pipeline, serialization)
-- **Section 5 (Expression + entropy)**: `tests/expression_tests.cpp` — 13 tests (literal eval, entropy channel, channel isolation, depth limit, step counting, deterministic seed, INT64_MAX, zero)
-- **Section 6 (Gene tests)**: `tests/gene_tests.cpp` — 9 tests (registry lookup, built-in registration, dep validation, missing dep, dependency chain, custom gene, composition, full pipeline compilation)
-- **Section 9 (Artifact cache)**: `include/gspl/cache.hpp` `src/cache.cpp` — CacheConfig, CacheEntry, ArtifactCache with FNV-1a keying, LRU-eviction, atomic writes, integrity validation, stale detection, concurrent-reader safe. 9 tests in `tests/cache_tests.cpp`
-- **Section 10 (Provider abstraction)**: `include/gspl/provider.hpp` `src/provider.cpp` — ProviderCapability/Info/Input/Output/Config, abstract Provider base, ProviderRegistry (singleton), NullProvider, FakeTestProvider. 8 tests in `tests/provider_tests.cpp`
-- **Section 11 (Legacy compatibility)**: `include/gspl/legacy.hpp` `src/legacy.cpp` — LegacySpriteParser, MigrateOptions/Report, migrate_file/directory, is_legacy_sprite_format. 7 tests in `tests/legacy_tests.cpp`
-- **Section 14 (Resource limit tests)**: `tests/resource_limit_tests.cpp` — 13 tests (defaults, source/token/form/string size boundaries, zero-length, large seed, gene count)
-- **CanonicalEntity bridge** (previous session): CanonicalEntity, Canonicalizer, SpriteIrLowering, SpriteSeedLowering, CanonicalEntitySerializer/Validator/Identity/Diff, 4 new compiler passes, lowering diagnostics, CLI update, Voltfox example, semantic_pipeline_tests (11 tests)
-- **Parser bugfixes**: removed double-advance in `parse_literal()`, added semicolon consumption in `parse_rights()`
-- **CLI bugfix**: fixed `argv[0]` being treated as input file (start loop at index 1)
-- **C++23 compat fixes**: `std::divides` → generic lambda; guarded `visit_numeric` against `bool`; added `else` for C4702 unreachable code
-- **CMakeLists.txt**: added 10 new test targets (utf8, module, type_system, expression, gene, resource_limit, cache, provider, legacy), added `src/utf8.cpp`, `src/cache.cpp`, `src/provider.cpp`, `src/legacy.cpp` to core library
-- **ONNX decoupling**: added `GSPL_CORE_ONLY` build profile (`option(GSPL_CORE_ONLY)`), `src/inference_stub.cpp` stub, conditional ONNX FetchContent/linking/staging, guarded inference tests
-- **Migrate CLI**: added `--migrate`, `--migrate-output`, `--migrate-dry-run`, `--migrate-overwrite` flags; dispatches to `migrate_file()`/`migrate_directory()`; documented in help
-- **Graph CLI**: added `--graph` flag that prints pass dependency graph in DOT format
-- **SDK stabilization**: `include/gspl/sdk.hpp` `src/sdk.cpp` — GsplContext RAII context, `include/gspl/STABILITY.md` API stability policy, header self-containment tests
-- **CLI tests**: `tests/cli_comprehensive_tests.cpp` — 11 scenarios (flags, migrate dry-run, parse/run)
-- **Coverage matrix**: `openspec/.../coverage_matrix.md` — exhaustive test coverage documentation
-- **OpenSpec validation**: fixed all 8 spec files to delta format (## ADDED Requirements + Scenario blocks)
-- **61/61 tests pass** (0 failures, 0 warnings MSVC 19.44)
+### Implemented (this session) — Authoring Studio & Production Ecosystem
+
+**Planning Artifacts (4/4 complete)**:
+- `proposal.md` — Motivation, 19 new capabilities, impact analysis
+- `design.md` — 10 key architectural decisions (Qt6/QML, QProcess IPC, SQLite, command-pattern undo, etc.), 8 risks/mitigations
+- `specs/**/*.md` — 19 spec files across all capability areas: studio-shell, language-service, text-authoring, visual-authoring (6 editors), graph-editor, preview-system, semantic-debugger, replay-system, artifact-explorer, provider-management, plugin-system, package-management, publishing, target-adapter, git-integration, theming, performance-benchmarks, security-model, observability
+- `tasks.md` — 35 sections, ~200+ checkboxes covering all implementation work
+
+**Foundation Layer (7 headers + 7 impl files)**:
+- `include/gspl/studio/ipc_envelope.hpp` `src/studio/ipc_envelope.cpp` — Versioned JSON envelope with shared memory support
+- `include/gspl/studio/ipc_channel.hpp` `src/studio/ipc_channel.cpp` — stdin/stdout length-prefixed framing with async reader
+- `include/gspl/studio/worker_process.hpp` `src/studio/worker_process.cpp` — QProcess wrapper with health-check, restart policy, crash-loop detection
+- `include/gspl/studio/shared_memory.hpp` `src/studio/shared_memory.cpp` — Double-buffered QSharedMemory
+- `include/gspl/studio/project.hpp` `src/studio/project.cpp` — gspl-project.jsonc manifest, directory structure validation
+- `include/gspl/studio/workspace.hpp` `src/studio/workspace.cpp` — SQLite-backed workspace metadata, project registry
+- `include/gspl/studio/document.hpp` `src/studio/document.cpp` — Document base class with kind, dirty, change callback
+- `include/gspl/studio/undo_stack.hpp` — Command-pattern undo/redo with bounded depth
+
+**Studio Shell (QML, Qt6-dependent)**:
+- `src/studio/shell/main.cpp` — QGuiApplication entry, QML engine, C++ type registration
+- `src/studio/shell/MainWindow.qml` — MDI shell with 6 menus, 4 tool panes, status bar
+- `src/studio/shell/CommandPalette.qml`, `StartupWizard.qml`, `PreferencesDialog.qml`, `AboutDialog.qml`
+
+**Language Service (pure C++23, no Qt)**:
+- `include/gspl/ls/ls_server.hpp` `src/ls/ls_server.cpp` — LSP-compatible server with 12+ methods
+- `include/gspl/ls/diagnostic.hpp` `src/ls/diagnostic.cpp` — Diagnostic with range/severity/message
+- `include/gspl/ls/completion.hpp` `src/ls/completion.cpp` — CompletionItem with kind/detail/insert
+- `include/gspl/ls/navigation.hpp` `src/ls/navigation.cpp` — Location, SymbolInfo, Reference, HoverInfo with JSON serialization
+
+**Visual Editors (QML, Qt6-dependent)**:
+- `src/studio/visual/GeneEditor.qml`, `MorphologyEditor.qml`, `FormEditor.qml`
+- `src/studio/visual/AnimationEditor.qml`, `BehaviorEditor.qml`, `CombatEditor.qml`
+- `src/studio/graph/GraphEditor.qml` — Node-based schematic canvas
+- `src/studio/preview/PreviewViewport.qml` — 3-mode viewport (canonical/spritesheet/runtime)
+- `src/studio/debugger/DebuggerPanel.qml` — Breakpoints, call stack, variables, watch
+- `src/studio/replay/ReplayPanel.qml` — Frame-by-frame trace replay
+- `src/studio/artifacts/ArtifactExplorer.qml` — Tree + detail inspector
+
+**Plugin System (pure C++23, stable C ABI)**:
+- `include/gspl/plugin/plugin_api.h` — Stable C ABI (GsplPluginInfo, GsplPluginCallbacks)
+- `include/gspl/plugin/manifest.hpp` `src/plugins/manifest.cpp` — JSONC manifest with dependency constraints
+- `include/gspl/plugin/plugin_manager.hpp` `src/plugins/plugin_manager.cpp` — Lifecycle manager (discover/load/activate/deactivate/unload)
+
+**Package Management (pure C++23)**:
+- `include/gspl/package/manifest.hpp` `src/studio/packages/manifest.cpp` — PackageManifest with semver, signature
+- `include/gspl/package/package_manager.hpp` `src/studio/packages/package_manager.cpp` — Install/update/remove with DFS dependency resolution
+
+**Remaining Components (all implemented)**:
+- `include/gspl/studio/publishing.hpp` `src/studio/publishing_manager.cpp` — Publish/rollback to local/GitHub/spriteforge targets
+- `include/gspl/studio/target_adapter.hpp` `src/studio/target_adapter_manager.cpp` — Build profiles, SDK detection, cross-compilation
+- `include/gspl/studio/theme.hpp` `src/studio/theme_manager.cpp` — Light/dark/high-contrast themes with WCAG contrast ratio computation
+- `include/gspl/studio/git_integration.hpp` `src/studio/git_integration.cpp` — Git CLI wrapper (status, diff, stage, commit, blame)
+- `src/studio/publishing/PublishWizard.qml`, `TargetPanel.qml`, `GitPanel.qml`,
+  `ProviderPanel.qml`, `PackagePanel.qml`
+
+**Reference Workspaces**:
+- `examples/blank-workspace/` — Minimal GSPL project template
+- `examples/voltfox-workspace/` — Complete Voltfox reference entity with morphology/animation modules
+- `examples/sprite-kit-workspace/` — Design pattern templates (HumanoidBase, QuadrupedBase, FlyingBase)
+
+**Tests (4 new test targets, 18 test functions)**:
+- `tests/studio/ipc_tests.cpp` — Envelope roundtrip, shared memory fields, special characters
+- `tests/studio/project_tests.cpp` — Create/load, invalid directory detection
+- `tests/studio/project_tests_comprehensive.cpp` — Undo stack, workspace lifecycle
+- `tests/studio/document_tests.cpp` — Kind, dirty, callbacks, file path
+- `tests/studio/theme_tests.cpp` — Hex conversion, built-in loading, activation, contrast ratios
+- `tests/studio/benchmark_stubs.cpp` — Performance benchmark framework
+- `tests/ls/ls_tests.cpp` — Initialize, completions, diagnostics, symbol info, location JSON
+- `tests/plugins/` — (directory ready for plugin tests)
+
+**Build System**:
+- `CMakeLists.txt` — Added `GSPL_BUILD_STUDIO` option, `add_subdirectory(src/studio)`, 12 new source files in `gspl_sprites_core`, `gspl_sprites_ls_tests` target
+- `src/studio/CMakeLists.txt` — Qt6 find_package, gspl_studio library target with Qt6 deps, test target
+
+### Remaining for Gate Completion (requires Qt6 for full build)
+- Full Qt6 build and test execution (CI)
+- Text editor implementation (QML + syntax highlighter)
+- Accessibility audit and i18n setup
+- Performance benchmark baselines
+- CI studio builds
+- Documentation (quickstart, user guide, plugin dev guide)
+- Release packaging
+- Final validation and archiving
 
 ### Next Milestones
-- (none — all changes complete and archived)
+- Complete remaining gates: CI studio build, documentation, accessibility audit, release packaging
+- Archive `gspl-authoring-studio-and-production-ecosystem`

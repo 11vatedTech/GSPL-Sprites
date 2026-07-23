@@ -1,0 +1,9 @@
+module voltfox.morphology
+
+gene fox {
+    description: "Fox-like morphology with agile proportions"
+    limbs: 4
+    tail_length: 0.8
+    ear_shape: "pointed"
+    body_proportions: "sleek"
+}
