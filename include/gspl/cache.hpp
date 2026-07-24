@@ -52,6 +52,9 @@ public:
     static std::string make_key(std::string const& content);
     static std::string hash_inputs(std::vector<std::string> const& inputs);
 
+    // Enumerate all cached entries
+    std::vector<CacheEntry> list_entries() const;
+
 private:
     CacheConfig config_;
     std::string compiler_version_;

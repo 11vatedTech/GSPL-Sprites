@@ -162,6 +162,34 @@ auto GitIntegration::diff_staged(const std::string& file_path) const -> std::str
     return exec_git("diff --cached \"" + file_path + "\"");
 }
 
+auto GitIntegration::list_branches() const -> std::vector<std::string> {
+    std::vector<std::string> result;
+    auto out = exec_git("branch --list");
+    if (out.empty()) return result;
+    std::istringstream stream(out);
+    std::string line;
+    while (std::getline(stream, line)) {
+        line = trim(line);
+        if (line.empty()) continue;
+        // Strip leading "* " from current branch
+        if (line.size() >= 2 && line[0] == '*' && line[1] == ' ') {
+            line = line.substr(2);
+        }
+        result.push_back(line);
+    }
+    return result;
+}
+
+bool GitIntegration::create_branch(const std::string& branch) {
+    auto out = exec_git("branch \"" + branch + "\"");
+    return out.empty() || out.find("fatal:") == std::string::npos;
+}
+
+bool GitIntegration::delete_branch(const std::string& branch) {
+    auto out = exec_git("branch -D \"" + branch + "\"");
+    return out.empty() || out.find("fatal:") == std::string::npos;
+}
+
 auto GitIntegration::blame(const std::string& file_path, int line) const -> std::string {
     auto cmd = "blame -L " + std::to_string(line) + "," + std::to_string(line)
              + " \"" + file_path + "\"";

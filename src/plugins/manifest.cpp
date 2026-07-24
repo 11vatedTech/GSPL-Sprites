@@ -37,7 +37,7 @@ std::string strip_jsonc_comments(std::string_view src) {
 }
 
 class SimpleJsonParser {
-    std::string_view src_;
+    std::string src_;
     size_t pos_{};
 
     void skip_ws() {

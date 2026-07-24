@@ -9,15 +9,19 @@ jobs:
     strategy:
       matrix:
         os: [windows-2025]
+        config: [Debug, Release]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.config }}
       - name: Build
         run: cmake --build build
       - name: Test
         run: ctest --test-dir build --output-on-failure
+      - name: Benchmark
+        if: matrix.config == 'Release'
+        run: ctest --test-dir build -R gspl_sprites_benchmarks --output-on-failure
   studio:
     name: Studio (Windows MSVC + Qt6)
     runs-on: windows-2025

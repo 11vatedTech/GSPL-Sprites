@@ -228,4 +228,13 @@ DiagnosticResult ArtifactCache::validate_integrity() {
     return result;
 }
 
+std::vector<CacheEntry> ArtifactCache::list_entries() const {
+    std::vector<CacheEntry> result;
+    result.reserve(entries_.size());
+    for (auto const& [key, entry] : entries_) {
+        result.push_back(entry);
+    }
+    return result;
+}
+
 } // namespace gspl

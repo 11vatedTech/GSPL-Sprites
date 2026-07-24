@@ -170,6 +170,30 @@ add_library(gspl_sprites_core
   src/studio/ipc_envelope.cpp
   src/studio/ipc_channel.cpp
   src/plugins/plugin_sandbox.cpp
+  src/studio/authority_model.cpp
+  src/studio/telemetry_bus.cpp
+  src/studio/diagnostics_export.cpp
+  src/studio/crash_reporter.cpp
+  src/studio/metrics.cpp
+  src/studio/packages/remote_registry.cpp
+  src/studio/packages/package_creator.cpp
+  src/studio/dark_mode.cpp
+  src/studio/text/bracket_matcher.cpp
+  src/studio/text/snippet_engine.cpp
+  src/studio/text/search_engine.cpp
+  src/studio/text/squiggle_generator.cpp
+  src/studio/text/code_folding.cpp
+  src/studio/text/quick_fix.cpp
+   src/studio/artifacts/artifact_explorer_model.cpp
+   src/studio/git/diff_parser.cpp
+   src/studio/visual/gene_editor_model.cpp
+   src/studio/visual/morphology_editor_model.cpp
+   src/studio/visual/form_editor_model.cpp
+   src/studio/visual/animation_editor_model.cpp
+   src/studio/visual/behavior_editor_model.cpp
+   src/studio/visual/combat_editor_model.cpp
+   src/studio/visual/graph_editor_model.cpp
+   src/studio/tree/project_tree_model.cpp
 )
 if(GSPL_CORE_ONLY)
   target_sources(gspl_sprites_core PRIVATE src/inference_stub.cpp)
@@ -498,6 +522,71 @@ add_executable(gspl_sprites_plugin_tests tests/plugins/plugin_tests.cpp)
 target_link_libraries(gspl_sprites_plugin_tests PRIVATE gspl_sprites_core)
 add_test(NAME gspl_sprites_plugin_tests COMMAND gspl_sprites_plugin_tests)
 
+# Git integration tests
+add_executable(gspl_sprites_git_tests tests/studio/git_tests.cpp)
+target_link_libraries(gspl_sprites_git_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_git_tests COMMAND gspl_sprites_git_tests)
+
+# Security tests
+add_executable(gspl_sprites_security_tests tests/studio/security_tests.cpp)
+target_link_libraries(gspl_sprites_security_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_security_tests COMMAND gspl_sprites_security_tests)
+
+# Observability tests
+add_executable(gspl_sprites_observability_tests tests/studio/observability_tests.cpp)
+target_link_libraries(gspl_sprites_observability_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_observability_tests COMMAND gspl_sprites_observability_tests)
+
+# Publishing tests
+add_executable(gspl_sprites_publishing_tests tests/studio/publishing_tests.cpp)
+target_link_libraries(gspl_sprites_publishing_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_publishing_tests COMMAND gspl_sprites_publishing_tests)
+
+# Package management tests
+add_executable(gspl_sprites_package_mgmt_tests tests/studio/package_mgmt_tests.cpp)
+target_link_libraries(gspl_sprites_package_mgmt_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_package_mgmt_tests COMMAND gspl_sprites_package_mgmt_tests)
+
+# Performance benchmarks
+add_executable(gspl_sprites_benchmarks tests/studio/benchmark_stubs.cpp)
+target_link_libraries(gspl_sprites_benchmarks PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_benchmarks COMMAND gspl_sprites_benchmarks)
+
+# Workspace validation tests
+add_executable(gspl_sprites_workspace_validation_tests tests/studio/workspace_validation_tests.cpp)
+target_link_libraries(gspl_sprites_workspace_validation_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_workspace_validation_tests COMMAND gspl_sprites_workspace_validation_tests)
+
+# Text editor tests
+add_executable(gspl_sprites_text_editor_tests tests/studio/text_editor_tests.cpp)
+target_link_libraries(gspl_sprites_text_editor_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_text_editor_tests COMMAND gspl_sprites_text_editor_tests)
+
+# Artifact explorer tests
+add_executable(gspl_sprites_artifact_explorer_tests tests/studio/artifact_explorer_tests.cpp)
+target_link_libraries(gspl_sprites_artifact_explorer_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_artifact_explorer_tests COMMAND gspl_sprites_artifact_explorer_tests)
+
+# Visual editor model tests
+add_executable(gspl_sprites_visual_editor_tests tests/studio/visual_editor_tests.cpp)
+target_link_libraries(gspl_sprites_visual_editor_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_visual_editor_tests COMMAND gspl_sprites_visual_editor_tests)
+
+# Project tree model tests
+add_executable(gspl_sprites_tree_model_tests tests/studio/tree_model_tests.cpp)
+target_link_libraries(gspl_sprites_tree_model_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_tree_model_tests COMMAND gspl_sprites_tree_model_tests)
+
+# Git extensions + cache tests
+add_executable(gspl_sprites_git_ext_tests tests/studio/git_ext_tests.cpp)
+target_link_libraries(gspl_sprites_git_ext_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_git_ext_tests COMMAND gspl_sprites_git_ext_tests)
+
+# Diff parser tests
+add_executable(gspl_sprites_diff_parser_tests tests/studio/diff_parser_tests.cpp)
+target_link_libraries(gspl_sprites_diff_parser_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_diff_parser_tests COMMAND gspl_sprites_diff_parser_tests)
+
 # Sample plugin (optional, built as a shared library when requested)
 option(GSPL_BUILD_SAMPLE_PLUGIN "Build the sample GSPL plugin" OFF)
 if(GSPL_BUILD_SAMPLE_PLUGIN)
@@ -526,4 +615,29 @@ if(BUILD_PREVIEW)
     target_link_libraries(gspl_sprites_preview PRIVATE gspl_sprites_core)
   endif()
   gspl_stage_onnxruntime(gspl_sprites_preview)
+endif()
+
+# Internationalization (i18n) — Qt translation support
+option(GSPL_BUILD_TRANSLATIONS "Build Qt .qm translation files from .ts sources" OFF)
+if(GSPL_BUILD_TRANSLATIONS)
+    find_package(Qt6 REQUIRED COMPONENTS LinguistTools)
+    file(GLOB TS_FILES translations/*.ts)
+    qt6_create_translation(QM_FILES ${TS_FILES})
+endif()
+
+# Install rules
+install(TARGETS gsplc gspl-sprites
+    RUNTIME DESTINATION bin
+    BUNDLE DESTINATION bin
+    LIBRARY DESTINATION lib)
+
+install(DIRECTORY include/gspl/
+    DESTINATION include/gspl
+    FILES_MATCHING PATTERN "*.hpp" PATTERN "*.h"
+    PATTERN ".gitkeep" EXCLUDE)
+
+if(GSPL_BUILD_STUDIO)
+    install(TARGETS gspl_sprites_studio
+        RUNTIME DESTINATION bin
+        BUNDLE DESTINATION bin)
 endif()

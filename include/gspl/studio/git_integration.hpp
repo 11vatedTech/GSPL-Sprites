@@ -40,6 +40,10 @@ public:
     bool commit(const std::string& message);
     bool checkout_branch(const std::string& branch);
 
+    [[nodiscard]] std::vector<std::string> list_branches() const;
+    bool create_branch(const std::string& branch);
+    bool delete_branch(const std::string& branch);
+
     [[nodiscard]] std::string diff(const std::string& file_path = "") const;
     [[nodiscard]] std::string diff_staged(const std::string& file_path = "") const;
     [[nodiscard]] std::string blame(const std::string& file_path, int line) const;
