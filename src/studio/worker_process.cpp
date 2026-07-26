@@ -171,17 +171,11 @@ void WorkerProcess::start() {
     auto* proc = &impl_->process;
 
 #ifdef _WIN32
-    proc->setChildProcessModifier([this](QProcess::CreateProcessArguments* args) {
-        args->dwFlags |= STARTF_USESTDHANDLES;
-        args->hStdInput = impl_->child_pipes.stdin_rd;
-        args->hStdOutput = impl_->child_pipes.stdout_wr;
-        args->hStdError = GetStdHandle(STD_ERROR_HANDLE);
-    });
-#else
-    proc->setChildProcessModifier([this](void* /* attr */) {
-        // On POSIX this would set up posix_spawn_file_actions_t
-        // to redirect stdin/stdout to our pipes. The default
-        // QProcess pipe forwarding is used for now.
+    proc->setCreateProcessArgumentsModifier([this](QProcess::CreateProcessArguments* args) {
+        args->startupInfo->dwFlags |= STARTF_USESTDHANDLES;
+        args->startupInfo->hStdInput = impl_->child_pipes.stdin_rd;
+        args->startupInfo->hStdOutput = impl_->child_pipes.stdout_wr;
+        args->startupInfo->hStdError = GetStdHandle(STD_ERROR_HANDLE);
     });
 #endif
 

@@ -1,0 +1,123 @@
+name: qt-studio-validation
+
+on:
+  push:
+    branches:
+      - validation/qt-studio-bootstrap
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  portable-studio:
+    name: Portable Qt Studio bootstrap
+    runs-on: windows-2025
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      QT_PREFIX: ${{ github.workspace }}\6.8.3\msvc2022_64
+      QT_QPA_PLATFORM: offscreen
+      QSG_RHI_BACKEND: software
+      QT_QUICK_BACKEND: software
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Enable MSVC developer environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Re-establish repository state
+        run: |
+          git status --short
+          git branch --show-current
+          git rev-parse HEAD
+          git rev-parse origin/main
+          git log --oneline --decorate -15
+          git diff --stat
+          git diff --check
+          git check-ignore -v 6.8.3 aqtinstall.log build-studio-clean build-studio-full
+          Get-Content .gitignore
+
+      - name: Install Qt 6.8.3 MSVC
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install aqtinstall
+          python -m aqt install-qt windows desktop 6.8.3 win64_msvc2022_64 -O . --archives qtbase qtdeclarative qttools qtshadertools qtimageformats
+
+      - name: Verify Qt and toolchain
+        run: |
+          $ErrorActionPreference = "Stop"
+          $env:QT_PREFIX = (Resolve-Path ".\6.8.3\msvc2022_64").Path
+          powershell -NoProfile -ExecutionPolicy Bypass -File ".\scripts\verify-studio-environment.ps1" -QtPrefix $env:QT_PREFIX
+          where.exe cl
+          cl
+          cmake --version
+          cmake --list-presets
+          cmake --list-presets=build
+          cmake --list-presets=test
+
+      - name: Configure portable Studio
+        run: |
+          $ErrorActionPreference = "Stop"
+          $env:QT_PREFIX = (Resolve-Path ".\6.8.3\msvc2022_64").Path
+          cmake -E remove_directory ".\build-studio-clean"
+          cmake --preset windows-msvc-studio-portable *> build-studio-configure.log
+          Get-Content build-studio-configure.log
+
+      - name: Build Release
+        run: |
+          cmake --build build-studio-clean --config Release --parallel *> build-studio-release.log
+          Get-Content build-studio-release.log
+
+      - name: Build Debug
+        run: |
+          cmake --build build-studio-clean --config Debug --parallel *> build-studio-debug.log
+          Get-Content build-studio-debug.log
+
+      - name: Test Release
+        run: |
+          ctest --test-dir build-studio-clean -C Release --output-on-failure *> build-studio-tests-release.log
+          Get-Content build-studio-tests-release.log
+
+      - name: Test Debug
+        run: |
+          ctest --test-dir build-studio-clean -C Debug --output-on-failure *> build-studio-tests-debug.log
+          Get-Content build-studio-tests-debug.log
+
+      - name: QML lint
+        run: |
+          cmake --build build-studio-clean --config Release --target all_qmllint *> build-studio-qmllint.log
+          Get-Content build-studio-qmllint.log
+
+      - name: Translation validation
+        run: |
+          cmake --build build-studio-clean --config Release --target gspl_studio_translations *> build-studio-translations.log
+          Get-Content build-studio-translations.log
+          Get-ChildItem -Path build-studio-clean -Filter *.qm -Recurse | Select-Object FullName,Length
+
+      - name: Runtime launch validation
+        run: |
+          $ErrorActionPreference = "Stop"
+          $studio = (Get-ChildItem -Path ".\build-studio-clean" -Filter "gspl_sprites_studio.exe" -Recurse | Select-Object -First 1).FullName
+          if (-not $studio) { throw "gspl_sprites_studio.exe not found" }
+          Write-Host "Studio: $studio"
+          $env:QT_QPA_PLATFORM = "offscreen"
+          & $studio --headless-test --safe-mode --disable-plugins --disable-providers --reset-layout *> studio-headless.log
+          $headlessExitCode = $LASTEXITCODE
+          Get-Content studio-headless.log
+          if ($headlessExitCode -ne 0) { throw "Headless launch failed with exit code $headlessExitCode" }
+
+      - name: Upload validation logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qt-studio-validation-logs
+          path: |
+            build-studio-*.log
+            studio-*.log
+            build-studio-clean/**/*.log
+          if-no-files-found: ignore

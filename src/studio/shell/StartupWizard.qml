@@ -8,7 +8,6 @@ Dialog {
     closePolicy: Dialog.NoAutoClose
 
     property var recentProjects: []
-    property bool visible: false
 
     signal newProjectRequested()
     signal openProjectRequested()
@@ -23,9 +22,7 @@ Dialog {
     }
 
     function loadRecentProjects() {
-        recentProjects = workspace
-            ? workspace.projects().map(function(p) { return p.manifest().name + " — " + p.root() })
-            : []
+        recentProjects = []
     }
 
     background: Rectangle {
@@ -39,14 +36,6 @@ Dialog {
 
         Item { Layout.preferredHeight: 8 }
 
-        Image {
-            id: logo
-            Layout.alignment: Qt.AlignHCenter
-            source: "qrc:/studio/icons/gspl-logo.svg"
-            sourceSize.width: 64
-            sourceSize.height: 64
-            visible: false
-        }
 
         Label {
             Layout.alignment: Qt.AlignHCenter
@@ -183,11 +172,9 @@ Dialog {
     }
 
     Component.onCompleted: {
-        if (workspace && workspace.is_open()) {
-            loadRecentProjects()
-            for (var i = 0; i < recentProjects.length; i++) {
-                recentModel.append({ text: recentProjects[i], path: "" })
-            }
+        loadRecentProjects()
+        for (var i = 0; i < recentProjects.length; i++) {
+            recentModel.append({ text: recentProjects[i], path: "" })
         }
     }
 }

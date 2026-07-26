@@ -2,10 +2,13 @@
 /build-*/
 /build_*/
 /.vs/
+/6.8.3/
+/aqtinstall.log
 /.cache/
 /.codex/
 /.cursor/
 /.windsurf/
+/.validation-local/
 *.user
 *.pdb
 *.obj
@@ -14,4 +17,3 @@
 /cross_representation_evidence_*.txt
 /implementation_plan.md
 /.debug_test.cpp
-

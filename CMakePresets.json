@@ -3,11 +3,43 @@
   "configurePresets": [
     {
       "name": "windows-msvc",
-      "generator": "Ninja",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
       "binaryDir": "${sourceDir}/build/windows-msvc",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
         "GSPL_EXPECT_COMPILER": "MSVC"
+      }
+    },
+    {
+      "name": "windows-msvc-studio-portable",
+      "displayName": "Windows MSVC Studio portable Qt profile",
+      "description": "Builds the Qt Studio shell and tests with GSPL_CORE_ONLY=ON. Set QT_PREFIX to a Qt MSVC prefix such as C:/Qt/6.8.3/msvc2022_64.",
+      "inherits": "windows-msvc",
+      "binaryDir": "${sourceDir}/build-studio-clean",
+      "cacheVariables": {
+        "GSPL_BUILD_STUDIO": "ON",
+        "GSPL_BUILD_TRANSLATIONS": "ON",
+        "GSPL_BUILD_TESTS": "ON",
+        "GSPL_CORE_ONLY": "ON"
+      },
+      "environment": {
+        "CMAKE_PREFIX_PATH": "$env{QT_PREFIX}"
+      }
+    },
+    {
+      "name": "windows-msvc-studio-full",
+      "displayName": "Windows MSVC Studio full Qt profile",
+      "description": "Builds the Qt Studio with provider/runtime integration enabled. Set QT_PREFIX to a Qt MSVC prefix such as C:/Qt/6.8.3/msvc2022_64.",
+      "inherits": "windows-msvc",
+      "binaryDir": "${sourceDir}/build-studio-full",
+      "cacheVariables": {
+        "GSPL_BUILD_STUDIO": "ON",
+        "GSPL_BUILD_TRANSLATIONS": "ON",
+        "GSPL_BUILD_TESTS": "ON",
+        "GSPL_CORE_ONLY": "OFF"
+      },
+      "environment": {
+        "CMAKE_PREFIX_PATH": "$env{QT_PREFIX}"
       }
     },
     {
@@ -21,11 +53,19 @@
     }
   ],
   "buildPresets": [
-    { "name": "windows-msvc-debug", "configurePreset": "windows-msvc" },
+    { "name": "windows-msvc-debug", "configurePreset": "windows-msvc", "configuration": "Debug" },
+    { "name": "windows-msvc-studio-portable-release", "configurePreset": "windows-msvc-studio-portable", "configuration": "Release" },
+    { "name": "windows-msvc-studio-portable-debug", "configurePreset": "windows-msvc-studio-portable", "configuration": "Debug" },
+    { "name": "windows-msvc-studio-full-release", "configurePreset": "windows-msvc-studio-full", "configuration": "Release" },
+    { "name": "windows-msvc-studio-full-debug", "configurePreset": "windows-msvc-studio-full", "configuration": "Debug" },
     { "name": "windows-mingw-gcc-debug", "configurePreset": "windows-mingw-gcc" }
   ],
   "testPresets": [
-    { "name": "windows-msvc-debug", "configurePreset": "windows-msvc", "output": { "outputOnFailure": true } },
+    { "name": "windows-msvc-debug", "configurePreset": "windows-msvc", "configuration": "Debug", "output": { "outputOnFailure": true } },
+    { "name": "windows-msvc-studio-portable-release", "configurePreset": "windows-msvc-studio-portable", "configuration": "Release", "output": { "outputOnFailure": true } },
+    { "name": "windows-msvc-studio-portable-debug", "configurePreset": "windows-msvc-studio-portable", "configuration": "Debug", "output": { "outputOnFailure": true } },
+    { "name": "windows-msvc-studio-full-release", "configurePreset": "windows-msvc-studio-full", "configuration": "Release", "output": { "outputOnFailure": true } },
+    { "name": "windows-msvc-studio-full-debug", "configurePreset": "windows-msvc-studio-full", "configuration": "Debug", "output": { "outputOnFailure": true } },
     { "name": "windows-mingw-gcc-debug", "configurePreset": "windows-mingw-gcc", "output": { "outputOnFailure": true } }
   ]
 }

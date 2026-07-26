@@ -2,10 +2,10 @@ import QtQuick 6.0
 import QtQuick.Controls 6.0
 import QtQuick.Layouts 6.0
 import QtQuick.Window 6.0
-import Qt.labs.platform 1.1
 
 ApplicationWindow {
     id: window
+    objectName: "GSPLStudioMainWindow"
     visible: true
     width: 1280
     height: 800
@@ -13,19 +13,6 @@ ApplicationWindow {
 
     property bool toolAreasVisible: true
     property int activeToolArea: 0
-
-    palette {
-        window: SystemPalette.window
-        windowText: SystemPalette.windowText
-        base: SystemPalette.base
-        text: SystemPalette.text
-        button: SystemPalette.button
-        buttonText: SystemPalette.buttonText
-        highlight: SystemPalette.highlight
-        highlightedText: SystemPalette.highlightedText
-    }
-
-    SystemPalette { id: SystemPalette }
 
     Action {
         id: actionNewProject
@@ -158,29 +145,29 @@ ApplicationWindow {
     menuBar: MenuBar {
         Menu {
             title: "File"
-            Action { action: actionNewProject }
-            Action { action: actionOpenProject }
-            Action { action: actionCloseProject }
+            MenuItem { action:actionNewProject }
+            MenuItem { action:actionOpenProject }
+            MenuItem { action:actionCloseProject }
             MenuSeparator { }
-            Action { action: actionSave }
-            Action { action: actionSaveAll }
+            MenuItem { action:actionSave }
+            MenuItem { action:actionSaveAll }
             MenuSeparator { }
-            Action { action: actionExit }
+            MenuItem { action:actionExit }
         }
 
         Menu {
             title: "Edit"
-            Action { action: actionUndo }
-            Action { action: actionRedo }
+            MenuItem { action:actionUndo }
+            MenuItem { action:actionRedo }
             MenuSeparator { }
-            Action { action: actionCut }
-            Action { action: actionCopy }
-            Action { action: actionPaste }
+            MenuItem { action:actionCut }
+            MenuItem { action:actionCopy }
+            MenuItem { action:actionPaste }
         }
 
         Menu {
             title: "View"
-            Action { action: actionToggleToolWindows }
+            MenuItem { action:actionToggleToolWindows }
             MenuSeparator { }
             Menu {
                 title: "Themes"
@@ -192,22 +179,22 @@ ApplicationWindow {
 
         Menu {
             title: "Project"
-            Action { action: actionBuild }
-            Action { action: actionRebuild }
-            Action { action: actionClean }
+            MenuItem { action:actionBuild }
+            MenuItem { action:actionRebuild }
+            MenuItem { action:actionClean }
         }
 
         Menu {
             title: "Tools"
-            Action { action: actionCommandPalette }
+            MenuItem { action:actionCommandPalette }
             MenuSeparator { }
-            Action { action: actionPreferences }
+            MenuItem { action:actionPreferences }
         }
 
         Menu {
             title: "Help"
-            Action { action: actionAbout }
-            Action { action: actionAboutQt }
+            MenuItem { action:actionAbout }
+            MenuItem { action:actionAboutQt }
         }
     }
 
@@ -379,7 +366,7 @@ ApplicationWindow {
         }
     }
 
-    statusBar: StatusBar {
+    footer: ToolBar {
         id: statusBar
         RowLayout {
             anchors.fill: parent
@@ -392,7 +379,7 @@ ApplicationWindow {
 
             Label {
                 id: statusLabel
-                text: "Ready"
+                text: applicationController ? applicationController.statusMessage : "Ready"
                 color: window.palette.windowText
             }
 
@@ -424,14 +411,40 @@ ApplicationWindow {
 
     CommandPalette {
         id: commandPalette
+        objectName: "commandPalette"
         anchors.centerIn: Overlay.overlay
         width: 500
         height: 400
         modal: true
+        commandModel: applicationController ? applicationController.commandModel : null
+        onCommandTriggered: function(commandId) {
+            if (applicationController) {
+                applicationController.dispatchCommand(commandId)
+            }
+            switch (commandId) {
+            case "newProject": actionNewProject.trigger(); break;
+            case "openProject": actionOpenProject.trigger(); break;
+            case "closeProject": actionCloseProject.trigger(); break;
+            case "save": actionSave.trigger(); break;
+            case "saveAll": actionSaveAll.trigger(); break;
+            case "undo": actionUndo.trigger(); break;
+            case "redo": actionRedo.trigger(); break;
+            case "cut": actionCut.trigger(); break;
+            case "copy": actionCopy.trigger(); break;
+            case "paste": actionPaste.trigger(); break;
+            case "build": actionBuild.trigger(); break;
+            case "rebuild": actionRebuild.trigger(); break;
+            case "clean": actionClean.trigger(); break;
+            case "preferences": actionPreferences.trigger(); break;
+            case "about": actionAbout.trigger(); break;
+            default: break;
+            }
+        }
     }
 
     PreferencesDialog {
         id: preferencesDialog
+        objectName: "preferencesDialog"
         anchors.centerIn: Overlay.overlay
         width: 600
         height: 450
@@ -440,23 +453,29 @@ ApplicationWindow {
 
     AboutDialog {
         id: aboutDialog
+        objectName: "aboutDialog"
         anchors.centerIn: Overlay.overlay
         width: 420
         height: 320
         modal: true
     }
 
-    Component.onCompleted: {
-        var isDark = colorScheme === Window.Dark
-        if (isDark) {
-            palette.window = "#2d2d30"
-            palette.windowText = "#f0f0f0"
-            palette.base = "#1e1e1e"
-            palette.text = "#f0f0f0"
-            palette.button = "#3c3c3c"
-            palette.buttonText = "#f0f0f0"
-            palette.highlight = "#264f78"
-            palette.highlightedText = "#ffffff"
-        }
+    StartupWizard {
+        id: startupWizard
+        objectName: "startupWizard"
+        visible: false
     }
+
+    ThemeSettings {
+        id: themeSettings
+        objectName: "themeSettings"
+        visible: false
+    }
+
+    PluginPanel {
+        id: pluginPanel
+        objectName: "pluginPanel"
+        visible: false
+    }
+
 }

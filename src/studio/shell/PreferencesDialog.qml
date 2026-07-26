@@ -8,8 +8,6 @@ Dialog {
     title: "Preferences"
     closePolicy: Popup.CloseOnEscape
 
-    property bool modal: false
-
     standardButtons: Dialog.Ok | Dialog.Cancel | Dialog.Apply
 
     onApplied: saveSettings()

@@ -9,8 +9,7 @@ Item {
     property string documentName: "untitled.gspl"
     property bool isDirty: false
     property var diagnostics: []
-    
-    signal contentChanged()
+
     signal cursorPositionChanged(int line, int column)
     
     function loadFile(path) {
@@ -37,7 +36,7 @@ Item {
             Layout.fillWidth: true
             Layout.preferredHeight: 32
             color: "#f0f0f0"
-            border.bottom: "1px solid #ccc"
+            border.color: "#cccccc"
             
             RowLayout {
                 anchors.fill: parent
@@ -112,7 +111,6 @@ Item {
                     onTextChanged: {
                         root.isDirty = true;
                         root.content = editor.text;
-                        root.contentChanged();
                     }
                 }
             }

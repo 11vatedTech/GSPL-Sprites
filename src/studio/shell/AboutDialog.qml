@@ -7,8 +7,6 @@ Dialog {
     title: "About GSPL Authoring Studio"
     closePolicy: Popup.CloseOnEscape
 
-    property bool modal: false
-
     standardButtons: Dialog.Ok
 
     background: Rectangle {

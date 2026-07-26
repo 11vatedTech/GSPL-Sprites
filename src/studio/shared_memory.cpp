@@ -20,7 +20,10 @@ struct SharedMemory::Impl {
                   QSharedMemory(QString::fromStdString(base_key + "_b"))} {}
 
     int flip() {
-        return active_buffer.exchange((active_buffer + 1) % 2);
+        const int current = active_buffer.load();
+        const int next = (current + 1) % 2;
+        active_buffer.store(next);
+        return next;
     }
 };
 
@@ -49,15 +52,9 @@ bool SharedMemory::write(std::string_view data) {
 
     auto size = std::min(data.size(), static_cast<std::size_t>(impl_->mem_size));
     if (!buf.create(static_cast<int>(impl_->mem_size))) {
-        if (buf.error() == QSharedMemory::AlreadyExists) {
-            buf.attach();
-        } else {
+        if (buf.error() != QSharedMemory::AlreadyExists || !buf.attach(QSharedMemory::ReadWrite)) {
             return false;
         }
-    }
-
-    if (!buf.attach(QSharedMemory::ReadWrite)) {
-        return false;
     }
 
     buf.lock();
