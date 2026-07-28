@@ -89,23 +89,23 @@ _All previously open defects (DEF-0006 through DEF-0008) have been resolved. See
 ### DEF-0012 — Full structural round-trip tests deferred
 
 - Severity: Medium
-- Status: Open
-- Evidence: Round-trip tests (test 16) verify top-level identity fields survive JSON serialization, but exhaustive field-by-field comparison for all structural collections (forms, transformations, bones, abilities, collision shapes, runtime) is not yet in place.
-- Required: Populated CanonicalEntity → to_json → from_json → exact field equality for every collection. Same for SpriteIr.
+- Status: ✅ RESOLVED (commit `9dca9a5`)
+- Resolution: Test 21 (semantic_pipeline_tests.cpp) provides maximally populated CanonicalEntity fixture with 2 forms, 1 transformation, 2 morphology parts, normal + storm abilities, 1 bone, 1 socket, 1 clip (with 3-key track + 2 events), 1 state, 1 transition, 1 collision shape, 1 collision window, 1 resource, and runtime with animation intents. Exact field equality asserted for every structural collection. Identity hash survives round-trip. SpriteIr round-trip tested with typed gene values (all 6 GeneValue alternatives: string, bool, int64, uint64, double, string_list). `from_json` now correctly consumes closing `}` after every element in all 16 array/object parsers plus morphology and runtime.
+- Verification: `gspl_sprites_semantic_pipeline_tests` test 21 (ALL PASSED), `gspl_sprites_gene_tests` (ALL PASSED), `gspl_sprites_compiler_tests` (ALL PASSED).
 
 ### DEF-0013 — GeneValue type-tagged JSON format not yet wired into IrSerializer
 
 - Severity: Low
-- Status: Open
-- Evidence: `IrSerializer` serializes gene values as strings via `gene_value_to_string()`. The type-tagged format `{"field":..., "type":"int64", "value":100}` from `gene_value_to_json()` is available but not yet adopted by the IR serializer/deserializer.
-- Required: Switch `IrSerializer` gene serialization to use type-tagged format; update deserializer to use `json_to_gene_value()`.
+- Status: ✅ RESOLVED (commit `9dca9a5`)
+- Resolution: `IrSerializer::serialize_entity_ir()` now emits type-tagged gene values as `{"t":<GeneValueTag>,"v":<typed_json>}` using `gene_value_variant_index()` + `gene_value_to_json()`. Deserialization parses this format with legacy bare-string fallback. Local `ir_json_escape` avoids conflict with `gspl::json_escape`. `static_assert` on `variant_size_v<GeneValue> == 6` ensures tag alignment.
+- Verification: `gspl_sprites_semantic_pipeline_tests` test 21 verifies all 6 GeneValue types survive SpriteIr round-trip (key presence checked for is_boss, level, experience, scale_factor, tags).
 
 ### DEF-0014 — Resource-limit boundary tests not yet implemented
 
 - Severity: Medium
-- Status: Open
-- Evidence: `BoundedJsonConfig` defines limits but no tests verify `limit-1`, `limit`, `limit+1` behavior for max_input_bytes, max_nesting_depth, max_string_length, etc.
-- Required: Add boundary tests per the directive.
+- Status: ✅ RESOLVED (commit `9dca9a5`)
+- Resolution: Test 22 provides boundary tests for all 5 limit dimensions: `max_input_bytes` (7 bytes OK, 12 bytes fail), `max_nesting_depth` (depth 2 OK, depth 4 fail), `max_string_length` (9 chars OK, 11 chars fail), `max_object_members` (2 OK, 4 fail), `max_array_length` (2 OK, 4 fail, at-limit 3 OK). `BoundedJsonReader::skip_value()` now enforces nesting depth on nested objects/arrays via `obj_depth`/`arr_depth` checks. Array element double-counting bug fixed (last element counted only once).
+- Verification: `gspl_sprites_semantic_pipeline_tests` test 22 (ALL PASSED).
 
 ## Historical defects reverified as currently mitigated or partially mitigated
 

@@ -1,16 +1,16 @@
 # Current Repository State
 
-Updated: 2026-07-28 (session: serialization overhaul — commit, push, verify)
+Updated: 2026-07-28 (session: serialization overhaul — DEF-0012/13/14 resolved, pushed to remote)
 
 ## Repository identity
 
 - Repository root: `C:/Users/11vat/OneDrive/Desktop/claude/11vatedTech_canon-workspace/Inventions/GSPL-Sprites`
 - Remote: `https://github.com/11vatedTech/GSPL-Sprites`
 - Active branch: `validation/qt-studio-bootstrap`
-- Current HEAD / remote HEAD: `2b4d1237428ac6833da92b1c252fbd9a521e421e`
-- Local == Remote: YES (in sync at `2b4d123`)
+- Current HEAD / remote HEAD: `9dca9a5e4bb5706c070ca4c2e185165f42a32cfb`
+- Local == Remote: YES (in sync at `9dca9a5`)
 - Commits ahead: 0 | Commits behind: 0
-- Working tree: 6 modified + 2 new files (serialization overhaul — uncommitted)
+- Working tree: clean (all changes committed)
 
 ## Build system
 
@@ -82,16 +82,16 @@ ctest --test-dir build --output-on-failure
 
 ## Serialization overhaul (2026-07-28)
 
-New infrastructure added (uncommitted):
+New infrastructure added (committed at `9dca9a5`):
 - `include/gspl/json.hpp` (87 lines): `BoundedJsonReader` with configurable limits, `GeneValueTag` enum, `gene_value_to_json`/`json_to_gene_value`/`gene_value_variant_index`
-- `src/json.cpp` (383 lines): Full implementation — JSON writer helpers, bounded reader, typed GeneValue round-trip, `static_assert` on variant alignment, NaN/infinity rejection
+- `src/json.cpp` (420 lines): Full implementation — JSON writer helpers, bounded reader with depth enforcement in `skip_value()`, typed GeneValue round-trip, `static_assert` on variant alignment, NaN/infinity rejection
 
-API changes (uncommitted):
+API changes (committed at `9dca9a5`):
 - `include/gspl/ir.hpp`: Added `SpriteIrDeserializeResult` struct, `deserialize()` returns Result, graph methods (`transitive_dependencies`, `reverse_dependencies`, `dependency_closure`)
 - `include/gspl/semantics.hpp`: Added `CanonicalEntityDeserializeResult` struct, `from_json()` returns Result (single-arg, fail-closed)
-- `src/ir.cpp`: Fail-closed deserialization (no fabricated defaults), representations array serialization, dependency graph traversal
-- `src/semantics.cpp`: `from_json()` parses ALL structural fields (forms, transformations, morphology, abilities, bones, sockets, clips, states, transitions, collisions, resources, runtime)
-- `tests/semantic_pipeline_tests.cpp`: Tests 16-20 updated to new fail-closed API
+- `src/ir.cpp`: Type-tagged gene values (`{"t":<tag>,"v":<json>}`), fail-closed deserialization, dependency graph traversal
+- `src/semantics.cpp`: `from_json()` parses ALL structural fields with closing `}` consumption after every element (18 fix points). `to_json()` outputs `initial_state` before arrays.
+- `tests/semantic_pipeline_tests.cpp`: Tests 16-22 (round-trip, fail-closed, IR, optimization, DEF-0012 maximally populated, DEF-0014 resource limits)
 
 ## Current audit observations
 
@@ -104,11 +104,9 @@ API changes (uncommitted):
 
 - **BUILD (Debug)**: `cmake --build build/windows-msvc --config Debug` — 0 errors, 0 warnings (`/W4 /WX /permissive-`)
 - **BUILD (core-only)**: `cmake --build build/windows-msvc-core --config Debug -DGSPL_CORE_ONLY=ON` — 0 errors
-- **TARGETED TESTS**: 3/3 pass — `gene_tests`, `semantic_pipeline_tests` (20 tests), `compiler_tests`
+- **TARGETED TESTS**: 3/3 pass — `gene_tests` (ALL PASSED), `semantic_pipeline_tests` (22 tests ALL PASSED), `compiler_tests` (ALL PASSED)
 - **FULL CTEST**: 3 pass, 79 "Not Run" (Studio/Qt/ONNX targets not built in this config — pre-existing)
-- **CI STATUS**: Pending — push required to trigger GitHub Actions
+- **CI STATUS**: Pending — GitHub Actions run for `9dca9a5`
 
-### Open defects
-- DEF-0012: Full structural round-trip tests (maximally populated fixtures)
-- DEF-0013: GeneValue type-tagged format not yet wired into IrSerializer
-- DEF-0014: Resource-limit boundary tests
+### Defects status
+- DEF-0001 through DEF-0014: ALL RESOLVED ✅ (see KNOWN_DEFECTS.md for evidence)
