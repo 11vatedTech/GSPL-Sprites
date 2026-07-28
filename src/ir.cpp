@@ -151,28 +151,97 @@ std::string IrSerializer::serialize(SpriteIr const& ir) {
         ss << ",\n  \"entity\": " << serialize_entity_ir(*ir.entity);
     }
 
-    // representations - serialize full array, not just count
+    // representations - serialize full node structure
     ss << ",\n  \"representations\": [";
     for (std::size_t i = 0; i < ir.representations.size(); ++i) {
         if (i > 0) ss << ",";
-        ss << "{\"kind\":" << static_cast<std::uint32_t>(ir.representations[i]->kind)
-           << ",\"identity\":\"" << ir_json_escape(ir.representations[i]->identity) << "\"}";
+        auto const& rep = ir.representations[i];
+        ss << "{\"kind\":" << static_cast<std::uint32_t>(rep->kind)
+           << ",\"identity\":\"" << ir_json_escape(rep->identity) << "\""
+           << ",\"schema_version\":" << rep->schema_version;
+        if (!rep->properties.empty()) {
+            ss << ",\"properties\":{";
+            bool fp = true;
+            for (auto const& [k, v] : rep->properties) {
+                if (!fp) ss << ",";
+                fp = false;
+                ss << "\"" << ir_json_escape(k) << "\":\"" << ir_json_escape(v) << "\"";
+            }
+            ss << "}";
+        }
+        if (!rep->dependency_ids.empty()) {
+            ss << ",\"dependency_ids\":[";
+            bool fd = true;
+            for (auto const& d : rep->dependency_ids) {
+                if (!fd) ss << ",";
+                fd = false;
+                ss << "\"" << ir_json_escape(d) << "\"";
+            }
+            ss << "]";
+        }
+        ss << "}";
     }
     ss << "]";
 
     ss << ",\n  \"runtime_plans\": [";
     for (std::size_t i = 0; i < ir.runtime_plans.size(); ++i) {
         if (i > 0) ss << ",";
-        ss << "{\"kind\":" << static_cast<std::uint32_t>(ir.runtime_plans[i]->kind)
-           << ",\"identity\":\"" << ir_json_escape(ir.runtime_plans[i]->identity) << "\"}";
+        auto const& plan = ir.runtime_plans[i];
+        ss << "{\"kind\":" << static_cast<std::uint32_t>(plan->kind)
+           << ",\"identity\":\"" << ir_json_escape(plan->identity) << "\""
+           << ",\"schema_version\":" << plan->schema_version;
+        if (!plan->properties.empty()) {
+            ss << ",\"properties\":{";
+            bool fp = true;
+            for (auto const& [k, v] : plan->properties) {
+                if (!fp) ss << ",";
+                fp = false;
+                ss << "\"" << ir_json_escape(k) << "\":\"" << ir_json_escape(v) << "\"";
+            }
+            ss << "}";
+        }
+        if (!plan->dependency_ids.empty()) {
+            ss << ",\"dependency_ids\":[";
+            bool fd = true;
+            for (auto const& d : plan->dependency_ids) {
+                if (!fd) ss << ",";
+                fd = false;
+                ss << "\"" << ir_json_escape(d) << "\"";
+            }
+            ss << "]";
+        }
+        ss << "}";
     }
     ss << "]";
 
     ss << ",\n  \"package_plans\": [";
     for (std::size_t i = 0; i < ir.package_plans.size(); ++i) {
         if (i > 0) ss << ",";
-        ss << "{\"kind\":" << static_cast<std::uint32_t>(ir.package_plans[i]->kind)
-           << ",\"identity\":\"" << ir_json_escape(ir.package_plans[i]->identity) << "\"}";
+        auto const& plan = ir.package_plans[i];
+        ss << "{\"kind\":" << static_cast<std::uint32_t>(plan->kind)
+           << ",\"identity\":\"" << ir_json_escape(plan->identity) << "\""
+           << ",\"schema_version\":" << plan->schema_version;
+        if (!plan->properties.empty()) {
+            ss << ",\"properties\":{";
+            bool fp = true;
+            for (auto const& [k, v] : plan->properties) {
+                if (!fp) ss << ",";
+                fp = false;
+                ss << "\"" << ir_json_escape(k) << "\":\"" << ir_json_escape(v) << "\"";
+            }
+            ss << "}";
+        }
+        if (!plan->dependency_ids.empty()) {
+            ss << ",\"dependency_ids\":[";
+            bool fd = true;
+            for (auto const& d : plan->dependency_ids) {
+                if (!fd) ss << ",";
+                fd = false;
+                ss << "\"" << ir_json_escape(d) << "\"";
+            }
+            ss << "]";
+        }
+        ss << "}";
     }
     ss << "]";
     ss << "\n}";

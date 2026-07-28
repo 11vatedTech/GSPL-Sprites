@@ -255,6 +255,26 @@ std::string canonical_identity_payload(CanonicalEntity const& entity) {
         append_key_value(out, "duration_ticks", window.duration_ticks);
         append_key_value(out, "active", window.active);
     }
+    out << "};form_morphology_overrides[" << entity.form_morphology_overrides.size() << "]{";
+    for (auto const& [form_name, parts] : entity.form_morphology_overrides) {
+        append_key_value(out, "form", form_name);
+        out << "parts{";
+        for (auto const& [part_name, part] : parts) {
+            append_key_value(out, "name", part_name);
+            append_key_value(out, "parent", part.parent);
+            append_key_value(out, "x", part.x);
+            append_key_value(out, "y", part.y);
+            append_key_value(out, "z", part.z);
+            append_key_value(out, "size_x", part.size_x);
+            append_key_value(out, "size_y", part.size_y);
+            append_key_value(out, "size_z", part.size_z);
+            append_key_value(out, "color", part.color);
+            append_key_value(out, "rotation_degrees", part.rotation_degrees);
+            append_key_value(out, "emissive", part.emissive);
+            append_key_value(out, "electrical_marking", part.electrical_marking);
+        }
+        out << "};";
+    }
     out << "};resources[" << entity.resources.size() << "]{";
     for (auto const& resource : entity.resources) {
         append_key_value(out, "id", resource.id);
@@ -353,6 +373,32 @@ std::string CanonicalEntitySerializer::to_json(CanonicalEntity const& entity) {
            << "}";
     }
     os << "},\n";
+    // form_morphology_overrides — only if non-empty
+    if (!entity.form_morphology_overrides.empty()) {
+        os << "  \"form_morphology_overrides\": {";
+    bool first_form = true;
+    for (auto const& [form_name, parts] : entity.form_morphology_overrides) {
+        if (!first_form) os << ", ";
+        first_form = false;
+        os << "\"" << canonical_escape(form_name) << "\": {";
+        bool first_part = true;
+        for (auto const& [part_name, part] : parts) {
+            if (!first_part) os << ", ";
+            first_part = false;
+            os << "\"" << canonical_escape(part_name) << "\":{"
+               << "\"parent\":\"" << canonical_escape(part.parent) << "\""
+               << ",\"x\":" << part.x << ",\"y\":" << part.y << ",\"z\":" << part.z
+               << ",\"size_x\":" << part.size_x << ",\"size_y\":" << part.size_y << ",\"size_z\":" << part.size_z
+               << ",\"color\":\"" << canonical_escape(part.color) << "\""
+               << ",\"rotation_degrees\":" << part.rotation_degrees
+               << ",\"emissive\":" << (part.emissive ? "true" : "false")
+               << ",\"electrical_marking\":" << (part.electrical_marking ? "true" : "false")
+               << "}";
+        }
+        os << "}";
+    }
+    os << "},\n";
+    }
     // abilities
     auto append_abilities_json = [&](std::string_view key, std::vector<CanonicalAbility> const& abilities) {
         os << "  \"" << key << "\": [";
@@ -812,6 +858,50 @@ CanonicalEntityDeserializeResult CanonicalEntitySerializer::from_json(
                 }
                 skip_ws(pos); if (pos < json.size() && json[pos] == '}') ++pos;
             }
+        } else if (key == "form_morphology_overrides") {
+            skip_ws(pos);
+            if (pos < json.size() && json[pos] == '{') { ++pos;
+                while (has_more(pos)) {
+                    auto form_name = read_str(pos);
+                    if (form_name.empty()) break;
+                    skip_ws(pos); if (pos >= json.size() || json[pos] != ':') break; ++pos;
+                    skip_ws(pos);
+                    if (pos >= json.size() || json[pos] != '{') break; ++pos;
+                    while (has_more(pos)) {
+                        auto part_name = read_str(pos);
+                        if (part_name.empty()) break;
+                        skip_ws(pos); if (pos >= json.size() || json[pos] != ':') break; ++pos;
+                        skip_ws(pos);
+                        if (pos >= json.size() || json[pos] != '{') break; ++pos;
+                        CanonicalPart p;
+                        p.name = part_name;
+                        while (has_more(pos)) {
+                            auto pk = read_str(pos);
+                            if (pk.empty()) break;
+                            skip_ws(pos); if (pos >= json.size() || json[pos] != ':') break; ++pos;
+                            if (pk == "parent") p.parent = read_str(pos);
+                            else if (pk == "x") p.x = read_d(pos);
+                            else if (pk == "y") p.y = read_d(pos);
+                            else if (pk == "z") p.z = read_d(pos);
+                            else if (pk == "size_x") p.size_x = read_d(pos, 1.0);
+                            else if (pk == "size_y") p.size_y = read_d(pos, 1.0);
+                            else if (pk == "size_z") p.size_z = read_d(pos, 1.0);
+                            else if (pk == "color") p.color = read_str(pos);
+                            else if (pk == "rotation_degrees") p.rotation_degrees = read_d(pos);
+                            else if (pk == "emissive") p.emissive = read_b(pos);
+                            else if (pk == "electrical_marking") p.electrical_marking = read_b(pos);
+                            else skip_val(pos);
+                            skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                        }
+                        ce.form_morphology_overrides[form_name][p.name] = std::move(p);
+                        skip_ws(pos); if (pos < json.size() && json[pos] == '}') ++pos;
+                        skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                    }
+                    skip_ws(pos); if (pos < json.size() && json[pos] == '}') ++pos;
+                    skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                }
+                skip_ws(pos); if (pos < json.size() && json[pos] == '}') ++pos;
+            }
         } else if (key == "abilities" || key == "storm_abilities") {
             skip_ws(pos);
             if (pos < json.size() && json[pos] == '[') { ++pos;
@@ -1239,6 +1329,19 @@ CanonicalEntityDeserializeResult CanonicalEntitySerializer::from_json(
             skip_val(pos);
         }
         skip_ws(pos); if (pos < json.size() && json[pos] == ',') ++pos; else break;
+    }
+
+    // Consume closing brace; fail on truncated/malformed input
+    skip_ws(pos);
+    if (pos < json.size() && json[pos] == '}') {
+        ++pos;
+    } else if (parsed_any) {
+        result.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
+                       pos >= json.size()
+                           ? "from_json: truncated input, expected '}'"
+                           : "from_json: unexpected data where '}' expected",
+                       {});
+        return result;
     }
 
     if (!parsed_any) {

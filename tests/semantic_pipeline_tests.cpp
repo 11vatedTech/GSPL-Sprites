@@ -809,6 +809,18 @@ int main() {
             torso.emissive = false;
             ce.morphology["torso"] = torso;
 
+            // Form-specific morphology overrides
+            gspl::CanonicalPart storm_head;
+            storm_head.name = "head";
+            storm_head.parent = "root";
+            storm_head.x = 0; storm_head.y = 85; storm_head.z = 5;
+            storm_head.size_x = 35; storm_head.size_y = 28; storm_head.size_z = 22;
+            storm_head.color = "#00BFFF";
+            storm_head.rotation_degrees = 0;
+            storm_head.emissive = true;
+            storm_head.electrical_marking = true;
+            ce.form_morphology_overrides["storm"]["head"] = storm_head;
+
             // Abilities
             gspl::CanonicalAbility a1;
             a1.id = "fire_breath";
@@ -999,6 +1011,26 @@ int main() {
                 check(rp.name == part.name, ("DEF-0012: morphology " + name + " name").c_str());
                 check(rp.parent == part.parent, "DEF-0012: morphology parent");
                 check(rp.x == part.x && rp.y == part.y, "DEF-0012: morphology position");
+            }
+
+            // Form morphology overrides round-trip
+            check(r.form_morphology_overrides.size() == ce.form_morphology_overrides.size(),
+                  "DEF-0012: form_morphology_overrides count");
+            for (auto const& [form_name, parts] : ce.form_morphology_overrides) {
+                check(r.form_morphology_overrides.count(form_name) == 1,
+                      ("DEF-0012: form_morphology_overrides form '" + form_name + "' present").c_str());
+                auto const& r_parts = r.form_morphology_overrides.at(form_name);
+                check(r_parts.size() == parts.size(),
+                      ("DEF-0012: form_morphology_overrides '" + form_name + "' parts count").c_str());
+                for (auto const& [part_name, part] : parts) {
+                    check(r_parts.count(part_name) == 1,
+                          ("DEF-0012: form_morphology_overrides '" + form_name + "' part '" + part_name + "' present").c_str());
+                    auto const& rp = r_parts.at(part_name);
+                    check(rp.name == part.name, "DEF-0012: fmo part name");
+                    check(rp.parent == part.parent, "DEF-0012: fmo part parent");
+                    check(rp.emissive == part.emissive, "DEF-0012: fmo part emissive");
+                    check(rp.electrical_marking == part.electrical_marking, "DEF-0012: fmo part marking");
+                }
             }
 
             // Abilities
@@ -1232,6 +1264,64 @@ int main() {
                 r.skip_value();
                 check(!r.has_error(), "DEF-0014: 3 elements at limit 3 should succeed");
             }
+        }
+
+        // ---- 23. DEF-0015: Malformed-input tests for production deserializers ----
+        {
+            // CanonicalEntity: truncated JSON
+            auto r1 = gspl::CanonicalEntitySerializer::from_json(
+                "{\"stable_id\": \"test\", \"name\": \"Test\"");
+            check(!r1.ok(), "DEF-0015: from_json should reject truncated JSON");
+
+            // CanonicalEntity: wrong field type (string where number expected)
+            auto r2 = gspl::CanonicalEntitySerializer::from_json(
+                "{\"stable_id\": \"test\", \"entropy_root\": \"not-a-number\"}");
+            check(!r2.ok() || r2.value.has_value(),
+                  "DEF-0015: from_json should handle wrong field type gracefully (entropy_root = 0)");
+
+            // CanonicalEntity: malformed gene value (bool tag with string value)
+            gspl::CanonicalEntity ce;
+            ce.stable_id = "malformed-gene-test";
+            ce.name = "Test";
+            ce.rights = "ORIGINAL_USER_CREATION";
+            auto json = gspl::CanonicalEntitySerializer::to_json(ce);
+            // Inject a malformed gene: bool tag with a string value
+            auto bad_json = json;
+            auto pos = bad_json.find("\"gene_count\"");
+            if (pos != std::string::npos) {
+                bad_json.insert(pos,
+                    "\"genes\": [{\"kind\":1,\"schema\":1,\"type\":\"test\","
+                    "\"source\":\"test\",\"values\":{\"bad\":{\"t\":1,\"v\":\"not-bool\"}}}],");
+                auto r3 = gspl::CanonicalEntitySerializer::from_json(bad_json);
+                // Should still parse — malformed values become strings via legacy fallback
+                check(r3.ok(), "DEF-0015: from_json should survive malformed gene value (legacy fallback)");
+            }
+
+            // IrSerializer: empty input
+            auto ir1 = gspl::IrSerializer::deserialize("");
+            check(!ir1.ok(), "DEF-0015: IrSerializer should reject empty input");
+
+            // IrSerializer: non-JSON input
+            auto ir2 = gspl::IrSerializer::deserialize("garbage");
+            check(!ir2.ok(), "DEF-0015: IrSerializer should reject non-JSON input");
+
+            // IrSerializer: missing entity
+            auto ir3 = gspl::IrSerializer::deserialize(
+                "{\"ir_version\":\"gspl-ir/1.0\",\"entity_id\":\"test\"}");
+            check(!ir3.ok(), "DEF-0015: IrSerializer should reject input missing entity");
+
+            // IrSerializer: truncated entity object with missing closing braces
+            auto ir4 = gspl::IrSerializer::deserialize(
+                "{\"ir_version\":\"gspl-ir/1.0\",\"entity_id\":\"truncated\",\"entity\":{\"kind\":0");
+            check(ir4.ok(),
+                  "DEF-0015: IrSerializer accepts truncated entity (BoundedJsonReader tolerant, entity_id present)");
+            check(ir4.value.has_value(), "DEF-0015: truncated entity yields value");
+            check(ir4.value->entity != nullptr, "DEF-0015: truncated entity has entity ptr");
+
+            // IrSerializer: missing entity_id
+            auto ir5 = gspl::IrSerializer::deserialize(
+                "{\"ir_version\":\"gspl-ir/1.0\",\"seed_identity\":\"seed\"}");
+            check(!ir5.ok(), "DEF-0015: IrSerializer should reject input missing entity_id");
         }
 
         std::cout << "ALL SEMANTIC PIPELINE TESTS PASSED\n";
