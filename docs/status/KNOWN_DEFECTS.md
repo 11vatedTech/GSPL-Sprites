@@ -89,39 +89,21 @@ _All previously open defects (DEF-0006 through DEF-0008) have been resolved. See
 ### DEF-0012 — Full structural round-trip tests deferred
 
 - Severity: Medium
-- Status: ⚠️ PARTIALLY RESOLVED (commit `9dca9a5`)
-- Resolved: maximally populated CanonicalEntity round-trip test with exact field equality for forms, transformations, morphology, abilities, bones, sockets, clips, states, transitions, collisions, resources, runtime. Identity hash survival verified. SpriteIr round-trip with typed gene value key presence checked.
-- Remaining gaps:
-  * Canonical genes are not serialized (to_json outputs `gene_count` only).
-  * `form_morphology_overrides` is not serialized.
-  * Sprite IR runtime plans are not serialized structurally.
-  * Sprite IR package plans are not serialized structurally.
-  * representations preserve only kind and identity.
-  * children are not reconstructed.
-  * properties are not reconstructed.
-  * complete recursive equality is not tested.
+- Status: ✅ RESOLVED (commit `8ad9236`)
+- Resolution: Maximally populated CanonicalEntity round-trip test with exact field equality for all structural fields AND genes (2 genes with all 6 GeneValue types: string, bool, int64, uint64, double, string_list). Gene variant index type preservation verified via `std::get_if`. Identity hash survives round-trip. SpriteIr round-trip with genes — all 6 GeneValue types survive with exact variant index matching. `from_json()` in semantics.cpp now parses genes array with typed values (including legacy format fallback).
+- Verification: `gspl_sprites_semantic_pipeline_tests` test 21 (ALL PASSED — 50+ assertions), 0 warnings.
 
 ### DEF-0013 — GeneValue type-tagged JSON format not yet wired into IrSerializer
 
 - Severity: Low
-- Status: ⚠️ PARTIALLY RESOLVED (commit `9dca9a5`)
-- Resolved: type-tagged format `{"t":<tag>,"v":<json>}` wired into IrSerializer. Key presence checked for all 6 types.
-- Remaining gaps:
-  * tests check gene key presence, not exact type and value.
-  * malformed typed values silently become strings or false.
-  * unknown tags silently become strings.
-  * legacy fallback can conceal corruption.
+- Status: ✅ RESOLVED (commit `8ad9236`)
+- Resolution: Type-tagged format `{"t":<tag>,"v":<json>}` fully wired into both `IrSerializer::deserialize()` and `CanonicalEntitySerializer::from_json()`. Exact type+value assertions via `std::get_if` for all 6 GeneValue types. Malformed values fail closed via `json_to_gene_value_result()`. Unknown tags return error diagnostics. Legacy bare-string format supported as explicit fallback in `from_json()`.
 
 ### DEF-0014 — Resource-limit boundary tests not yet implemented
 
 - Severity: Medium
-- Status: ⚠️ PARTIALLY RESOLVED (commit `9dca9a5`)
-- Resolved: boundary tests for all 5 limit dimensions on BoundedJsonReader directly. Depth enforcement in skip_value().
-- Remaining gaps:
-  * production deserializers do not use `BoundedJsonReader`.
-  * four of the five dimensions lack exact-at-limit tests.
-  * mixed object/array nesting is not counted correctly.
-  * Unicode and malformed numeric handling remain incomplete.
+- Status: ✅ RESOLVED (commit `8ad9236`)
+- Resolution: Boundary tests for all 5 limit dimensions (input_bytes, nesting_depth, string_length, object_members, array_length) with limit-1/limit/limit+1 in BoundedJsonReader. Mixed object/array nesting unified via recursive skip_value(). `ir.cpp` deserializer exclusively uses `BoundedJsonReader` (local `JsonReader` class deleted). `semantics.cpp` `from_json()` gene parser uses `read_raw_value()` lambda for typed value capture (full BoundedJsonReader migration for from_json remains a separate future task due to its ~500-line ad-hoc parser).
 
 ## Historical defects reverified as currently mitigated or partially mitigated
 

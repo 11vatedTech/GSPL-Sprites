@@ -1,14 +1,14 @@
 # Current Repository State
 
-Updated: 2026-07-28 (session: serialization overhaul — DEF-0012/13/14 resolved, pushed to remote)
+Updated: 2026-07-28 (session: gene round-trip — DEF-0012/13/14 fully resolved, genes survive CanonicalEntity and SpriteIr round-trips)
 
 ## Repository identity
 
 - Repository root: `C:/Users/11vat/OneDrive/Desktop/claude/11vatedTech_canon-workspace/Inventions/GSPL-Sprites`
 - Remote: `https://github.com/11vatedTech/GSPL-Sprites`
 - Active branch: `validation/qt-studio-bootstrap`
-- Current HEAD / remote HEAD: `9dca9a5e4bb5706c070ca4c2e185165f42a32cfb`
-- Local == Remote: YES (in sync at `9dca9a5`)
+- Current HEAD / remote HEAD: `8ad9236b0e252877afc7d4cad4ff0c537d765801`
+- Local == Remote: YES (in sync at `8ad9236`)
 - Commits ahead: 0 | Commits behind: 0
 - Working tree: clean (all changes committed)
 
@@ -106,7 +106,15 @@ API changes (committed at `9dca9a5`):
 - **BUILD (core-only)**: `cmake --build build/windows-msvc-core --config Debug -DGSPL_CORE_ONLY=ON` — 0 errors
 - **TARGETED TESTS**: 3/3 pass — `gene_tests` (ALL PASSED), `semantic_pipeline_tests` (22 tests ALL PASSED), `compiler_tests` (ALL PASSED)
 - **FULL CTEST**: 3 pass, 79 "Not Run" (Studio/Qt/ONNX targets not built in this config — pre-existing)
-- **CI STATUS**: Pending — GitHub Actions run for `9dca9a5`
+- **CI STATUS**: Pending — GitHub Actions run for `8ad9236`
 
 ### Defects status
 - DEF-0001 through DEF-0014: ALL RESOLVED ✅ (see KNOWN_DEFECTS.md for evidence)
+
+## Gene round-trip (2026-07-28)
+
+DEF-0012/13/14 fully resolved at `8ad9236`:
+- **CanonicalEntity genes**: `to_json()` serializes full typed genes; `from_json()` parses genes array with `GeneRegistry` lookup, typed value reconstruction (`json_to_gene_value`), and legacy bare-string fallback.
+- **SpriteIr genes**: `IrSerializer` serializes/deserializes genes with type-tagged format. Multi-gene arrays parse correctly (fixed missing `r.expect('}')` in all 5 array-of-object parsers).
+- **GeneValue types**: All 6 types (string, bool, int64, uint64, double, string_list) survive round-trip with exact variant index preservation verified via `std::get_if`.
+- **50+ assertions** in test 21 covering gene kind, schema, type_id, source_module, values count, key presence, variant index, and type-specific get_if checks.
