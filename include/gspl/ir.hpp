@@ -40,14 +40,23 @@ struct SpriteIr {
     std::vector<std::unique_ptr<IrNode>> package_plans;
 };
 
+struct SpriteIrDeserializeResult {
+    std::optional<SpriteIr> value;
+    DiagnosticResult diagnostics;
+    [[nodiscard]] bool ok() const noexcept { return value.has_value() && diagnostics.ok(); }
+};
+
 class IrSerializer {
 public:
     static std::string serialize(SpriteIr const& ir);
-    static SpriteIr deserialize(std::string_view json);
+    static SpriteIrDeserializeResult deserialize(std::string_view json);
     static DiagnosticResult validate(SpriteIr const& ir);
     static std::string diff(SpriteIr const& before, SpriteIr const& after);
     static std::string explain(SpriteIr const& ir, std::string node_id);
     static std::vector<std::string> dependencies(SpriteIr const& ir, std::string node_id);
+    static std::vector<std::string> transitive_dependencies(SpriteIr const& ir, std::string node_id);
+    static std::vector<std::string> reverse_dependencies(SpriteIr const& ir, std::string node_id);
+    static std::vector<std::string> dependency_closure(SpriteIr const& ir, std::string root_id);
 };
 
 } // namespace gspl

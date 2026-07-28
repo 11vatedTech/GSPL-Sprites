@@ -171,10 +171,16 @@ struct CanonicalEntity {
     DiagnosticResult diagnostics;
 };
 
+struct CanonicalEntityDeserializeResult {
+    std::optional<CanonicalEntity> value;
+    DiagnosticResult diagnostics;
+    [[nodiscard]] bool ok() const noexcept { return value.has_value() && diagnostics.ok(); }
+};
+
 class CanonicalEntitySerializer {
 public:
     static std::string to_json(CanonicalEntity const& entity);
-    static std::optional<CanonicalEntity> from_json(std::string_view json, DiagnosticResult& diag);
+    static CanonicalEntityDeserializeResult from_json(std::string_view json);
     static std::string to_yaml(CanonicalEntity const& entity);
 };
 

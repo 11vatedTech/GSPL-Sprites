@@ -276,26 +276,39 @@ std::string IrSerializer::serialize(SpriteIr const& ir) {
         ss << ",\n  \"entity\": " << serialize_entity_ir(*ir.entity);
     }
 
-    // representations
-    ss << ",\n  \"representation_count\": " << ir.representations.size();
-    ss << ",\n  \"runtime_plan_count\": " << ir.runtime_plans.size();
-    ss << ",\n  \"package_plan_count\": " << ir.package_plans.size();
+    // representations - serialize full array, not just count
+    ss << ",\n  \"representations\": [";
+    for (std::size_t i = 0; i < ir.representations.size(); ++i) {
+        if (i > 0) ss << ",";
+        ss << "{\"kind\":" << static_cast<std::uint32_t>(ir.representations[i]->kind)
+           << ",\"identity\":\"" << json_escape(ir.representations[i]->identity) << "\"}";
+    }
+    ss << "]";
+
+    ss << ",\n  \"runtime_plans\": " << ir.runtime_plans.size();
+    ss << ",\n  \"package_plans\": " << ir.package_plans.size();
     ss << "\n}";
     return ss.str();
 }
 
-SpriteIr IrSerializer::deserialize(std::string_view json) {
+SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json) {
+    SpriteIrDeserializeResult result;
     SpriteIr ir;
+
     if (json.empty()) {
-        ir.entity_id = "deserialized";
-        ir.seed_identity = "seed";
-        ir.entity = std::make_unique<EntityIr>();
-        ir.entity->entity_id = "deserialized_entity";
-        return ir;
+        result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR,
+                                     "deserialize: empty input", {});
+        return result;
     }
 
     JsonReader r(json);
-    if (!r.expect('{')) return ir;
+    if (!r.expect('{')) {
+        result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR,
+                                     "deserialize: expected '{'", {});
+        return result;
+    }
+
+    bool parsed_any = false;
 
     // Parse top-level key-value pairs
     while (r.has_more()) {
@@ -303,6 +316,8 @@ SpriteIr IrSerializer::deserialize(std::string_view json) {
         auto key = r.read_string();
         if (key.empty()) break;
         if (!r.expect(':')) break;
+
+        parsed_any = true;
 
         if (key == "ir_version") {
             ir.ir_version = r.read_string();
@@ -414,15 +429,26 @@ SpriteIr IrSerializer::deserialize(std::string_view json) {
         }
     }
 
+    if (!parsed_any) {
+        result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR,
+                                     "deserialize: no fields parsed", {});
+        return result;
+    }
+
+    // Fail-closed: require valid entity_id and entity
     if (ir.entity_id.empty()) {
-        ir.entity_id = "deserialized";
-        ir.seed_identity = "seed";
+        result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR,
+                                     "deserialize: missing required entity_id", {});
+        return result;
     }
     if (!ir.entity) {
-        ir.entity = std::make_unique<EntityIr>();
-        ir.entity->entity_id = ir.entity_id;
+        result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR,
+                                     "deserialize: missing required entity", {});
+        return result;
     }
-    return ir;
+
+    result.value = std::move(ir);
+    return result;
 }
 
 DiagnosticResult IrSerializer::validate(SpriteIr const& ir) {
@@ -511,7 +537,6 @@ std::vector<std::string> IrSerializer::dependencies(SpriteIr const& ir, std::str
                 collect_deps(*child);
             }
         } else {
-            // search for specific node
             for (auto const& child : ir.entity->children) {
                 if (child->identity == node_id) {
                     collect_deps(*child);
@@ -521,9 +546,88 @@ std::vector<std::string> IrSerializer::dependencies(SpriteIr const& ir, std::str
         }
     }
 
-    // Sort for determinism
     std::sort(deps.begin(), deps.end());
     return deps;
+}
+
+std::vector<std::string> IrSerializer::transitive_dependencies(SpriteIr const& ir, std::string node_id) {
+    std::set<std::string> visited;
+    std::set<std::string> closure;
+    std::vector<std::string> stack;
+
+    auto direct = dependencies(ir, node_id);
+    for (auto const& d : direct) {
+        if (closure.insert(d).second) stack.push_back(d);
+    }
+
+    while (!stack.empty()) {
+        auto current = stack.back();
+        stack.pop_back();
+        if (!visited.insert(current).second) continue;
+
+        auto child_deps = dependencies(ir, current);
+        for (auto const& d : child_deps) {
+            if (closure.insert(d).second) stack.push_back(d);
+        }
+    }
+
+    std::vector<std::string> result(closure.begin(), closure.end());
+    std::sort(result.begin(), result.end());
+    return result;
+}
+
+std::vector<std::string> IrSerializer::reverse_dependencies(SpriteIr const& ir, std::string node_id) {
+    std::vector<std::string> rev;
+    if (!ir.entity) return rev;
+
+    auto check_node = [&](IrNode const& node) {
+        for (auto const& d : node.dependency_ids) {
+            if (d == node_id) return true;
+        }
+        return false;
+    };
+
+    if (check_node(*ir.entity) && ir.entity->identity != node_id) {
+        rev.push_back(ir.entity->identity.empty() ? ir.entity->entity_id : ir.entity->identity);
+    }
+    for (auto const& child : ir.entity->children) {
+        if (check_node(*child) && child->identity != node_id) {
+            rev.push_back(child->identity);
+        }
+    }
+
+    std::sort(rev.begin(), rev.end());
+    return rev;
+}
+
+std::vector<std::string> IrSerializer::dependency_closure(SpriteIr const& ir, std::string root_id) {
+    std::set<std::string> closure;
+    std::set<std::string> visited;
+    std::vector<std::string> stack;
+
+    // Start from root or entity
+    auto start_deps = dependencies(ir, root_id);
+    for (auto const& d : start_deps) {
+        if (closure.insert(d).second) stack.push_back(d);
+    }
+
+    while (!stack.empty()) {
+        auto current = stack.back();
+        stack.pop_back();
+        if (!visited.insert(current).second) continue;
+
+        auto child_deps = dependencies(ir, current);
+        for (auto const& d : child_deps) {
+            if (closure.insert(d).second) stack.push_back(d);
+        }
+    }
+
+    // Include the root itself
+    closure.insert(root_id);
+
+    std::vector<std::string> result(closure.begin(), closure.end());
+    std::sort(result.begin(), result.end());
+    return result;
 }
 
 } // namespace gspl

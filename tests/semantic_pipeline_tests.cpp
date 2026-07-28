@@ -621,41 +621,41 @@ int main() {
             ce.entropy_root = 42;
 
             auto json = gspl::CanonicalEntitySerializer::to_json(ce);
-            gspl::DiagnosticResult diag;
-            auto restored = gspl::CanonicalEntitySerializer::from_json(json, diag);
-            check(restored.has_value(), "from_json should produce a value for valid JSON");
-            check(restored->stable_id == "roundtrip.test", "from_json should preserve stable_id");
-            check(restored->name == "Roundtrip Test", "from_json should preserve name");
-            check(restored->classification == "test.roundtrip", "from_json should preserve classification");
-            check(restored->rights == "ORIGINAL_USER_CREATION", "from_json should preserve rights");
-            check(restored->rights_allow_export == true, "from_json should preserve rights_allow_export");
-            check(restored->primary_color == "#242038", "from_json should preserve primary_color");
-            check(restored->accent_color == "#56F1FF", "from_json should preserve accent_color");
-            check(restored->provenance_hash == "abcd1234", "from_json should preserve provenance_hash");
-            check(restored->entropy_root == 42, "from_json should preserve entropy_root");
+            auto result = gspl::CanonicalEntitySerializer::from_json(json);
+            check(result.ok(), "from_json should succeed for valid JSON");
+            check(result.value.has_value(), "from_json should produce a value for valid JSON");
+            auto const& restored = *result.value;
+            check(restored.stable_id == "roundtrip.test", "from_json should preserve stable_id");
+            check(restored.name == "Roundtrip Test", "from_json should preserve name");
+            check(restored.classification == "test.roundtrip", "from_json should preserve classification");
+            check(restored.rights == "ORIGINAL_USER_CREATION", "from_json should preserve rights");
+            check(restored.rights_allow_export == true, "from_json should preserve rights_allow_export");
+            check(restored.primary_color == "#242038", "from_json should preserve primary_color");
+            check(restored.accent_color == "#56F1FF", "from_json should preserve accent_color");
+            check(restored.provenance_hash == "abcd1234", "from_json should preserve provenance_hash");
+            check(restored.entropy_root == 42, "from_json should preserve entropy_root");
 
             auto hash_before = gspl::CanonicalEntityIdentity(ce).hash();
-            auto hash_after = gspl::CanonicalEntityIdentity(*restored).hash();
+            auto hash_after = gspl::CanonicalEntityIdentity(restored).hash();
             check(hash_before == hash_after, "CanonicalEntity identity should survive JSON round-trip");
         }
 
         // ---- 17. from_json malformed input ----
         {
-            gspl::DiagnosticResult diag;
-            auto result = gspl::CanonicalEntitySerializer::from_json("", diag);
-            check(!result.has_value(), "from_json should reject empty input");
+            auto result = gspl::CanonicalEntitySerializer::from_json("");
+            check(!result.ok(), "from_json should reject empty input");
+            check(!result.value.has_value(), "from_json should reject empty input");
 
-            gspl::DiagnosticResult diag2;
-            auto result2 = gspl::CanonicalEntitySerializer::from_json("not json", diag2);
-            check(!result2.has_value(), "from_json should reject non-JSON input");
+            auto result2 = gspl::CanonicalEntitySerializer::from_json("not json");
+            check(!result2.ok(), "from_json should reject non-JSON input");
+            check(!result2.value.has_value(), "from_json should reject non-JSON input");
         }
 
         // ---- 18. from_json missing required stable_id ----
         {
-            gspl::DiagnosticResult diag;
             auto result = gspl::CanonicalEntitySerializer::from_json(
-                "{\"name\": \"Missing ID\"}", diag);
-            check(!result.has_value(), "from_json should reject entity without stable_id");
+                "{\"name\": \"Missing ID\"}");
+            check(!result.ok(), "from_json should reject entity without stable_id");
         }
 
         // ---- 19. IrSerializer round-trip ----
@@ -675,7 +675,10 @@ int main() {
             check(json.find("entity") != std::string::npos, "serialize should embed entity tree");
             check(json.find("dep-a") != std::string::npos, "serialize should embed dependency_ids");
 
-            auto restored = gspl::IrSerializer::deserialize(json);
+            auto deser_result = gspl::IrSerializer::deserialize(json);
+            check(deser_result.ok(), "deserialize should succeed for valid JSON");
+            check(deser_result.value.has_value(), "deserialize should produce a value");
+            auto const& restored = *deser_result.value;
             check(restored.entity_id == "serialize-test", "deserialize should restore entity_id");
             check(restored.seed_identity == "seed-42", "deserialize should restore seed_identity");
             check(restored.entity != nullptr, "deserialize should restore entity");

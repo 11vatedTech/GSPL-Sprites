@@ -3,6 +3,7 @@
 #include "gspl/genes.hpp"
 #include "gspl_sprites/core.hpp"
 #include <algorithm>
+#include <charconv>
 #include <exception>
 #include <iomanip>
 #include <ranges>
@@ -504,172 +505,608 @@ std::string CanonicalEntitySerializer::to_json(CanonicalEntity const& entity) {
     return os.str();
 }
 
-std::optional<CanonicalEntity> CanonicalEntitySerializer::from_json(
-    std::string_view json, DiagnosticResult& diag) {
+CanonicalEntityDeserializeResult CanonicalEntitySerializer::from_json(
+    std::string_view json) {
+    CanonicalEntityDeserializeResult result;
+
     if (json.empty()) {
-        diag.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
+        result.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
                        "from_json: empty input", {});
-        return std::nullopt;
+        return result;
     }
 
-    // minimal bounded JSON key-value parser for canonical entity format
-    auto skip_ws = [&](std::size_t& pos) {
-        while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\n' ||
-               json[pos] == '\r' || json[pos] == '\t')) ++pos;
+    auto skip_ws = [&](std::size_t& p) {
+        while (p < json.size() && (json[p] == ' ' || json[p] == '\n' ||
+               json[p] == '\r' || json[p] == '\t')) ++p;
     };
-
-    auto read_string = [&](std::size_t& pos) -> std::string {
-        skip_ws(pos);
-        if (pos >= json.size() || json[pos] != '"') return {};
-        ++pos;
+    auto read_str = [&](std::size_t& p) -> std::string {
+        skip_ws(p);
+        if (p >= json.size() || json[p] != '"') return {};
+        ++p;
         std::string out;
-        while (pos < json.size() && json[pos] != '"') {
-            if (json[pos] == '\\' && pos + 1 < json.size()) {
-                ++pos;
-                switch (json[pos]) {
+        while (p < json.size() && json[p] != '"') {
+            if (json[p] == '\\' && p + 1 < json.size()) {
+                ++p;
+                switch (json[p]) {
                 case '"': out += '"'; break;
                 case '\\': out += '\\'; break;
+                case '/': out += '/'; break;
                 case 'n': out += '\n'; break;
                 case 'r': out += '\r'; break;
                 case 't': out += '\t'; break;
-                default: out += json[pos]; break;
+                default: out += json[p]; break;
                 }
-            } else {
-                out += json[pos];
-            }
-            ++pos;
+            } else { out += json[p]; }
+            ++p;
         }
-        if (pos < json.size()) ++pos;
+        if (p < json.size()) ++p;
         return out;
     };
-
-    auto read_bool = [&](std::size_t& pos) -> bool {
-        skip_ws(pos);
-        if (pos + 4 <= json.size() && json.substr(pos, 4) == "true") { pos += 4; return true; }
-        if (pos + 5 <= json.size() && json.substr(pos, 5) == "false") { pos += 5; return false; }
+    auto read_b = [&](std::size_t& p) -> bool {
+        skip_ws(p);
+        if (p + 4 <= json.size() && json.substr(p, 4) == "true") { p += 4; return true; }
+        if (p + 5 <= json.size() && json.substr(p, 5) == "false") { p += 5; return false; }
         return false;
     };
-
-    auto read_uint64 = [&](std::size_t& pos) -> std::uint64_t {
-        skip_ws(pos);
+    auto read_u64 = [&](std::size_t& p) -> std::uint64_t {
+        skip_ws(p);
         std::string num;
-        while (pos < json.size() && std::isdigit(static_cast<unsigned char>(json[pos]))) {
-            num += json[pos];
-            ++pos;
-        }
+        while (p < json.size() && std::isdigit(static_cast<unsigned char>(json[p]))) { num += json[p]; ++p; }
         if (num.empty()) return 0;
         std::uint64_t v{};
         auto [ptr, ec] = std::from_chars(num.data(), num.data() + num.size(), v);
-        if (ec != std::errc{}) return 0;
-        return v;
+        return (ec != std::errc{}) ? 0 : v;
+    };
+    auto read_i64 = [&](std::size_t& p, std::int64_t fb = 0) -> std::int64_t {
+        skip_ws(p);
+        std::string num;
+        if (p < json.size() && json[p] == '-') { num += json[p]; ++p; }
+        while (p < json.size() && std::isdigit(static_cast<unsigned char>(json[p]))) { num += json[p]; ++p; }
+        if (num.empty() || num == "-") return fb;
+        std::int64_t v{};
+        auto [ptr, ec] = std::from_chars(num.data(), num.data() + num.size(), v);
+        return (ec != std::errc{}) ? fb : v;
+    };
+    auto read_d = [&](std::size_t& p, double fb = 0.0) -> double {
+        skip_ws(p);
+        std::string num;
+        if (p < json.size() && json[p] == '-') { num += json[p]; ++p; }
+        while (p < json.size() && std::isdigit(static_cast<unsigned char>(json[p]))) { num += json[p]; ++p; }
+        if (p < json.size() && json[p] == '.') { num += '.'; ++p;
+            while (p < json.size() && std::isdigit(static_cast<unsigned char>(json[p]))) { num += json[p]; ++p; } }
+        if (num.empty() || num == "-") return fb;
+        char* end = nullptr;
+        double v = std::strtod(num.c_str(), &end);
+        return (end == num.c_str()) ? fb : v;
+    };
+    auto skip_val = [&](std::size_t& p) {
+        skip_ws(p);
+        if (p >= json.size()) return;
+        if (json[p] == '"') { read_str(p); }
+        else if (json[p] == '{') {
+            int d = 1; ++p;
+            while (p < json.size() && d > 0) {
+                if (json[p] == '{') ++d;
+                else if (json[p] == '}') --d;
+                else if (json[p] == '"') read_str(p);
+                else ++p;
+            }
+        } else if (json[p] == '[') {
+            int d = 1; ++p;
+            while (p < json.size() && d > 0) {
+                if (json[p] == '[') ++d;
+                else if (json[p] == ']') --d;
+                else if (json[p] == '"') read_str(p);
+                else ++p;
+            }
+        } else if (json[p] == 't' || json[p] == 'f') { read_b(p); }
+        else if (json[p] == 'n') { p += 4; }
+        else { while (p < json.size() && json[p] != ',' && json[p] != '}' && json[p] != '\n') ++p; }
+    };
+    auto has_more = [&](std::size_t p) -> bool {
+        skip_ws(p);
+        return p < json.size() && json[p] != '}' && json[p] != ']';
     };
 
     std::size_t pos = 0;
     skip_ws(pos);
     if (pos >= json.size() || json[pos] != '{') {
-        diag.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
+        result.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
                        "from_json: expected '{'", {});
-        return std::nullopt;
+        return result;
     }
     ++pos;
 
     CanonicalEntity ce;
     bool parsed_any = false;
 
-    while (pos < json.size()) {
-        skip_ws(pos);
-        if (pos >= json.size()) break;
-        if (json[pos] == '}') { ++pos; break; }
-        if (json[pos] == ',') { ++pos; continue; }
-
-        auto key = read_string(pos);
+    while (has_more(pos)) {
+        auto key = read_str(pos);
         if (key.empty()) break;
         skip_ws(pos);
         if (pos >= json.size() || json[pos] != ':') break;
-        ++pos; // skip ':'
-
+        ++pos;
         parsed_any = true;
 
         if (key == "schema_version") {
-            ce.schema_version = read_string(pos);
+            ce.schema_version = read_str(pos);
         } else if (key == "stable_id") {
-            ce.stable_id = read_string(pos);
+            ce.stable_id = read_str(pos);
         } else if (key == "name") {
-            ce.name = read_string(pos);
+            ce.name = read_str(pos);
         } else if (key == "classification") {
-            ce.classification = read_string(pos);
+            ce.classification = read_str(pos);
         } else if (key == "rights") {
-            ce.rights = read_string(pos);
+            ce.rights = read_str(pos);
         } else if (key == "rights_allow_export") {
-            skip_ws(pos);
-            ce.rights_allow_export = read_bool(pos);
+            ce.rights_allow_export = read_b(pos);
         } else if (key == "entropy_root") {
-            ce.entropy_root = read_uint64(pos);
+            ce.entropy_root = read_u64(pos);
         } else if (key == "primary_color") {
-            ce.primary_color = read_string(pos);
+            ce.primary_color = read_str(pos);
         } else if (key == "accent_color") {
-            ce.accent_color = read_string(pos);
+            ce.accent_color = read_str(pos);
         } else if (key == "storm_primary_color") {
-            ce.storm_primary_color = read_string(pos);
+            ce.storm_primary_color = read_str(pos);
         } else if (key == "storm_accent_color") {
-            ce.storm_accent_color = read_string(pos);
+            ce.storm_accent_color = read_str(pos);
         } else if (key == "emissive_color") {
-            ce.emissive_color = read_string(pos);
+            ce.emissive_color = read_str(pos);
         } else if (key == "aura_color") {
-            ce.aura_color = read_string(pos);
+            ce.aura_color = read_str(pos);
         } else if (key == "provenance_hash") {
-            ce.provenance_hash = read_string(pos);
+            ce.provenance_hash = read_str(pos);
         } else if (key == "provenance_source") {
-            ce.provenance_source = read_string(pos);
-        } else {
-            // skip unknown values (counts, arrays, nested objects)
+            ce.provenance_source = read_str(pos);
+        } else if (key == "forms") {
+            // Parse forms array
             skip_ws(pos);
-            if (pos < json.size()) {
-                if (json[pos] == '"') { read_string(pos); }
-                else if (json[pos] == '{') {
-                    int depth = 1; ++pos;
-                    while (pos < json.size() && depth > 0) {
-                        if (json[pos] == '{') ++depth;
-                        else if (json[pos] == '}') --depth;
-                        else if (json[pos] == '"') read_string(pos);
-                        else ++pos;
+            if (pos < json.size() && json[pos] == '[') { ++pos;
+                while (has_more(pos)) {
+                    skip_ws(pos);
+                    if (pos >= json.size() || json[pos] != '{') break;
+                    ++pos;
+                    CanonicalForm f;
+                    while (has_more(pos)) {
+                        auto fk = read_str(pos);
+                        if (fk.empty()) break;
+                        skip_ws(pos); if (pos >= json.size() || json[pos] != ':') break; ++pos;
+                        if (fk == "id") f.id = read_str(pos);
+                        else if (fk == "resource_capacity") f.resource_capacity = static_cast<std::uint32_t>(read_i64(pos));
+                        else if (fk == "collision_scale") f.collision_scale = read_d(pos, 1.0);
+                        else if (fk == "ability_envelope") f.ability_envelope = read_d(pos, 1.0);
+                        else if (fk == "max_health") f.max_health = static_cast<std::uint32_t>(read_i64(pos, 100));
+                        else if (fk == "transformation_ids") {
+                            skip_ws(pos);
+                            if (pos < json.size() && json[pos] == '[') { ++pos;
+                                while (has_more(pos)) {
+                                    auto tid = read_str(pos);
+                                    if (tid.empty()) break;
+                                    f.transformation_ids.push_back(tid);
+                                    skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                                }
+                                skip_ws(pos); if (pos < json.size() && json[pos] == ']') ++pos;
+                            }
+                        } else skip_val(pos);
+                        skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
                     }
-                } else if (json[pos] == '[') {
-                    int depth = 1; ++pos;
-                    while (pos < json.size() && depth > 0) {
-                        if (json[pos] == '[') ++depth;
-                        else if (json[pos] == ']') --depth;
-                        else if (json[pos] == '"') read_string(pos);
-                        else ++pos;
+                    ce.forms.push_back(std::move(f));
+                    skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                }
+                skip_ws(pos); if (pos < json.size() && json[pos] == ']') ++pos;
+            }
+        } else if (key == "transformations") {
+            skip_ws(pos);
+            if (pos < json.size() && json[pos] == '[') { ++pos;
+                while (has_more(pos)) {
+                    skip_ws(pos);
+                    if (pos >= json.size() || json[pos] != '{') break; ++pos;
+                    CanonicalTransformation t;
+                    while (has_more(pos)) {
+                        auto tk = read_str(pos);
+                        if (tk.empty()) break;
+                        skip_ws(pos); if (pos >= json.size() || json[pos] != ':') break; ++pos;
+                        if (tk == "id") t.id = read_str(pos);
+                        else if (tk == "from_form") t.from_form = read_str(pos);
+                        else if (tk == "to_form") t.to_form = read_str(pos);
+                        else if (tk == "trigger_condition") t.trigger_condition = read_str(pos);
+                        else if (tk == "duration_ticks") t.duration_ticks = static_cast<std::uint32_t>(read_i64(pos));
+                        else if (tk == "resource_cost") t.resource_cost = static_cast<std::uint32_t>(read_i64(pos));
+                        else skip_val(pos);
+                        skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
                     }
-                } else {
-                    while (pos < json.size() && json[pos] != ',' && json[pos] != '}' &&
-                           json[pos] != '\n') ++pos;
+                    ce.transformations.push_back(std::move(t));
+                    skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                }
+                skip_ws(pos); if (pos < json.size() && json[pos] == ']') ++pos;
+            }
+        } else if (key == "morphology") {
+            skip_ws(pos);
+            if (pos < json.size() && json[pos] == '{') { ++pos;
+                while (has_more(pos)) {
+                    auto part_name = read_str(pos);
+                    if (part_name.empty()) break;
+                    skip_ws(pos); if (pos >= json.size() || json[pos] != ':') break; ++pos;
+                    skip_ws(pos);
+                    if (pos >= json.size() || json[pos] != '{') break; ++pos;
+                    CanonicalPart p;
+                    p.name = part_name;
+                    while (has_more(pos)) {
+                        auto pk = read_str(pos);
+                        if (pk.empty()) break;
+                        skip_ws(pos); if (pos >= json.size() || json[pos] != ':') break; ++pos;
+                        if (pk == "parent") p.parent = read_str(pos);
+                        else if (pk == "x") p.x = read_d(pos);
+                        else if (pk == "y") p.y = read_d(pos);
+                        else if (pk == "z") p.z = read_d(pos);
+                        else if (pk == "size_x") p.size_x = read_d(pos, 1.0);
+                        else if (pk == "size_y") p.size_y = read_d(pos, 1.0);
+                        else if (pk == "size_z") p.size_z = read_d(pos, 1.0);
+                        else if (pk == "color") p.color = read_str(pos);
+                        else if (pk == "rotation_degrees") p.rotation_degrees = read_d(pos);
+                        else if (pk == "emissive") p.emissive = read_b(pos);
+                        else if (pk == "electrical_marking") p.electrical_marking = read_b(pos);
+                        else skip_val(pos);
+                        skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                    }
+                    ce.morphology[p.name] = std::move(p);
+                    skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
                 }
             }
+        } else if (key == "abilities" || key == "storm_abilities") {
+            skip_ws(pos);
+            if (pos < json.size() && json[pos] == '[') { ++pos;
+                while (has_more(pos)) {
+                    skip_ws(pos);
+                    if (pos >= json.size() || json[pos] != '{') break; ++pos;
+                    CanonicalAbility a;
+                    while (has_more(pos)) {
+                        auto ak = read_str(pos);
+                        if (ak.empty()) break;
+                        skip_ws(pos); if (pos >= json.size() || json[pos] != ':') break; ++pos;
+                        if (ak == "id") a.id = read_str(pos);
+                        else if (ak == "effect") a.effect = read_str(pos);
+                        else if (ak == "cost") a.cost = static_cast<std::uint32_t>(read_i64(pos));
+                        else if (ak == "cooldown_ticks") a.cooldown_ticks = static_cast<std::uint32_t>(read_i64(pos));
+                        else if (ak == "active_ticks") a.active_ticks = static_cast<std::uint32_t>(read_i64(pos));
+                        else if (ak == "origin_socket") a.origin_socket = read_str(pos);
+                        else if (ak == "speed_mm_per_tick") a.speed_mm_per_tick = read_d(pos);
+                        else if (ak == "collision_radius_mm") a.collision_radius_mm = read_d(pos);
+                        else if (ak == "status_id") a.status_id = read_str(pos);
+                        else if (ak == "status_duration_ticks") a.status_duration_ticks = static_cast<std::uint32_t>(read_i64(pos));
+                        else skip_val(pos);
+                        skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                    }
+                    if (key == "storm_abilities") ce.storm_abilities.push_back(std::move(a));
+                    else ce.abilities.push_back(std::move(a));
+                    skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                }
+                skip_ws(pos); if (pos < json.size() && json[pos] == ']') ++pos;
+            }
+        } else if (key == "bones") {
+            skip_ws(pos);
+            if (pos < json.size() && json[pos] == '[') { ++pos;
+                while (has_more(pos)) {
+                    skip_ws(pos);
+                    if (pos >= json.size() || json[pos] != '{') break; ++pos;
+                    CanonicalSkeletalBone b;
+                    while (has_more(pos)) {
+                        auto bk = read_str(pos);
+                        if (bk.empty()) break;
+                        skip_ws(pos); if (pos >= json.size() || json[pos] != ':') break; ++pos;
+                        if (bk == "id") b.id = read_str(pos);
+                        else if (bk == "parent") b.parent = read_str(pos);
+                        else if (bk == "x") b.x = read_d(pos);
+                        else if (bk == "y") b.y = read_d(pos);
+                        else if (bk == "z") b.z = read_d(pos);
+                        else if (bk == "scale_x") b.scale_x = read_d(pos, 1.0);
+                        else if (bk == "scale_y") b.scale_y = read_d(pos, 1.0);
+                        else if (bk == "length_mm") b.length_mm = read_d(pos);
+                        else if (bk == "min_rotation") b.min_rotation = read_d(pos);
+                        else if (bk == "max_rotation") b.max_rotation = read_d(pos);
+                        else skip_val(pos);
+                        skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                    }
+                    ce.bones.push_back(std::move(b));
+                    skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                }
+                skip_ws(pos); if (pos < json.size() && json[pos] == ']') ++pos;
+            }
+        } else if (key == "sockets") {
+            skip_ws(pos);
+            if (pos < json.size() && json[pos] == '[') { ++pos;
+                while (has_more(pos)) {
+                    skip_ws(pos);
+                    if (pos >= json.size() || json[pos] != '{') break; ++pos;
+                    CanonicalSocket s;
+                    while (has_more(pos)) {
+                        auto sk = read_str(pos);
+                        if (sk.empty()) break;
+                        skip_ws(pos); if (pos >= json.size() || json[pos] != ':') break; ++pos;
+                        if (sk == "id") s.id = read_str(pos);
+                        else if (sk == "bone") s.bone = read_str(pos);
+                        else if (sk == "x") s.x = read_d(pos);
+                        else if (sk == "y") s.y = read_d(pos);
+                        else if (sk == "z") s.z = read_d(pos);
+                        else if (sk == "scale_x") s.scale_x = read_d(pos, 1.0);
+                        else if (sk == "scale_y") s.scale_y = read_d(pos, 1.0);
+                        else skip_val(pos);
+                        skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                    }
+                    ce.sockets.push_back(std::move(s));
+                    skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                }
+                skip_ws(pos); if (pos < json.size() && json[pos] == ']') ++pos;
+            }
+        } else if (key == "clips") {
+            skip_ws(pos);
+            if (pos < json.size() && json[pos] == '[') { ++pos;
+                while (has_more(pos)) {
+                    skip_ws(pos);
+                    if (pos >= json.size() || json[pos] != '{') break; ++pos;
+                    CanonicalAnimationClip c;
+                    while (has_more(pos)) {
+                        auto ck = read_str(pos);
+                        if (ck.empty()) break;
+                        skip_ws(pos); if (pos >= json.size() || json[pos] != ':') break; ++pos;
+                        if (ck == "name") c.name = read_str(pos);
+                        else if (ck == "loop") c.loop = read_b(pos);
+                        else if (ck == "tracks") {
+                            skip_ws(pos);
+                            if (pos < json.size() && json[pos] == '[') { ++pos;
+                                while (has_more(pos)) {
+                                    skip_ws(pos);
+                                    if (pos >= json.size() || json[pos] != '{') break; ++pos;
+                                    CanonicalAnimationClip::Track tr;
+                                    while (has_more(pos)) {
+                                        auto trk = read_str(pos);
+                                        if (trk.empty()) break;
+                                        skip_ws(pos); if (pos >= json.size() || json[pos] != ':') break; ++pos;
+                                        if (trk == "bone") tr.bone = read_str(pos);
+                                        else if (trk == "keys") {
+                                            skip_ws(pos);
+                                            if (pos < json.size() && json[pos] == '[') { ++pos;
+                                                while (has_more(pos)) {
+                                                    skip_ws(pos);
+                                                    if (pos >= json.size() || json[pos] != '{') break; ++pos;
+                                                    std::uint32_t tick{}; std::string val;
+                                                    while (has_more(pos)) {
+                                                        auto kk = read_str(pos);
+                                                        if (kk.empty()) break;
+                                                        skip_ws(pos); if (pos >= json.size() || json[pos] != ':') break; ++pos;
+                                                        if (kk == "tick") tick = static_cast<std::uint32_t>(read_i64(pos));
+                                                        else if (kk == "value") val = read_str(pos);
+                                                        else skip_val(pos);
+                                                        skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                                                    }
+                                                    tr.keys.push_back({tick, val});
+                                                    skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                                                }
+                                                skip_ws(pos); if (pos < json.size() && json[pos] == ']') ++pos;
+                                            }
+                                        } else skip_val(pos);
+                                        skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                                    }
+                                    c.tracks.push_back(std::move(tr));
+                                    skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                                }
+                                skip_ws(pos); if (pos < json.size() && json[pos] == ']') ++pos;
+                            }
+                        } else if (ck == "events") {
+                            skip_ws(pos);
+                            if (pos < json.size() && json[pos] == '[') { ++pos;
+                                while (has_more(pos)) {
+                                    skip_ws(pos);
+                                    if (pos >= json.size() || json[pos] != '{') break; ++pos;
+                                    std::uint32_t tick{}; std::string eid;
+                                    while (has_more(pos)) {
+                                        auto ek = read_str(pos);
+                                        if (ek.empty()) break;
+                                        skip_ws(pos); if (pos >= json.size() || json[pos] != ':') break; ++pos;
+                                        if (ek == "tick") tick = static_cast<std::uint32_t>(read_i64(pos));
+                                        else if (ek == "id") eid = read_str(pos);
+                                        else skip_val(pos);
+                                        skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                                    }
+                                    c.clip_events.push_back({tick, eid});
+                                    skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                                }
+                                skip_ws(pos); if (pos < json.size() && json[pos] == ']') ++pos;
+                            }
+                        } else skip_val(pos);
+                        skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                    }
+                    ce.clips.push_back(std::move(c));
+                    skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                }
+                skip_ws(pos); if (pos < json.size() && json[pos] == ']') ++pos;
+            }
+        } else if (key == "states") {
+            skip_ws(pos);
+            if (pos < json.size() && json[pos] == '[') { ++pos;
+                while (has_more(pos)) {
+                    skip_ws(pos);
+                    if (pos >= json.size() || json[pos] != '{') break; ++pos;
+                    CanonicalAnimationState s;
+                    while (has_more(pos)) {
+                        auto sk = read_str(pos);
+                        if (sk.empty()) break;
+                        skip_ws(pos); if (pos >= json.size() || json[pos] != ':') break; ++pos;
+                        if (sk == "name") s.name = read_str(pos);
+                        else if (sk == "clip_name") s.clip_name = read_str(pos);
+                        else skip_val(pos);
+                        skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                    }
+                    ce.states.push_back(std::move(s));
+                    skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                }
+                skip_ws(pos); if (pos < json.size() && json[pos] == ']') ++pos;
+            }
+        } else if (key == "initial_state") {
+            ce.initial_state = read_str(pos);
+        } else if (key == "transitions") {
+            skip_ws(pos);
+            if (pos < json.size() && json[pos] == '[') { ++pos;
+                while (has_more(pos)) {
+                    skip_ws(pos);
+                    if (pos >= json.size() || json[pos] != '{') break; ++pos;
+                    CanonicalTransition t;
+                    while (has_more(pos)) {
+                        auto tk = read_str(pos);
+                        if (tk.empty()) break;
+                        skip_ws(pos); if (pos >= json.size() || json[pos] != ':') break; ++pos;
+                        if (tk == "from_state") t.from_state = read_str(pos);
+                        else if (tk == "to_state") t.to_state = read_str(pos);
+                        else if (tk == "ability_id") t.ability_id = read_str(pos);
+                        else if (tk == "comparison") t.comparison = read_str(pos);
+                        else if (tk == "threshold") t.threshold = static_cast<std::uint32_t>(read_i64(pos));
+                        else if (tk == "resource_cost") t.resource_cost = static_cast<std::uint32_t>(read_i64(pos));
+                        else if (tk == "cooldown_ticks") t.cooldown_ticks = static_cast<std::uint32_t>(read_i64(pos));
+                        else skip_val(pos);
+                        skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                    }
+                    ce.transitions.push_back(std::move(t));
+                    skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                }
+                skip_ws(pos); if (pos < json.size() && json[pos] == ']') ++pos;
+            }
+        } else if (key == "collision_shapes") {
+            skip_ws(pos);
+            if (pos < json.size() && json[pos] == '[') { ++pos;
+                while (has_more(pos)) {
+                    skip_ws(pos);
+                    if (pos >= json.size() || json[pos] != '{') break; ++pos;
+                    CanonicalCollisionShape cs;
+                    while (has_more(pos)) {
+                        auto ck = read_str(pos);
+                        if (ck.empty()) break;
+                        skip_ws(pos); if (pos >= json.size() || json[pos] != ':') break; ++pos;
+                        if (ck == "id") cs.id = read_str(pos);
+                        else if (ck == "shape_type") cs.shape_type = read_str(pos);
+                        else if (ck == "socket") cs.socket = read_str(pos);
+                        else if (ck == "radius_mm") cs.radius_mm = read_d(pos);
+                        else if (ck == "offset_x") cs.offset_x = read_d(pos);
+                        else if (ck == "offset_y") cs.offset_y = read_d(pos);
+                        else if (ck == "scale_x") cs.scale_x = read_d(pos, 1.0);
+                        else if (ck == "scale_y") cs.scale_y = read_d(pos, 1.0);
+                        else skip_val(pos);
+                        skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                    }
+                    ce.collision_shapes.push_back(std::move(cs));
+                    skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                }
+                skip_ws(pos); if (pos < json.size() && json[pos] == ']') ++pos;
+            }
+        } else if (key == "collision_windows") {
+            skip_ws(pos);
+            if (pos < json.size() && json[pos] == '[') { ++pos;
+                while (has_more(pos)) {
+                    skip_ws(pos);
+                    if (pos >= json.size() || json[pos] != '{') break; ++pos;
+                    CanonicalCollisionWindow cw;
+                    while (has_more(pos)) {
+                        auto wk = read_str(pos);
+                        if (wk.empty()) break;
+                        skip_ws(pos); if (pos >= json.size() || json[pos] != ':') break; ++pos;
+                        if (wk == "ability_id") cw.ability_id = read_str(pos);
+                        else if (wk == "shape_id") cw.shape_id = read_str(pos);
+                        else if (wk == "start_tick") cw.start_tick = static_cast<std::uint32_t>(read_i64(pos));
+                        else if (wk == "duration_ticks") cw.duration_ticks = static_cast<std::uint32_t>(read_i64(pos));
+                        else if (wk == "active") cw.active = read_b(pos);
+                        else skip_val(pos);
+                        skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                    }
+                    ce.collision_windows.push_back(std::move(cw));
+                    skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                }
+                skip_ws(pos); if (pos < json.size() && json[pos] == ']') ++pos;
+            }
+        } else if (key == "resources") {
+            skip_ws(pos);
+            if (pos < json.size() && json[pos] == '[') { ++pos;
+                while (has_more(pos)) {
+                    skip_ws(pos);
+                    if (pos >= json.size() || json[pos] != '{') break; ++pos;
+                    CanonicalResource res;
+                    while (has_more(pos)) {
+                        auto rk = read_str(pos);
+                        if (rk.empty()) break;
+                        skip_ws(pos); if (pos >= json.size() || json[pos] != ':') break; ++pos;
+                        if (rk == "id") res.id = read_str(pos);
+                        else if (rk == "resource_type") res.resource_type = read_str(pos);
+                        else if (rk == "min") res.min = static_cast<std::uint32_t>(read_i64(pos));
+                        else if (rk == "max") res.max = static_cast<std::uint32_t>(read_i64(pos, 100));
+                        else if (rk == "initial") res.initial = static_cast<std::uint32_t>(read_i64(pos, 100));
+                        else skip_val(pos);
+                        skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                    }
+                    ce.resources.push_back(std::move(res));
+                    skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                }
+                skip_ws(pos); if (pos < json.size() && json[pos] == ']') ++pos;
+            }
+        } else if (key == "runtime") {
+            skip_ws(pos);
+            if (!(pos < json.size() && json[pos] == '{')) { skip_val(pos); continue; }
+            ++pos;
+            CanonicalRuntime rt;
+            while (has_more(pos)) {
+                auto rk = read_str(pos);
+                if (rk.empty()) break;
+                skip_ws(pos); if (pos >= json.size() || json[pos] != ':') break; ++pos;
+                if (rk == "aggression") rt.aggression = static_cast<std::uint32_t>(read_i64(pos, 50));
+                else if (rk == "curiosity") rt.curiosity = static_cast<std::uint32_t>(read_i64(pos, 50));
+                else if (rk == "energy") rt.energy = static_cast<std::uint32_t>(read_i64(pos, 50));
+                else if (rk == "loyalty") rt.loyalty = static_cast<std::uint32_t>(read_i64(pos, 50));
+                else if (rk == "animation_intents") {
+                    skip_ws(pos);
+                    if (pos < json.size() && json[pos] == '[') { ++pos;
+                        while (has_more(pos)) {
+                            skip_ws(pos);
+                            if (pos >= json.size() || json[pos] != '{') break; ++pos;
+                            CanonicalAnimationIntent ai;
+                            while (has_more(pos)) {
+                                auto ak2 = read_str(pos);
+                                if (ak2.empty()) break;
+                                skip_ws(pos); if (pos >= json.size() || json[pos] != ':') break; ++pos;
+                                if (ak2 == "behavior_state") ai.behavior_state = read_str(pos);
+                                else if (ak2 == "clip_name") ai.clip_name = read_str(pos);
+                                else skip_val(pos);
+                                skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                            }
+                            rt.animation_intents.push_back(std::move(ai));
+                            skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                        }
+                        skip_ws(pos); if (pos < json.size() && json[pos] == ']') ++pos;
+                    }
+                } else skip_val(pos);
+                skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+            }
+            ce.runtime = std::move(rt);
+        } else {
+            skip_val(pos);
         }
+        skip_ws(pos); if (pos < json.size() && json[pos] == ',') ++pos; else break;
     }
 
     if (!parsed_any) {
-        diag.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
+        result.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
                        "from_json: no fields parsed from input", {});
-        return std::nullopt;
+        return result;
     }
 
-    // Validate required identity fields
+    // Fail-closed: require stable_id
     if (ce.stable_id.empty()) {
-        diag.add_error(DiagnosticCode::GSPL_NAME_UNKNOWN,
-                       "from_json: deserialized entity missing required stable_id", {});
-        return std::nullopt;
+        result.diagnostics.add_error(DiagnosticCode::GSPL_NAME_UNKNOWN,
+                       "from_json: missing required stable_id", {});
+        return result;
     }
     if (ce.name.empty()) {
-        ce.name = ce.stable_id; // fallback: name defaults to stable_id
-    }
-    if (ce.rights.empty()) {
-        ce.rights = "UNCLASSIFIED";
+        ce.name = ce.stable_id;
     }
 
-    return ce;
+    result.value = std::move(ce);
+    return result;
 }
 
 std::string CanonicalEntitySerializer::to_yaml(CanonicalEntity const& entity) {
