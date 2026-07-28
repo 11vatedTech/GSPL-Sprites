@@ -65,6 +65,9 @@ struct DiagnosticResult {
     void add_error(DiagnosticCode code, std::string msg, SourceSpan span) {
         diagnostics.push_back({code, DiagnosticSeverity::error, std::move(msg), span, {}, {}});
     }
+    void merge(DiagnosticResult const& other) {
+        diagnostics.insert(diagnostics.end(), other.diagnostics.begin(), other.diagnostics.end());
+    }
     std::string to_json() const;
     void sort() {
         std::sort(diagnostics.begin(), diagnostics.end(), [](auto const& a, auto const& b) {
