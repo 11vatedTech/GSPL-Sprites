@@ -2,6 +2,7 @@
 #include "gspl/cli.hpp"
 #include "gspl/semantics.hpp"
 #include "gspl/lowering.hpp"
+#include "gspl_sprites/core.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -130,14 +131,12 @@ int main() {
 
             auto const& ce = ctx.canonical;
             check(!ce.stable_id.empty(), "Canonical stable_id should be non-empty");
-            // stable_id defaults to entity name when gene instances are empty (GeneCompositionPhase is stub)
-            check(ce.stable_id == "TestEntity", "Canonical stable_id should match entity name");
+            check(ce.stable_id == "test.entity", "Canonical stable_id should come from identity gene");
             check(!ce.classification.empty(), "Canonical classification should be non-empty");
-            check(ce.classification == "fictional", "Canonical classification should be default");
+            check(ce.classification == "test.sample", "Canonical classification should come from classification gene");
             check(!ce.rights.empty(), "Canonical rights should be non-empty");
             check(ce.rights == "ORIGINAL_USER_CREATION/PROHIBITED", "Canonical rights should be 'ORIGINAL_USER_CREATION/PROHIBITED'");
-            // primary_color defaults when gene instances empty
-            check(ce.primary_color == "#112233", "Canonical primary_color should be default");
+            check(ce.primary_color == "#FF0000", "Canonical primary_color should come from appearance gene");
         }
 
         // ---- 3. CanonicalEntity identity determinism ----
@@ -169,15 +168,17 @@ int main() {
             gspl::CanonicalizePhase canon; canon.execute(ctx);
 
             auto const& ce = ctx.canonical;
-            // stable_id is entity name ("TestEntity") when gene instances are empty
-            check(ce.stable_id == "TestEntity", "Canonical stable_id from canonicalize should be entity name");
+            check(ce.stable_id == "determinism.test", "Canonical stable_id should come from identity gene");
 
             auto hash1 = gspl::CanonicalEntityIdentity(ctx.canonical).hash();
             auto hash2 = gspl::CanonicalEntityIdentity(ctx.canonical).hash();
             check(!hash1.empty(), "Identity hash should be non-empty");
-            check(hash1 == hash2, "CanonicalEntity identity should be deterministic (same input, same hash)");
+            check(hash1 == hash2, "CanonicalEntity identity should be deterministic");
+            check(hash1.size() == 64, "CanonicalEntity identity should be SHA-256 hex digest");
+            auto canonical_payload = gspl::CanonicalEntityIdentity(ctx.canonical).serialized();
+            check(hash1 == gspl::sprites::sha256(canonical_payload),
+                  "Identity hash should equal SHA-256 of canonical payload");
 
-            // Different stable_id should produce different hash
             gspl::CanonicalEntity ce2;
             ce2.stable_id = "different.test";
             auto hash3 = gspl::CanonicalEntityIdentity(ce2).hash();
@@ -395,14 +396,130 @@ int main() {
                     throw std::runtime_error("PassManager pipeline error: " + d.message);
                 }
             }
+            check(ctx.composed_genes.size() >= 2, "GeneCompositionPhase should collect AST gene declarations");
             check(!ctx.canonical.stable_id.empty(),
                   "Canonical entity should be populated after pipeline");
-            // stable_id from entity name when gene instances are empty (GeneCompositionPhase is stub)
-            check(ctx.canonical.stable_id == "FullEntity",
-                  ("Canonical stable_id should be 'FullEntity', got: '" + ctx.canonical.stable_id + "'").c_str());
+            check(ctx.canonical.stable_id == "full.test",
+                  ("Canonical stable_id should be 'full.test', got: '" + ctx.canonical.stable_id + "'").c_str());
         }
 
-        // ---- 11. Lowering diagnostics for unsupported semantics ----
+        // ---- 11. Reused PassManager must run every pass for each compilation ----
+        {
+            auto make_context = [](std::string mn, std::string en, std::string sid) {
+                gspl::CompilationContext ctx;
+                ctx.sources.register_buffer(gspl::SourceBuffer::from_string(mn + ".gspl",
+                    "module " + mn + ";\n"
+                    "entity " + en + " {\n"
+                    "  rights ORIGINAL_USER_CREATION PUBLIC;\n"
+                    "  gene identity { stable_id: \"" + sid + "\" }\n"
+                    "  ability default_attack {}\n"
+                    "}\n"));
+                return ctx;
+            };
+            gspl::PassManager pm;
+            pm.register_pass(std::make_unique<gspl::LexPhase>());
+            pm.register_pass(std::make_unique<gspl::ParsePhase>());
+            pm.register_pass(std::make_unique<gspl::ModuleResolvePhase>());
+            pm.register_pass(std::make_unique<gspl::NameResolvePhase>());
+            pm.register_pass(std::make_unique<gspl::TypeCheckPhase>());
+            pm.register_pass(std::make_unique<gspl::GeneCompositionPhase>());
+            pm.register_pass(std::make_unique<gspl::CanonicalizePhase>());
+            std::vector<gspl::PassKind> targets = {gspl::PassKind::canonicalize};
+
+            auto first = make_context("first", "FirstEntity", "first.semantic");
+            auto first_result = pm.run_passes(first, targets);
+            for (auto const& d : first_result.diagnostics)
+                if (d.severity >= gspl::DiagnosticSeverity::error)
+                    throw std::runtime_error("First compile failed: " + d.message);
+            check(first.canonical.stable_id == "first.semantic", "First compile should use its identity gene");
+
+            auto second = make_context("second", "SecondEntity", "second.semantic");
+            auto second_result = pm.run_passes(second, targets);
+            for (auto const& d : second_result.diagnostics)
+                if (d.severity >= gspl::DiagnosticSeverity::error)
+                    throw std::runtime_error("Second compile failed: " + d.message);
+            check(second.canonical.stable_id == "second.semantic", "Second compile should not reuse first genes");
+            check(second.tokens.size() > 5, "Second compile should run lexing");
+            check(second.composed_genes.size() == 1, "Second compile should compose its own gene");
+        }
+
+        // ---- 12. Duplicate non-repeatable genes fail closed ----
+        {
+            gspl::CompilationContext ctx;
+            ctx.sources.register_buffer(gspl::SourceBuffer::from_string("dup.gspl",
+                "module dup;\n"
+                "entity DupEntity {\n"
+                "  rights ORIGINAL_USER_CREATION PUBLIC;\n"
+                "  gene identity { stable_id: \"first\" }\n"
+                "  gene identity { stable_id: \"second\" }\n"
+                "}\n"));
+            gspl::LexPhase lex; lex.execute(ctx);
+            gspl::ParsePhase parse; parse.execute(ctx);
+            ctx.diagnostics = {};
+            gspl::GeneCompositionPhase gene_comp; gene_comp.execute(ctx);
+            bool duplicate = false;
+            for (auto const& d : ctx.diagnostics.diagnostics)
+                if (d.code == gspl::DiagnosticCode::GSPL_GENE_DUPLICATE) duplicate = true;
+            check(duplicate, "Duplicate identity genes should emit GSPL_GENE_DUPLICATE");
+        }
+
+        // ---- 13. Unknown and malformed gene payloads fail closed ----
+        {
+            gspl::CompilationContext unknown_ctx;
+            unknown_ctx.sources.register_buffer(gspl::SourceBuffer::from_string("unk.gspl",
+                "module unk;\n"
+                "entity Unk {\n"
+                "  rights ORIGINAL_USER_CREATION PUBLIC;\n"
+                "  gene not_a_gene { value: \"x\" }\n"
+                "}\n"));
+            gspl::LexPhase lex; lex.execute(unknown_ctx);
+            gspl::ParsePhase parse; parse.execute(unknown_ctx);
+            unknown_ctx.diagnostics = {};
+            gspl::GeneCompositionPhase gene_comp; gene_comp.execute(unknown_ctx);
+            bool unknown = false;
+            for (auto const& d : unknown_ctx.diagnostics.diagnostics)
+                if (d.code == gspl::DiagnosticCode::GSPL_GENE_UNKNOWN) unknown = true;
+            check(unknown, "Unknown gene kinds should emit GSPL_GENE_UNKNOWN");
+
+            gspl::CompilationContext malformed_ctx;
+            malformed_ctx.sources.register_buffer(gspl::SourceBuffer::from_string("bad.gspl",
+                "module bad;\n"
+                "entity Bad {\n"
+                "  rights ORIGINAL_USER_CREATION PUBLIC;\n"
+                "  gene appearance { primary_color: \"not-a-color\" }\n"
+                "}\n"));
+            gspl::LexPhase lex2; lex2.execute(malformed_ctx);
+            gspl::ParsePhase parse2; parse2.execute(malformed_ctx);
+            malformed_ctx.diagnostics = {};
+            gspl::GeneCompositionPhase gene_comp2; gene_comp2.execute(malformed_ctx);
+            bool invalid = false;
+            for (auto const& d : malformed_ctx.diagnostics.diagnostics)
+                if (d.code == gspl::DiagnosticCode::GSPL_GENE_INVALID_VALUE) invalid = true;
+            check(invalid, "Malformed gene payloads should emit GSPL_GENE_INVALID_VALUE");
+        }
+
+        // ---- 14. CompilationContext reset clears semantic products ----
+        {
+            gspl::CompilationContext ctx;
+            ctx.sources.register_buffer(gspl::SourceBuffer::from_string("reset.gspl",
+                "module reset;\nentity ResetEntity { gene identity { stable_id: \"reset.before\" } }\n"));
+            gspl::LexPhase lex; lex.execute(ctx);
+            gspl::ParsePhase parse; parse.execute(ctx);
+            gspl::GeneCompositionPhase gene_comp; gene_comp.execute(ctx);
+            gspl::CanonicalizePhase canon; canon.execute(ctx);
+            check(!ctx.tokens.empty(), "Should have tokens before reset");
+            check(!ctx.composed_genes.empty(), "Should have genes before reset");
+            check(!ctx.canonical.stable_id.empty(), "Should have canonical entity before reset");
+            ctx.reset();
+            check(ctx.tokens.empty(), "reset() should clear tokens");
+            check(ctx.ast == nullptr, "reset() should clear AST");
+            check(ctx.composed_genes.empty(), "reset() should clear composed genes");
+            check(ctx.ir.entity_id.empty(), "reset() should clear Sprite IR");
+            check(ctx.canonical.stable_id.empty(), "reset() should clear canonical entity");
+            check(ctx.diagnostics.diagnostics.empty(), "reset() should clear diagnostics");
+        }
+
+        // ---- 15. Lowering diagnostics for unsupported semantics ----
         {
             gspl::CanonicalEntity ce;
             ce.stable_id = "diagnostics.test";

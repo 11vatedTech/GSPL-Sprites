@@ -1,13 +1,286 @@
 #include "gspl/semantics.hpp"
 #include "gspl/ast.hpp"
 #include "gspl/genes.hpp"
+#include "gspl_sprites/core.hpp"
 #include <algorithm>
+#include <exception>
 #include <iomanip>
 #include <ranges>
 #include <sstream>
 #include <string>
 
 namespace gspl {
+namespace {
+
+std::string canonical_escape(std::string_view value) {
+    std::ostringstream out;
+    for (const unsigned char c : value) {
+        switch (c) {
+        case '\\': out << "\\\\"; break;
+        case '"': out << "\\\""; break;
+        case '\n': out << "\\n"; break;
+        case '\r': out << "\\r"; break;
+        case '\t': out << "\\t"; break;
+        default:
+            if (c < 0x20) {
+                out << "\\u" << std::hex << std::setw(4) << std::setfill('0')
+                    << static_cast<unsigned int>(c) << std::dec << std::setfill(' ');
+            } else {
+                out << static_cast<char>(c);
+            }
+        }
+    }
+    return out.str();
+}
+
+void append_key_value(std::ostringstream& out, std::string_view key, std::string_view value) {
+    out << key << "=\"" << canonical_escape(value) << "\";";
+}
+
+void append_key_value(std::ostringstream& out, std::string_view key, std::string const& value) {
+    append_key_value(out, key, std::string_view{value});
+}
+
+void append_key_value(std::ostringstream& out, std::string_view key, const char* value) {
+    append_key_value(out, key, std::string_view{value});
+}
+
+void append_key_value(std::ostringstream& out, std::string_view key, bool value) {
+    out << key << '=' << (value ? "true" : "false") << ';';
+}
+
+template <class T>
+void append_key_value(std::ostringstream& out, std::string_view key, T value) {
+    out << key << '=' << value << ';';
+}
+
+double gene_value_to_double(GeneValue const& value, double fallback = 0.0) {
+    if (auto const* d = std::get_if<double>(&value)) return *d;
+    if (auto const* i = std::get_if<std::int64_t>(&value)) return static_cast<double>(*i);
+    if (auto const* u = std::get_if<std::uint64_t>(&value)) return static_cast<double>(*u);
+    try { return std::stod(gene_value_to_string(value)); } catch (std::exception const&) { return fallback; }
+}
+
+bool gene_value_to_bool(GeneValue const& value, bool fallback = false) {
+    if (auto const* b = std::get_if<bool>(&value)) return *b;
+    const auto text = gene_value_to_string(value);
+    if (text == "true") return true;
+    if (text == "false") return false;
+    return fallback;
+}
+
+void append_gene_identity_payload(std::ostringstream& out, std::vector<GeneInstance> const& genes) {
+    out << "genes[" << genes.size() << "]{";
+    for (auto const& gene : genes) {
+        append_key_value(out, "kind", static_cast<std::uint32_t>(gene.descriptor.kind));
+        append_key_value(out, "schema", gene.descriptor.schema_version);
+        append_key_value(out, "type", gene.descriptor.type_id);
+        append_key_value(out, "source", gene.source_module);
+        out << "values{";
+        std::map<std::string, std::string, std::less<>> sorted_values;
+        for (auto const& [key, value] : gene.values) sorted_values.emplace(key, gene_value_to_string(value));
+        for (auto const& [key, value] : sorted_values) append_key_value(out, key, value);
+        out << "};";
+    }
+    out << "};";
+}
+
+std::string canonical_identity_payload(CanonicalEntity const& entity) {
+    std::ostringstream out;
+    append_key_value(out, "schema_version", entity.schema_version);
+    append_key_value(out, "stable_id", entity.stable_id);
+    append_key_value(out, "name", entity.name);
+    append_key_value(out, "classification", entity.classification);
+    append_key_value(out, "rights", entity.rights);
+    append_key_value(out, "rights_allow_export", entity.rights_allow_export);
+    append_key_value(out, "entropy_root", entity.entropy_root);
+    append_key_value(out, "primary_color", entity.primary_color);
+    append_key_value(out, "accent_color", entity.accent_color);
+    append_key_value(out, "storm_primary_color", entity.storm_primary_color);
+    append_key_value(out, "storm_accent_color", entity.storm_accent_color);
+    append_key_value(out, "emissive_color", entity.emissive_color);
+    append_key_value(out, "aura_color", entity.aura_color);
+    append_key_value(out, "provenance_hash", entity.provenance_hash);
+    append_key_value(out, "provenance_source", entity.provenance_source);
+    append_gene_identity_payload(out, entity.genes);
+
+    out << "forms[" << entity.forms.size() << "]{";
+    for (auto const& form : entity.forms) {
+        append_key_value(out, "id", form.id);
+        append_key_value(out, "resource_capacity", form.resource_capacity);
+        append_key_value(out, "collision_scale", form.collision_scale);
+        append_key_value(out, "ability_envelope", form.ability_envelope);
+        append_key_value(out, "max_health", form.max_health);
+        out << "transformations{";
+        for (auto const& id : form.transformation_ids) append_key_value(out, "id", id);
+        out << "};";
+    }
+    out << "};";
+
+    out << "transformations[" << entity.transformations.size() << "]{";
+    for (auto const& transformation : entity.transformations) {
+        append_key_value(out, "id", transformation.id);
+        append_key_value(out, "from", transformation.from_form);
+        append_key_value(out, "to", transformation.to_form);
+        append_key_value(out, "trigger", transformation.trigger_condition);
+        append_key_value(out, "duration", transformation.duration_ticks);
+        append_key_value(out, "resource_cost", transformation.resource_cost);
+    }
+    out << "};";
+
+    out << "morphology[" << entity.morphology.size() << "]{";
+    for (auto const& [name, part] : entity.morphology) {
+        append_key_value(out, "name", name);
+        append_key_value(out, "parent", part.parent);
+        append_key_value(out, "x", part.x);
+        append_key_value(out, "y", part.y);
+        append_key_value(out, "z", part.z);
+        append_key_value(out, "size_x", part.size_x);
+        append_key_value(out, "size_y", part.size_y);
+        append_key_value(out, "size_z", part.size_z);
+        append_key_value(out, "color", part.color);
+        append_key_value(out, "rotation_degrees", part.rotation_degrees);
+        append_key_value(out, "emissive", part.emissive);
+        append_key_value(out, "electrical_marking", part.electrical_marking);
+    }
+    out << "};";
+
+    auto append_abilities = [&](std::string_view label, std::vector<CanonicalAbility> const& abilities) {
+        out << label << '[' << abilities.size() << "]{";
+        for (auto const& ability : abilities) {
+            append_key_value(out, "id", ability.id);
+            append_key_value(out, "effect", ability.effect);
+            append_key_value(out, "cost", ability.cost);
+            append_key_value(out, "cooldown_ticks", ability.cooldown_ticks);
+            append_key_value(out, "active_ticks", ability.active_ticks);
+            append_key_value(out, "origin_socket", ability.origin_socket);
+            append_key_value(out, "speed_mm_per_tick", ability.speed_mm_per_tick);
+            append_key_value(out, "collision_radius_mm", ability.collision_radius_mm);
+            append_key_value(out, "status_id", ability.status_id);
+            append_key_value(out, "status_duration_ticks", ability.status_duration_ticks);
+        }
+        out << "};";
+    };
+    append_abilities("abilities", entity.abilities);
+    append_abilities("storm_abilities", entity.storm_abilities);
+
+    out << "bones[" << entity.bones.size() << "]{";
+    for (auto const& bone : entity.bones) {
+        append_key_value(out, "id", bone.id);
+        append_key_value(out, "parent", bone.parent);
+        append_key_value(out, "x", bone.x);
+        append_key_value(out, "y", bone.y);
+        append_key_value(out, "z", bone.z);
+        append_key_value(out, "scale_x", bone.scale_x);
+        append_key_value(out, "scale_y", bone.scale_y);
+        append_key_value(out, "length_mm", bone.length_mm);
+        append_key_value(out, "min_rotation", bone.min_rotation);
+        append_key_value(out, "max_rotation", bone.max_rotation);
+    }
+    out << "};";
+
+    out << "sockets[" << entity.sockets.size() << "]{";
+    for (auto const& socket : entity.sockets) {
+        append_key_value(out, "id", socket.id);
+        append_key_value(out, "bone", socket.bone);
+        append_key_value(out, "x", socket.x);
+        append_key_value(out, "y", socket.y);
+        append_key_value(out, "z", socket.z);
+        append_key_value(out, "scale_x", socket.scale_x);
+        append_key_value(out, "scale_y", socket.scale_y);
+    }
+    out << "};";
+
+    out << "clips[" << entity.clips.size() << "]{";
+    for (auto const& clip : entity.clips) {
+        append_key_value(out, "name", clip.name);
+        append_key_value(out, "loop", clip.loop);
+        out << "tracks[" << clip.tracks.size() << "]{";
+        for (auto const& track : clip.tracks) {
+            append_key_value(out, "bone", track.bone);
+            out << "keys{";
+            for (auto const& [tick, value] : track.keys) {
+                append_key_value(out, "tick", tick);
+                append_key_value(out, "value", value);
+            }
+            out << "};";
+        }
+        out << "};events{";
+        for (auto const& [tick, id] : clip.clip_events) {
+            append_key_value(out, "tick", tick);
+            append_key_value(out, "id", id);
+        }
+        out << "};";
+    }
+    out << "};";
+
+    out << "states[" << entity.states.size() << "]{";
+    append_key_value(out, "initial_state", entity.initial_state);
+    for (auto const& state : entity.states) {
+        append_key_value(out, "name", state.name);
+        append_key_value(out, "clip", state.clip_name);
+    }
+    out << "};";
+
+    out << "transitions[" << entity.transitions.size() << "]{";
+    for (auto const& transition : entity.transitions) {
+        append_key_value(out, "from", transition.from_state);
+        append_key_value(out, "to", transition.to_state);
+        append_key_value(out, "ability", transition.ability_id);
+        append_key_value(out, "comparison", transition.comparison);
+        append_key_value(out, "threshold", transition.threshold);
+        append_key_value(out, "resource_cost", transition.resource_cost);
+        append_key_value(out, "cooldown_ticks", transition.cooldown_ticks);
+    }
+    out << "};";
+
+    out << "collision_shapes[" << entity.collision_shapes.size() << "]{";
+    for (auto const& shape : entity.collision_shapes) {
+        append_key_value(out, "id", shape.id);
+        append_key_value(out, "type", shape.shape_type);
+        append_key_value(out, "socket", shape.socket);
+        append_key_value(out, "radius_mm", shape.radius_mm);
+        append_key_value(out, "offset_x", shape.offset_x);
+        append_key_value(out, "offset_y", shape.offset_y);
+        append_key_value(out, "scale_x", shape.scale_x);
+        append_key_value(out, "scale_y", shape.scale_y);
+    }
+    out << "};collision_windows[" << entity.collision_windows.size() << "]{";
+    for (auto const& window : entity.collision_windows) {
+        append_key_value(out, "ability", window.ability_id);
+        append_key_value(out, "shape", window.shape_id);
+        append_key_value(out, "start_tick", window.start_tick);
+        append_key_value(out, "duration_ticks", window.duration_ticks);
+        append_key_value(out, "active", window.active);
+    }
+    out << "};resources[" << entity.resources.size() << "]{";
+    for (auto const& resource : entity.resources) {
+        append_key_value(out, "id", resource.id);
+        append_key_value(out, "type", resource.resource_type);
+        append_key_value(out, "min", resource.min);
+        append_key_value(out, "max", resource.max);
+        append_key_value(out, "initial", resource.initial);
+    }
+    out << "};";
+
+    if (entity.runtime) {
+        out << "runtime{";
+        append_key_value(out, "aggression", entity.runtime->aggression);
+        append_key_value(out, "curiosity", entity.runtime->curiosity);
+        append_key_value(out, "energy", entity.runtime->energy);
+        append_key_value(out, "loyalty", entity.runtime->loyalty);
+        out << "animation_intents{";
+        for (auto const& intent : entity.runtime->animation_intents) {
+            append_key_value(out, "behavior", intent.behavior_state);
+            append_key_value(out, "clip", intent.clip_name);
+        }
+        out << "};};";
+    }
+
+    return out.str();
+}
+
+} // namespace
 
 // ── CanonicalEntitySerializer ──────────────────────────────────────
 std::string CanonicalEntitySerializer::to_json(CanonicalEntity const& entity) {
@@ -87,17 +360,8 @@ DiagnosticResult CanonicalEntityValidator::validate(CanonicalEntity const& entit
 
 // ── CanonicalEntityIdentity ────────────────────────────────────────
 CanonicalEntityIdentity::CanonicalEntityIdentity(CanonicalEntity const& entity) {
-    // Deterministic identity: hash of key semantic fields
-    std::ostringstream os;
-    os << "gspl.canonical-entity/1.0|" << entity.stable_id << "|" << entity.name
-       << "|" << entity.classification << "|" << entity.rights
-       << "|" << entity.primary_color << "|" << entity.accent_color
-       << "|f:" << entity.forms.size() << "|t:" << entity.transformations.size()
-       << "|m:" << entity.morphology.size() << "|b:" << entity.bones.size()
-       << "|a:" << entity.abilities.size() << "|c:" << entity.clips.size()
-       << "|s:" << entity.states.size() << "|cs:" << entity.collision_shapes.size();
-    serialized_ = os.str();
-    hash_ = std::to_string(std::hash<std::string>{}(serialized_));
+    serialized_ = canonical_identity_payload(entity);
+    hash_ = gspl::sprites::sha256(serialized_);
 }
 
 std::string CanonicalEntityIdentity::compute(CanonicalEntity const& entity) const {
@@ -292,7 +556,12 @@ void Canonicalizer::lower_entity(EntityDecl const& entity, CanonicalEntity& out)
     }
 }
 
-void Canonicalizer::lower_gene_decl(GeneDecl const&, CanonicalEntity&) {}
+void Canonicalizer::lower_gene_decl(GeneDecl const&, CanonicalEntity&) {
+    // Gene declarations are collected and validated by GeneCompositionPhase, then
+    // applied as typed GeneInstance values in apply_genes(). Keeping this method
+    // side-effect free prevents duplicate lowering when entity traversal sees the
+    // original AST declarations.
+}
 
 void Canonicalizer::lower_resource(ResourceDecl const& resource, CanonicalEntity& out) {
     CanonicalResource cr;
@@ -432,19 +701,74 @@ void Canonicalizer::apply_genes(std::vector<GeneInstance> const& genes, Canonica
     for (auto const& g : genes) {
         if (g.descriptor.kind == GeneKind::identity) {
             auto it = g.values.find("stable_id");
-            if (it != g.values.end()) out.stable_id = it->second;
+            if (it != g.values.end()) out.stable_id = gene_value_to_string(it->second);
             it = g.values.find("name");
-            if (it != g.values.end()) out.name = it->second;
+            if (it != g.values.end()) out.name = gene_value_to_string(it->second);
         }
         if (g.descriptor.kind == GeneKind::classification) {
             auto it = g.values.find("taxonomy");
-            if (it != g.values.end()) out.classification = it->second;
+            if (it != g.values.end()) out.classification = gene_value_to_string(it->second);
+            it = g.values.find("classification");
+            if (it != g.values.end()) out.classification = gene_value_to_string(it->second);
         }
         if (g.descriptor.kind == GeneKind::appearance) {
             auto it = g.values.find("primary_color");
-            if (it != g.values.end()) out.primary_color = it->second;
+            if (it != g.values.end()) out.primary_color = gene_value_to_string(it->second);
             it = g.values.find("accent_color");
-            if (it != g.values.end()) out.accent_color = it->second;
+            if (it != g.values.end()) out.accent_color = gene_value_to_string(it->second);
+            it = g.values.find("storm_primary_color");
+            if (it != g.values.end()) out.storm_primary_color = gene_value_to_string(it->second);
+            it = g.values.find("storm_accent_color");
+            if (it != g.values.end()) out.storm_accent_color = gene_value_to_string(it->second);
+            it = g.values.find("emissive_color");
+            if (it != g.values.end()) out.emissive_color = gene_value_to_string(it->second);
+            it = g.values.find("aura_color");
+            if (it != g.values.end()) out.aura_color = gene_value_to_string(it->second);
+        }
+        if (g.descriptor.kind == GeneKind::morphology) {
+            auto part_it = g.values.find("part");
+            if (part_it != g.values.end()) {
+                CanonicalPart part;
+                part.name = gene_value_to_string(part_it->second);
+                if (auto it = g.values.find("parent"); it != g.values.end()) part.parent = gene_value_to_string(it->second);
+                if (auto it = g.values.find("x"); it != g.values.end()) part.x = gene_value_to_double(it->second);
+                if (auto it = g.values.find("y"); it != g.values.end()) part.y = gene_value_to_double(it->second);
+                if (auto it = g.values.find("z"); it != g.values.end()) part.z = gene_value_to_double(it->second);
+                if (auto it = g.values.find("size_x"); it != g.values.end()) part.size_x = gene_value_to_double(it->second, 1.0);
+                if (auto it = g.values.find("size_y"); it != g.values.end()) part.size_y = gene_value_to_double(it->second, 1.0);
+                if (auto it = g.values.find("size_z"); it != g.values.end()) part.size_z = gene_value_to_double(it->second, 1.0);
+                if (auto it = g.values.find("color"); it != g.values.end()) part.color = gene_value_to_string(it->second);
+                if (auto it = g.values.find("rotation_degrees"); it != g.values.end()) part.rotation_degrees = gene_value_to_double(it->second);
+                if (auto it = g.values.find("emissive"); it != g.values.end()) part.emissive = gene_value_to_bool(it->second);
+                if (auto it = g.values.find("electrical_marking"); it != g.values.end()) part.electrical_marking = gene_value_to_bool(it->second);
+                out.morphology[part.name] = std::move(part);
+            }
+        }
+        if (g.descriptor.kind == GeneKind::rights) {
+            auto it = g.values.find("classification");
+            if (it != g.values.end()) {
+                out.rights = gene_value_to_string(it->second);
+                out.rights_allow_export = out.rights.find("PROHIBITED") == std::string::npos &&
+                    out.rights.find("RESEARCH_ONLY") == std::string::npos;
+            }
+            it = g.values.find("allow_export");
+            if (it != g.values.end()) {
+                if (auto const* b = std::get_if<bool>(&it->second)) out.rights_allow_export = *b;
+            }
+        }
+        if (g.descriptor.kind == GeneKind::provenance) {
+            auto it = g.values.find("hash");
+            if (it != g.values.end()) out.provenance_hash = gene_value_to_string(it->second);
+            it = g.values.find("source");
+            if (it != g.values.end()) out.provenance_source = gene_value_to_string(it->second);
+        }
+        if (g.descriptor.kind == GeneKind::optimization) {
+            auto it = g.values.find("entropy_root");
+            if (it != g.values.end()) {
+                if (auto const* u = std::get_if<std::uint64_t>(&it->second)) out.entropy_root = *u;
+                else if (auto const* s = std::get_if<std::int64_t>(&it->second); s != nullptr && *s >= 0) out.entropy_root = static_cast<std::uint64_t>(*s);
+                else out.entropy_root = static_cast<std::uint64_t>(std::stoull(gene_value_to_string(it->second)));
+            }
         }
     }
     out.genes = genes;

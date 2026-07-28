@@ -33,6 +33,7 @@ public:
     std::unique_ptr<ModuleDecl> ast;
     SpriteIr ir;
     CanonicalEntity canonical;
+    std::vector<GeneInstance> composed_genes;
     DiagnosticResult diagnostics;
     ExpressionConfig expr_config;
     std::unordered_map<PassKind, PassDescriptor> pass_registry;
@@ -54,6 +55,7 @@ class PassManager {
 public:
     DiagnosticResult register_pass(std::unique_ptr<CompilerPass> pass);
     DiagnosticResult run_passes(CompilationContext& ctx, std::vector<PassKind> const& target_passes);
+    void reset_completion();
     std::vector<PassKind> topo_sort(std::vector<PassKind> const& targets) const;
 private:
     std::unordered_map<PassKind, std::unique_ptr<CompilerPass>> passes_;

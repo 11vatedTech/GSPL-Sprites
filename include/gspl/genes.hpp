@@ -6,6 +6,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <variant>
 #include <vector>
 
 namespace gspl {
@@ -29,9 +30,13 @@ struct GeneDescriptor {
     bool target_relevant{false};
 };
 
+using GeneValue = std::variant<std::string, bool, std::int64_t, std::uint64_t, double, std::vector<std::string>>;
+
+std::string gene_value_to_string(GeneValue const& value);
+
 struct GeneInstance {
     GeneDescriptor descriptor;
-    std::unordered_map<std::string, std::string> values;
+    std::unordered_map<std::string, GeneValue> values;
     std::string source_module;
     bool is_override{false};
 };

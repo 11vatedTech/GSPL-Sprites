@@ -7,16 +7,263 @@
 #include "gspl/lowering.hpp"
 #include "gspl_sprites/core.hpp"
 #include "gspl_sprites/package.hpp"
+#include <algorithm>
+#include <cctype>
+#include <charconv>
 #include <deque>
 #include <functional>
 #include <ranges>
 #include <set>
+#include <initializer_list>
+#include <string>
+#include <stdexcept>
+#include <string_view>
+#include <unordered_map>
 
 namespace gspl {
+namespace {
+
+std::string strip_gene_literal(std::string value) {
+    if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
+        return value.substr(1, value.size() - 2);
+    }
+    return value;
+}
+
+GeneValue lower_gene_value(LiteralNode const& literal, DiagnosticResult& diagnostics, SourceSpan span) {
+    auto text = strip_gene_literal(literal.value);
+    switch (literal.literal_kind) {
+    case TokenKind::boolean_literal:
+    case TokenKind::keyword_true:
+    case TokenKind::keyword_false:
+        if (text == "true") return true;
+        if (text == "false") return false;
+        diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
+                              "Invalid boolean gene value: " + literal.value, span);
+        return false;
+    case TokenKind::integer_literal: {
+        std::int64_t value{};
+        auto [ptr, ec] = std::from_chars(text.data(), text.data() + text.size(), value);
+        if (ec == std::errc{} && ptr == text.data() + text.size()) return value;
+        diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
+                              "Invalid signed integer gene value: " + literal.value, span);
+        return std::int64_t{};
+    }
+    case TokenKind::unsigned_literal: {
+        std::uint64_t value{};
+        auto [ptr, ec] = std::from_chars(text.data(), text.data() + text.size(), value);
+        if (ec == std::errc{} && ptr == text.data() + text.size()) return value;
+        diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
+                              "Invalid unsigned integer gene value: " + literal.value, span);
+        return std::uint64_t{};
+    }
+    case TokenKind::fixed_literal:
+    case TokenKind::duration_literal:
+    case TokenKind::distance_literal:
+    case TokenKind::angle_literal:
+    case TokenKind::percentage_literal: {
+        try {
+            std::size_t consumed{};
+            const double value = std::stod(text, &consumed);
+            if (consumed == text.size()) return value;
+        } catch (std::exception const&) {}
+        diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
+                              "Invalid numeric gene value: " + literal.value, span);
+        return 0.0;
+    }
+    case TokenKind::string_literal:
+    case TokenKind::identifier:
+    case TokenKind::color_literal:
+    default:
+        return text;
+    }
+}
+
+bool looks_like_hex_color(std::string_view value) {
+    if (value.size() != 7 || value.front() != '#') return false;
+    return std::ranges::all_of(value.substr(1), [](char c) {
+        return std::isxdigit(static_cast<unsigned char>(c)) != 0;
+    });
+}
+
+bool is_string_like(GeneValue const& value) {
+    return std::holds_alternative<std::string>(value);
+}
+
+bool is_integer_like(GeneValue const& value) {
+    return std::holds_alternative<std::int64_t>(value) || std::holds_alternative<std::uint64_t>(value);
+}
+
+bool is_number_like(GeneValue const& value) {
+    return is_integer_like(value) || std::holds_alternative<double>(value);
+}
+
+void validate_known_gene_payload(GeneDecl const& gene, GeneInstance const& instance, DiagnosticResult& diagnostics) {
+    auto reject = [&](std::string const& message) {
+        diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE, message, gene.span);
+    };
+    auto require_string = [&](std::string const& key) {
+        auto found = instance.values.find(key);
+        if (found != instance.values.end() && !is_string_like(found->second)) {
+            reject("Gene '" + gene.name + "' field '" + key + "' must be a string or identifier");
+        }
+    };
+    auto require_color = [&](std::string const& key) {
+        auto found = instance.values.find(key);
+        if (found == instance.values.end()) return;
+        if (!is_string_like(found->second) || !looks_like_hex_color(gene_value_to_string(found->second))) {
+            reject("Gene '" + gene.name + "' field '" + key + "' must be a #RRGGBB color");
+        }
+    };
+    auto require_number = [&](std::string const& key) {
+        auto found = instance.values.find(key);
+        if (found != instance.values.end() && !is_number_like(found->second)) {
+            reject("Gene '" + gene.name + "' field '" + key + "' must be numeric");
+        }
+    };
+    auto reject_unknown_except = [&](std::initializer_list<std::string_view> allowed) {
+        for (auto const& [key, value] : instance.values) {
+            static_cast<void>(value);
+            const bool ok = std::ranges::any_of(allowed, [&](std::string_view allowed_key) { return key == allowed_key; });
+            if (!ok) reject("Gene '" + gene.name + "' has unsupported field '" + key + "'");
+        }
+    };
+
+    switch (instance.descriptor.kind) {
+    case GeneKind::identity:
+        reject_unknown_except({"stable_id", "name"});
+        require_string("stable_id");
+        require_string("name");
+        break;
+    case GeneKind::classification:
+        reject_unknown_except({"taxonomy", "classification"});
+        require_string("taxonomy");
+        require_string("classification");
+        break;
+    case GeneKind::appearance:
+        reject_unknown_except({"primary_color", "accent_color", "storm_primary_color", "storm_accent_color", "emissive_color", "aura_color"});
+        require_color("primary_color");
+        require_color("accent_color");
+        require_color("storm_primary_color");
+        require_color("storm_accent_color");
+        require_color("emissive_color");
+        require_color("aura_color");
+        break;
+    case GeneKind::rights:
+        reject_unknown_except({"classification", "allow_export"});
+        require_string("classification");
+        break;
+    case GeneKind::provenance:
+        reject_unknown_except({"hash", "source"});
+        require_string("hash");
+        require_string("source");
+        break;
+    case GeneKind::morphology:
+        reject_unknown_except({"part", "parent", "x", "y", "z", "size_x", "size_y", "size_z", "color", "rotation_degrees", "emissive", "electrical_marking"});
+        require_string("part");
+        require_string("parent");
+        require_number("x");
+        require_number("y");
+        require_number("z");
+        require_number("size_x");
+        require_number("size_y");
+        require_number("size_z");
+        require_color("color");
+        require_number("rotation_degrees");
+        break;
+    case GeneKind::optimization: {
+        reject_unknown_except({"entropy_root"});
+        auto found = instance.values.find("entropy_root");
+        if (found != instance.values.end() && !is_integer_like(found->second)) {
+            reject("Gene 'optimization' field 'entropy_root' must be an integer");
+        }
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+GeneKind gene_kind_from_name(std::string_view name, bool& known) {
+    static const std::unordered_map<std::string_view, GeneKind> kinds{
+        {"identity", GeneKind::identity}, {"classification", GeneKind::classification},
+        {"lineage", GeneKind::lineage}, {"form", GeneKind::form},
+        {"transformation", GeneKind::transformation}, {"morphology", GeneKind::morphology},
+        {"anatomy", GeneKind::anatomy}, {"structure", GeneKind::structure},
+        {"proportion", GeneKind::proportion}, {"appearance", GeneKind::appearance},
+        {"palette", GeneKind::palette}, {"material", GeneKind::material},
+        {"surface", GeneKind::surface}, {"equipment", GeneKind::equipment},
+        {"motion", GeneKind::motion}, {"locomotion", GeneKind::locomotion},
+        {"animation", GeneKind::animation}, {"expression", GeneKind::expression},
+        {"behavior", GeneKind::behavior}, {"perception", GeneKind::perception},
+        {"memory", GeneKind::memory}, {"emotion", GeneKind::emotion},
+        {"ability", GeneKind::ability}, {"combat", GeneKind::combat},
+        {"projectile", GeneKind::projectile}, {"effect", GeneKind::effect},
+        {"interaction", GeneKind::interaction}, {"physics", GeneKind::physics},
+        {"collision", GeneKind::collision}, {"audio_event", GeneKind::audio_event},
+        {"audio", GeneKind::audio_event}, {"projection", GeneKind::projection},
+        {"optimization", GeneKind::optimization}, {"target", GeneKind::target},
+        {"rights", GeneKind::rights}, {"provenance", GeneKind::provenance},
+    };
+    const auto found = kinds.find(name);
+    known = found != kinds.end();
+    return known ? found->second : GeneKind::identity;
+}
+
+void collect_gene_declarations(AstNode const& node, std::vector<GeneDecl const*>& genes) {
+    if (auto const* gene = dynamic_cast<GeneDecl const*>(&node)) {
+        genes.push_back(gene);
+        return;
+    }
+    if (auto const* module = dynamic_cast<ModuleDecl const*>(&node)) {
+        for (auto const& decl : module->declarations) collect_gene_declarations(*decl, genes);
+        return;
+    }
+    if (auto const* entity = dynamic_cast<EntityDecl const*>(&node)) {
+        for (auto const& child : entity->body) collect_gene_declarations(*child, genes);
+    }
+}
+
+GeneInstance lower_gene_instance(GeneDecl const& gene, GeneRegistry const& registry, DiagnosticResult& diagnostics) {
+    bool known = false;
+    const auto kind = gene_kind_from_name(gene.name, known);
+    if (!known) {
+        diagnostics.add_error(DiagnosticCode::GSPL_GENE_UNKNOWN,
+                              "Unknown gene kind: " + gene.name, gene.span);
+        return {};
+    }
+    auto const* descriptor = registry.lookup(kind);
+    if (descriptor == nullptr) {
+        diagnostics.add_error(DiagnosticCode::GSPL_GENE_UNKNOWN,
+                              "Unregistered gene kind: " + gene.name, gene.span);
+        return {};
+    }
+    GeneInstance instance;
+    instance.descriptor = *descriptor;
+    instance.source_module = gene.name;
+    for (auto const& child : gene.body) {
+        auto const* attr = dynamic_cast<AttributeNode const*>(child.get());
+        if (attr == nullptr || attr->value == nullptr) continue;
+        auto const* literal = dynamic_cast<LiteralNode const*>(attr->value.get());
+        if (literal == nullptr) {
+            diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
+                                  "Gene attribute is not a literal: " + attr->key, attr->span);
+            continue;
+        }
+        instance.values[attr->key] = lower_gene_value(*literal, diagnostics, attr->span);
+    }
+    validate_known_gene_payload(gene, instance, diagnostics);
+    return instance;
+}
+
+} // namespace
 
 void CompilationContext::reset() {
     tokens.clear();
     ast.reset();
+    ir = {};
+    canonical = {};
+    composed_genes.clear();
     diagnostics = {};
     pass_registry.clear();
 }
@@ -88,8 +335,13 @@ std::vector<PassKind> PassManager::topo_sort(std::vector<PassKind> const& target
     return sorted;
 }
 
+void PassManager::reset_completion() {
+    completed_.clear();
+}
+
 DiagnosticResult PassManager::run_passes(CompilationContext& ctx,
                                           std::vector<PassKind> const& target_passes) {
+    reset_completion();
     auto sorted = topo_sort(target_passes);
     for (auto kind : sorted) {
         auto it = passes_.find(kind);
@@ -160,7 +412,29 @@ DiagnosticResult TypeCheckPhase::execute(CompilationContext& ctx) {
 }
 
 DiagnosticResult GeneCompositionPhase::execute(CompilationContext& ctx) {
-    (void)ctx;
+    if (!ctx.ast) return {};
+    GeneRegistry registry;
+    std::vector<GeneDecl const*> declarations;
+    collect_gene_declarations(*ctx.ast, declarations);
+    std::vector<GeneInstance> genes;
+    genes.reserve(declarations.size());
+    std::set<GeneKind> non_repeatable_seen;
+    for (auto const* declaration : declarations) {
+        auto instance = lower_gene_instance(*declaration, registry, ctx.diagnostics);
+        if (instance.descriptor.type_id.empty()) continue;
+        const bool repeatable = instance.descriptor.kind == GeneKind::ability ||
+            instance.descriptor.kind == GeneKind::morphology;
+        if (!repeatable && !non_repeatable_seen.insert(instance.descriptor.kind).second) {
+            ctx.diagnostics.add_error(DiagnosticCode::GSPL_GENE_DUPLICATE,
+                                      "Duplicate non-repeatable gene declaration: " + declaration->name,
+                                      declaration->span);
+            continue;
+        }
+        genes.push_back(std::move(instance));
+    }
+    auto validation = registry.validate_composition(genes);
+    for (auto& d : validation.diagnostics) ctx.diagnostics.add(std::move(d));
+    ctx.composed_genes = registry.compose({}, std::move(genes));
     return {};
 }
 
@@ -200,7 +474,7 @@ DiagnosticResult CanonicalizePhase::execute(CompilationContext& ctx) {
         return DiagnosticResult{{d}};
     }
     GeneRegistry registry;
-    auto gene_result = registry.validate_composition({});
+    auto gene_result = registry.validate_composition(ctx.composed_genes);
     auto has_errors = std::any_of(gene_result.diagnostics.begin(), gene_result.diagnostics.end(),
         [](auto const& d) { return d.severity >= DiagnosticSeverity::error; });
     if (has_errors) {
@@ -208,7 +482,7 @@ DiagnosticResult CanonicalizePhase::execute(CompilationContext& ctx) {
         return ctx.diagnostics;
     }
     Canonicalizer canonicalizer(ctx.sources);
-    ctx.canonical = canonicalizer.lower(*ctx.ast, {});
+    ctx.canonical = canonicalizer.lower(*ctx.ast, ctx.composed_genes);
     for (auto const& d : canonicalizer.diagnostics().diagnostics) ctx.diagnostics.add(d);
     return {};
 }

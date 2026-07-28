@@ -2,8 +2,32 @@
 #include <algorithm>
 #include <ranges>
 #include <set>
+#include <sstream>
+#include <type_traits>
 
 namespace gspl {
+
+std::string gene_value_to_string(GeneValue const& value) {
+    return std::visit([](auto const& v) -> std::string {
+        using T = std::decay_t<decltype(v)>;
+        if constexpr (std::is_same_v<T, std::string>) return v;
+        else if constexpr (std::is_same_v<T, bool>) return v ? "true" : "false";
+        else if constexpr (std::is_same_v<T, std::int64_t>) return std::to_string(v);
+        else if constexpr (std::is_same_v<T, std::uint64_t>) return std::to_string(v);
+        else if constexpr (std::is_same_v<T, double>) {
+            std::ostringstream out;
+            out << v;
+            return out.str();
+        } else {
+            std::ostringstream out;
+            for (std::size_t i = 0; i < v.size(); ++i) {
+                if (i > 0) out << ',';
+                out << v[i];
+            }
+            return out.str();
+        }
+    }, value);
+}
 
 GeneRegistry::GeneRegistry() {
     auto reg = [this](GeneKind k, std::string tid, std::vector<GeneKind> deps,
@@ -98,15 +122,19 @@ DiagnosticResult GeneRegistry::validate_composition(std::vector<GeneInstance> co
 std::vector<GeneInstance> GeneRegistry::compose(std::vector<GeneInstance> base,
                                                   std::vector<GeneInstance> overrides) const {
     for (auto& ov : overrides) {
-        auto it = std::ranges::find_if(base, [&](auto const& b) {
-            return b.descriptor.kind == ov.descriptor.kind;
-        });
-        if (it != base.end()) {
-            ov.is_override = true;
-            *it = std::move(ov);
-        } else {
-            base.push_back(std::move(ov));
+        const bool repeatable = ov.descriptor.kind == GeneKind::ability ||
+            ov.descriptor.kind == GeneKind::morphology;
+        if (!repeatable) {
+            auto it = std::ranges::find_if(base, [&](auto const& b) {
+                return b.descriptor.kind == ov.descriptor.kind;
+            });
+            if (it != base.end()) {
+                ov.is_override = true;
+                *it = std::move(ov);
+                continue;
+            }
         }
+        base.push_back(std::move(ov));
     }
     return base;
 }

@@ -99,10 +99,10 @@ int main() {
 
             gspl::GeneInstance g;
             g.descriptor = *reg.lookup(gspl::GeneKind::identity);
-            g.values["stable_id"] = "base.entity";
+            g.values["stable_id"] = std::string{"base.entity"};
             base.push_back(g);
 
-            g.values["stable_id"] = "override.entity";
+            g.values["stable_id"] = std::string{"override.entity"};
             overrides.push_back(g);
 
             auto composed = reg.compose(base, overrides);
@@ -140,6 +140,17 @@ int main() {
                 if (d.severity >= gspl::DiagnosticSeverity::error) has_gene_err = true;
             }
             check(!has_gene_err, "Gene pipeline should succeed");
+            check(ctx.composed_genes.size() == 2, "Gene pipeline should collect identity and classification genes");
+            bool found_stable_id = false;
+            bool found_taxonomy = false;
+            for (auto const& gene : ctx.composed_genes) {
+                auto stable = gene.values.find("stable_id");
+                if (stable != gene.values.end() && gspl::gene_value_to_string(stable->second) == "test.gene.entity") found_stable_id = true;
+                auto taxonomy = gene.values.find("taxonomy");
+                if (taxonomy != gene.values.end() && gspl::gene_value_to_string(taxonomy->second) == "test.sample") found_taxonomy = true;
+            }
+            check(found_stable_id, "Identity gene stable_id should be preserved");
+            check(found_taxonomy, "Classification gene taxonomy should be preserved");
         }
 
         // ---- 9. Gene dependency conflict detection via compilation ----
