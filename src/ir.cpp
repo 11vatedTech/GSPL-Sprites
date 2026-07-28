@@ -10,7 +10,7 @@
 namespace gspl {
 namespace {
 
-// ── minimal bounded JSON helpers ───────────────────────────
+// ── minimal bounded JSON helpers for serialization ─────────
 
 std::string ir_json_escape(std::string_view sv) {
     std::ostringstream out;
@@ -134,157 +134,6 @@ std::string serialize_entity_ir(EntityIr const& entity) {
     return ss.str();
 }
 
-// ── minimal JSON reader ───────────────────────────────────
-
-class JsonReader {
-public:
-    explicit JsonReader(std::string_view src) : src_(src), pos_(0) {}
-
-    void skip_ws() {
-        while (pos_ < src_.size() && (src_[pos_] == ' ' || src_[pos_] == '\n' ||
-               src_[pos_] == '\r' || src_[pos_] == '\t')) ++pos_;
-    }
-
-    bool expect(char c) {
-        skip_ws();
-        if (pos_ >= src_.size() || src_[pos_] != c) return false;
-        ++pos_;
-        return true;
-    }
-
-    std::string read_string() {
-        skip_ws();
-        if (pos_ >= src_.size() || src_[pos_] != '"') return {};
-        ++pos_;
-        std::string out;
-        while (pos_ < src_.size() && src_[pos_] != '"') {
-            if (src_[pos_] == '\\' && pos_ + 1 < src_.size()) {
-                ++pos_;
-                switch (src_[pos_]) {
-                case '"': out += '"'; break;
-                case '\\': out += '\\'; break;
-                case '/': out += '/'; break;
-                case 'n': out += '\n'; break;
-                case 'r': out += '\r'; break;
-                case 't': out += '\t'; break;
-                case 'u': {
-                    if (pos_ + 4 < src_.size()) {
-                        auto hex = src_.substr(pos_ + 1, 4);
-                        unsigned cp = 0;
-                        for (auto hc : hex) {
-                            cp <<= 4;
-                            if (hc >= '0' && hc <= '9') cp |= (hc - '0');
-                            else if (hc >= 'a' && hc <= 'f') cp |= (hc - 'a' + 10);
-                            else if (hc >= 'A' && hc <= 'F') cp |= (hc - 'A' + 10);
-                        }
-                        if (cp < 0x80) out += static_cast<char>(cp);
-                        else out += '?';
-                        pos_ += 4;
-                    }
-                    continue; // skip outer ++pos_ 
-                }
-                default: out += src_[pos_]; break;
-                }
-            } else {
-                out += src_[pos_];
-            }
-            ++pos_;
-        }
-        if (pos_ < src_.size()) ++pos_; // skip closing quote
-        return out;
-    }
-
-    std::int64_t read_int(std::int64_t fallback = 0) {
-        skip_ws();
-        std::string num;
-        if (pos_ < src_.size() && src_[pos_] == '-') { num += src_[pos_]; ++pos_; }
-        while (pos_ < src_.size() && std::isdigit(static_cast<unsigned char>(src_[pos_]))) {
-            num += src_[pos_];
-            ++pos_;
-        }
-        if (num.empty()) return fallback;
-        std::int64_t v{};
-        auto [ptr, ec] = std::from_chars(num.data(), num.data() + num.size(), v);
-        if (ec != std::errc{}) return fallback;
-        return v;
-    }
-
-    bool read_bool() {
-        skip_ws();
-        if (pos_ + 4 <= src_.size() && src_.substr(pos_, 4) == "true") {
-            pos_ += 4;
-            return true;
-        }
-        if (pos_ + 5 <= src_.size() && src_.substr(pos_, 5) == "false") {
-            pos_ += 5;
-            return false;
-        }
-        return false;
-    }
-
-    bool has_more() const { return pos_ < src_.size(); }
-
-    std::string read_typed_value() {
-        skip_ws();
-        if (pos_ >= src_.size()) return {};
-        char c = src_[pos_];
-        if (c == '"') {
-            auto start = pos_;
-            read_string();
-            return std::string(src_.substr(start, pos_ - start));
-        }
-        if (c == '{' || c == '[') {
-            auto start = pos_;
-            skip_value();
-            return std::string(src_.substr(start, pos_ - start));
-        }
-        std::string scalar;
-        while (pos_ < src_.size() && src_[pos_] != ',' && src_[pos_] != '}' &&
-               src_[pos_] != ']' && src_[pos_] != '\n' && src_[pos_] != '\r') {
-            scalar += src_[pos_];
-            ++pos_;
-        }
-        return scalar;
-    }
-
-    void skip_value() {
-        skip_ws();
-        if (pos_ >= src_.size()) return;
-        char c = src_[pos_];
-        if (c == '"') {
-            read_string();
-        } else if (c == '{') {
-            int depth = 1; ++pos_;
-            while (pos_ < src_.size() && depth > 0) {
-                if (src_[pos_] == '{') ++depth;
-                else if (src_[pos_] == '}') --depth;
-                else if (src_[pos_] == '"') read_string();
-                else ++pos_;
-            }
-            if (pos_ < src_.size()) ++pos_; // skip past '}'
-        } else if (c == '[') {
-            int depth = 1; ++pos_;
-            while (pos_ < src_.size() && depth > 0) {
-                if (src_[pos_] == '[') ++depth;
-                else if (src_[pos_] == ']') --depth;
-                else if (src_[pos_] == '"') read_string();
-                else ++pos_;
-            }
-            if (pos_ < src_.size()) ++pos_; // skip past ']'
-        } else if (c == 't' || c == 'f') {
-            read_bool();
-        } else {
-            // number or null — consume until delimiter
-            while (pos_ < src_.size() && src_[pos_] != ',' && src_[pos_] != '}' &&
-                   src_[pos_] != ']' && src_[pos_] != '\n' && src_[pos_] != '\r') ++pos_;
-        }
-    }
-
-private:
-    std::string_view src_;
-    std::size_t pos_;
-};
-
 } // namespace
 
 // ── IrSerializer ────────────────────────────────────────────
@@ -311,8 +160,21 @@ std::string IrSerializer::serialize(SpriteIr const& ir) {
     }
     ss << "]";
 
-    ss << ",\n  \"runtime_plans\": " << ir.runtime_plans.size();
-    ss << ",\n  \"package_plans\": " << ir.package_plans.size();
+    ss << ",\n  \"runtime_plans\": [";
+    for (std::size_t i = 0; i < ir.runtime_plans.size(); ++i) {
+        if (i > 0) ss << ",";
+        ss << "{\"kind\":" << static_cast<std::uint32_t>(ir.runtime_plans[i]->kind)
+           << ",\"identity\":\"" << ir_json_escape(ir.runtime_plans[i]->identity) << "\"}";
+    }
+    ss << "]";
+
+    ss << ",\n  \"package_plans\": [";
+    for (std::size_t i = 0; i < ir.package_plans.size(); ++i) {
+        if (i > 0) ss << ",";
+        ss << "{\"kind\":" << static_cast<std::uint32_t>(ir.package_plans[i]->kind)
+           << ",\"identity\":\"" << ir_json_escape(ir.package_plans[i]->identity) << "\"}";
+    }
+    ss << "]";
     ss << "\n}";
     return ss.str();
 }
@@ -327,7 +189,12 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json) {
         return result;
     }
 
-    JsonReader r(json);
+    BoundedJsonReader r(json);
+    if (r.has_error()) {
+        result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR,
+                                     r.error_message(), {});
+        return result;
+    }
     if (!r.expect('{')) {
         result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR,
                                      "deserialize: expected '{'", {});
@@ -338,9 +205,8 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json) {
 
     // Parse top-level key-value pairs
     while (r.has_more()) {
-        r.skip_ws();
         auto key = r.read_string();
-        if (key.empty()) break;
+        if (key.empty() || r.has_error()) break;
         if (!r.expect(':')) break;
 
         parsed_any = true;
@@ -352,84 +218,130 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json) {
         } else if (key == "seed_identity") {
             ir.seed_identity = r.read_string();
         } else if (key == "schema_version") {
-            r.read_int();
+            r.read_int64();
         } else if (key == "entity") {
-            r.skip_ws();
             if (r.expect('{')) {
                 ir.entity = std::make_unique<EntityIr>();
                 ir.entity->kind = IrNodeKind::entity;
                 while (r.has_more()) {
-                    r.skip_ws();
                     auto ek = r.read_string();
-                    if (ek.empty()) break;
+                    if (ek.empty() || r.has_error()) break;
                     if (!r.expect(':')) break;
                     if (ek == "identity") {
                         ir.entity->identity = r.read_string();
                     } else if (ek == "entity_id") {
                         ir.entity->entity_id = r.read_string();
                     } else if (ek == "schema_version") {
-                        ir.entity->schema_version = static_cast<std::uint32_t>(r.read_int());
+                        ir.entity->schema_version = static_cast<std::uint32_t>(r.read_int64());
                     } else if (ek == "dependency_ids") {
-                        r.skip_ws();
                         if (r.expect('[')) {
                             for (;;) {
-                                r.skip_ws();
                                 auto dep = r.read_string();
                                 if (dep.empty()) break;
                                 ir.entity->dependency_ids.push_back(dep);
-                                r.skip_ws();
                                 if (!r.expect(',')) break;
                             }
-                            r.expect(']'); // consume closing bracket
+                            r.expect(']');
+                        }
+                    } else if (ek == "properties") {
+                        if (r.expect('{')) {
+                            while (r.has_more()) {
+                                auto pk = r.read_string();
+                                if (pk.empty()) break;
+                                if (!r.expect(':')) break;
+                                ir.entity->properties[pk] = r.read_string();
+                                if (!r.expect(',')) break;
+                            }
+                            r.expect('}');
+                        }
+                    } else if (ek == "children") {
+                        if (r.expect('[')) {
+                            while (r.has_more()) {
+                                if (!r.expect('{')) break;
+                                auto child = std::make_unique<IrNode>();
+                                while (r.has_more()) {
+                                    auto ck = r.read_string();
+                                    if (ck.empty()) break;
+                                    if (!r.expect(':')) break;
+                                    if (ck == "kind") {
+                                        child->kind = static_cast<IrNodeKind>(r.read_int64());
+                                    } else if (ck == "identity") {
+                                        child->identity = r.read_string();
+                                    } else if (ck == "schema_version") {
+                                        child->schema_version = static_cast<std::uint32_t>(r.read_int64());
+                                    } else if (ck == "properties") {
+                                        if (r.expect('{')) {
+                                            while (r.has_more()) {
+                                                auto pk = r.read_string();
+                                                if (pk.empty()) break;
+                                                if (!r.expect(':')) break;
+                                                child->properties[pk] = r.read_string();
+                                                if (!r.expect(',')) break;
+                                            }
+                                            r.expect('}');
+                                        }
+                                    } else if (ck == "dependency_ids") {
+                                        if (r.expect('[')) {
+                                            while (r.has_more()) {
+                                                auto dep = r.read_string();
+                                                if (dep.empty()) break;
+                                                child->dependency_ids.push_back(dep);
+                                                if (!r.expect(',')) break;
+                                            }
+                                            r.expect(']');
+                                        }
+                                    } else {
+                                        r.skip_value();
+                                    }
+                                    if (!r.expect(',')) break;
+                                }
+                                r.expect('}');
+                                ir.entity->children.push_back(std::move(child));
+                                if (!r.expect(',')) break;
+                            }
+                            r.expect(']');
                         }
                     } else if (ek == "genes") {
-                        r.skip_ws();
                         if (r.expect('[')) {
                             GeneRegistry registry;
-                            for (;;) {
-                                r.skip_ws();
+                            while (r.has_more()) {
                                 if (!r.expect('{')) break;
                                 GeneInstance gi;
                                 while (r.has_more()) {
-                                    r.skip_ws();
                                     auto gk = r.read_string();
                                     if (gk.empty()) break;
                                     if (!r.expect(':')) break;
                                     if (gk == "kind") {
-                                        auto kind_val = static_cast<GeneKind>(r.read_int());
+                                        auto kind_val = static_cast<GeneKind>(r.read_int64());
                                         auto const* desc = registry.lookup(kind_val);
                                         if (desc) gi.descriptor = *desc;
+                                        else gi.descriptor.kind = kind_val;
                                     } else if (gk == "schema") {
-                                        gi.descriptor.schema_version = static_cast<std::uint32_t>(r.read_int());
+                                        gi.descriptor.schema_version = static_cast<std::uint32_t>(r.read_int64());
                                     } else if (gk == "type") {
                                         gi.descriptor.type_id = r.read_string();
                                     } else if (gk == "source") {
                                         gi.source_module = r.read_string();
                                     } else if (gk == "values") {
-                                        r.skip_ws();
                                         if (r.expect('{')) {
-                                            for (;;) {
-                                                r.skip_ws();
+                                            while (r.has_more()) {
                                                 auto vk = r.read_string();
                                                 if (vk.empty()) break;
                                                 if (!r.expect(':')) break;
-                                                r.skip_ws();
                                                 if (r.expect('{')) {
                                                     std::uint32_t tag_val = 0;
                                                     std::string raw_val;
                                                     while (r.has_more()) {
-                                                        r.skip_ws();
                                                         auto tk = r.read_string();
                                                         if (tk.empty()) break;
                                                         if (!r.expect(':')) break;
                                                         if (tk == "t") {
-                                                            tag_val = static_cast<std::uint32_t>(r.read_int());
+                                                            tag_val = static_cast<std::uint32_t>(r.read_int64());
                                                         } else if (tk == "v") {
                                                             raw_val = r.read_typed_value();
                                                         } else {
                                                             r.skip_value();
                                                         }
-                                                        r.skip_ws();
                                                         if (!r.expect(',')) break;
                                                     }
                                                     r.expect('}');
@@ -444,44 +356,164 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json) {
                                                         gi.values[vk] = std::string{vv};
                                                     }
                                                 }
-                                                r.skip_ws();
                                                 if (!r.expect(',')) break;
                                             }
+                                            r.expect('}');
                                         }
                                     } else {
                                         r.skip_value();
                                     }
-                                    r.skip_ws();
                                     if (!r.expect(',')) break;
                                 }
+                                r.expect('}');
                                 if (!gi.descriptor.type_id.empty()) {
                                     ir.entity->genes.push_back(std::move(gi));
                                 }
-                                r.skip_ws();
                                 if (!r.expect(',')) break;
                             }
-                            r.expect(']'); // consume closing bracket
+                            r.expect(']');
                         }
                     } else {
                         r.skip_value();
                     }
-                    r.skip_ws();
-                    if (!r.expect(',')) {
-                        r.skip_ws();
-                        break; // '}' or end-of-object
-                    }
+                    if (!r.expect(',')) break;
                 }
+                r.expect('}');
+            }
+        } else if (key == "representations") {
+            if (r.expect('[')) {
+                while (r.has_more()) {
+                    if (!r.expect('{')) break;
+                    auto rep = std::make_unique<IrNode>();
+                    while (r.has_more()) {
+                        auto rk = r.read_string();
+                        if (rk.empty()) break;
+                        if (!r.expect(':')) break;
+                        if (rk == "kind") {
+                            rep->kind = static_cast<IrNodeKind>(r.read_int64());
+                        } else if (rk == "identity") {
+                            rep->identity = r.read_string();
+                        } else if (rk == "schema_version") {
+                            rep->schema_version = static_cast<std::uint32_t>(r.read_int64());
+                        } else if (rk == "properties") {
+                            if (r.expect('{')) {
+                                while (r.has_more()) {
+                                    auto pk = r.read_string();
+                                    if (pk.empty()) break;
+                                    if (!r.expect(':')) break;
+                                    rep->properties[pk] = r.read_string();
+                                    if (!r.expect(',')) break;
+                                }
+                                r.expect('}');
+                            }
+                        } else if (rk == "dependency_ids") {
+                            if (r.expect('[')) {
+                                while (r.has_more()) {
+                                    auto dep = r.read_string();
+                                    if (dep.empty()) break;
+                                    rep->dependency_ids.push_back(dep);
+                                    if (!r.expect(',')) break;
+                                }
+                                r.expect(']');
+                            }
+                        } else {
+                            r.skip_value();
+                        }
+                        if (!r.expect(',')) break;
+                    }
+                    r.expect('}');
+                    ir.representations.push_back(std::move(rep));
+                    if (!r.expect(',')) break;
+                }
+                r.expect(']');
+            }
+        } else if (key == "runtime_plans") {
+            if (r.expect('[')) {
+                while (r.has_more()) {
+                    if (!r.expect('{')) break;
+                    auto plan = std::make_unique<IrNode>();
+                    while (r.has_more()) {
+                        auto pk = r.read_string();
+                        if (pk.empty()) break;
+                        if (!r.expect(':')) break;
+                        if (pk == "kind") plan->kind = static_cast<IrNodeKind>(r.read_int64());
+                        else if (pk == "identity") plan->identity = r.read_string();
+                        else if (pk == "schema_version") plan->schema_version = static_cast<std::uint32_t>(r.read_int64());
+                        else if (pk == "properties" && r.expect('{')) {
+                            while (r.has_more()) {
+                                auto ppk = r.read_string();
+                                if (ppk.empty()) break;
+                                if (!r.expect(':')) break;
+                                plan->properties[ppk] = r.read_string();
+                                if (!r.expect(',')) break;
+                            }
+                            r.expect('}');
+                        } else if (pk == "dependency_ids" && r.expect('[')) {
+                            while (r.has_more()) {
+                                auto dep = r.read_string();
+                                if (dep.empty()) break;
+                                plan->dependency_ids.push_back(dep);
+                                if (!r.expect(',')) break;
+                            }
+                            r.expect(']');
+                        } else r.skip_value();
+                        if (!r.expect(',')) break;
+                    }
+                    r.expect('}');
+                    ir.runtime_plans.push_back(std::move(plan));
+                    if (!r.expect(',')) break;
+                }
+                r.expect(']');
+            }
+        } else if (key == "package_plans") {
+            if (r.expect('[')) {
+                while (r.has_more()) {
+                    if (!r.expect('{')) break;
+                    auto plan = std::make_unique<IrNode>();
+                    while (r.has_more()) {
+                        auto pk = r.read_string();
+                        if (pk.empty()) break;
+                        if (!r.expect(':')) break;
+                        if (pk == "kind") plan->kind = static_cast<IrNodeKind>(r.read_int64());
+                        else if (pk == "identity") plan->identity = r.read_string();
+                        else if (pk == "schema_version") plan->schema_version = static_cast<std::uint32_t>(r.read_int64());
+                        else if (pk == "properties" && r.expect('{')) {
+                            while (r.has_more()) {
+                                auto ppk = r.read_string();
+                                if (ppk.empty()) break;
+                                if (!r.expect(':')) break;
+                                plan->properties[ppk] = r.read_string();
+                                if (!r.expect(',')) break;
+                            }
+                            r.expect('}');
+                        } else if (pk == "dependency_ids" && r.expect('[')) {
+                            while (r.has_more()) {
+                                auto dep = r.read_string();
+                                if (dep.empty()) break;
+                                plan->dependency_ids.push_back(dep);
+                                if (!r.expect(',')) break;
+                            }
+                            r.expect(']');
+                        } else r.skip_value();
+                        if (!r.expect(',')) break;
+                    }
+                    r.expect('}');
+                    ir.package_plans.push_back(std::move(plan));
+                    if (!r.expect(',')) break;
+                }
+                r.expect(']');
             }
         } else {
             r.skip_value();
         }
-        r.skip_ws();
-        if (!r.expect(',')) {
-            r.skip_ws();
-            break; // '}' or end-of-object
-        }
+        if (!r.expect(',')) break;
     }
 
+    if (r.has_error()) {
+        result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR,
+                                     r.error_message(), {});
+        return result;
+    }
     if (!parsed_any) {
         result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR,
                                      "deserialize: no fields parsed", {});

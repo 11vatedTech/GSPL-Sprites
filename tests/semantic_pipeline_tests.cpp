@@ -923,7 +923,27 @@ int main() {
             rt.animation_intents.push_back(intent);
             ce.runtime = rt;
 
-            // Genes are tested via SpriteIr round-trip below; not round-tripped by CanonicalEntity to_json/from_json
+            // Genes — full typed round-trip
+            gspl::GeneInstance gene1;
+            gene1.descriptor.kind = gspl::GeneKind::identity;
+            gene1.descriptor.schema_version = 1;
+            gene1.descriptor.type_id = "gene.identity/1.0";
+            gene1.source_module = "maximal_test";
+            gene1.values["stable_id"] = std::string{"maximal.roundtrip.test"};
+            gene1.values["name"] = std::string{"Maximal Roundtrip Entity"};
+            ce.genes.push_back(gene1);
+
+            gspl::GeneInstance gene2;
+            gene2.descriptor.kind = gspl::GeneKind::appearance;
+            gene2.descriptor.schema_version = 1;
+            gene2.descriptor.type_id = "gene.appearance/1.0";
+            gene2.source_module = "maximal_test";
+            gene2.values["is_boss"] = true;
+            gene2.values["level"] = static_cast<std::int64_t>(99);
+            gene2.values["experience"] = static_cast<std::uint64_t>(999999);
+            gene2.values["scale_factor"] = 1.5;
+            gene2.values["tags"] = std::vector<std::string>{"dragon", "fire", "boss"};
+            ce.genes.push_back(gene2);
 
             // Round-trip
             auto json = gspl::CanonicalEntitySerializer::to_json(ce);
@@ -1040,6 +1060,46 @@ int main() {
             auto hash_after = gspl::CanonicalEntityIdentity(r).hash();
             check(hash_before == hash_after, "DEF-0012: identity hash survives maximally populated round-trip");
 
+            // Gene round-trip
+            check(r.genes.size() == ce.genes.size(),
+                  ("DEF-0012: genes count round-trip, expected " + std::to_string(ce.genes.size()) +
+                   " got " + std::to_string(r.genes.size())).c_str());
+            for (std::size_t gi = 0; gi < ce.genes.size() && gi < r.genes.size(); ++gi) {
+                check(r.genes[gi].descriptor.kind == ce.genes[gi].descriptor.kind,
+                      ("DEF-0012: gene " + std::to_string(gi) + " kind").c_str());
+                check(r.genes[gi].descriptor.schema_version == ce.genes[gi].descriptor.schema_version,
+                      ("DEF-0012: gene " + std::to_string(gi) + " schema").c_str());
+                check(r.genes[gi].descriptor.type_id == ce.genes[gi].descriptor.type_id,
+                      ("DEF-0012: gene " + std::to_string(gi) + " type_id").c_str());
+                check(r.genes[gi].source_module == ce.genes[gi].source_module,
+                      ("DEF-0012: gene " + std::to_string(gi) + " source_module").c_str());
+                check(r.genes[gi].values.size() == ce.genes[gi].values.size(),
+                      ("DEF-0012: gene " + std::to_string(gi) + " values count").c_str());
+                // Verify each value round-trips with correct type
+                for (auto const& [vk, vv] : ce.genes[gi].values) {
+                    check(r.genes[gi].values.count(vk) == 1,
+                          ("DEF-0012: gene " + std::to_string(gi) + " value key '" + vk + "' present").c_str());
+                    auto const& rv = r.genes[gi].values.at(vk);
+                    check(rv.index() == vv.index(),
+                          ("DEF-0012: gene " + std::to_string(gi) + " value '" + vk + "' type preserved").c_str());
+                }
+            }
+            // Verify specific GeneValue types survived
+            if (r.genes.size() >= 2) {
+                auto const& g2 = r.genes[1];
+                check(g2.values.count("is_boss") == 1, "DEF-0012: gene bool value key present");
+                check(g2.values.count("level") == 1, "DEF-0012: gene int64 value key present");
+                check(g2.values.count("experience") == 1, "DEF-0012: gene uint64 value key present");
+                check(g2.values.count("scale_factor") == 1, "DEF-0012: gene double value key present");
+                check(g2.values.count("tags") == 1, "DEF-0012: gene string_list value key present");
+                // Check type preservation via variant index
+                check(std::get_if<bool>(&g2.values.at("is_boss")) != nullptr, "DEF-0012: is_boss is bool");
+                check(std::get_if<std::int64_t>(&g2.values.at("level")) != nullptr, "DEF-0012: level is int64");
+                check(std::get_if<std::uint64_t>(&g2.values.at("experience")) != nullptr, "DEF-0012: experience is uint64");
+                check(std::get_if<double>(&g2.values.at("scale_factor")) != nullptr, "DEF-0012: scale_factor is double");
+                check(std::get_if<std::vector<std::string>>(&g2.values.at("tags")) != nullptr, "DEF-0012: tags is string_list");
+            }
+
             // SpriteIr round-trip with genes
             gspl::SpriteIr ir;
             ir.entity_id = "maximal-ir-test";
@@ -1058,7 +1118,9 @@ int main() {
             auto const& restored_ir = *ir_deser.value;
             check(restored_ir.entity_id == ir.entity_id, "DEF-0012: SpriteIr entity_id round-trip");
             check(restored_ir.entity != nullptr, "DEF-0012: SpriteIr entity present");
-            check(restored_ir.entity->genes.size() == ir.entity->genes.size(), "DEF-0012: SpriteIr genes count");
+            check(restored_ir.entity->genes.size() == ir.entity->genes.size(),
+                  ("DEF-0012: SpriteIr genes count, expected " + std::to_string(ir.entity->genes.size()) +
+                   " got " + std::to_string(restored_ir.entity->genes.size())).c_str());
 
             // Verify GeneValue type survival in IR round-trip
             if (!restored_ir.entity->genes.empty()) {

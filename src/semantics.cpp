@@ -1,6 +1,7 @@
 #include "gspl/semantics.hpp"
 #include "gspl/ast.hpp"
 #include "gspl/genes.hpp"
+#include "gspl/json.hpp"
 #include "gspl_sprites/core.hpp"
 #include <algorithm>
 #include <charconv>
@@ -500,7 +501,29 @@ std::string CanonicalEntitySerializer::to_json(CanonicalEntity const& entity) {
         }
         os << "]},\n";
     }
-    // genes (count only — full gene data is in canonical_identity_payload)
+    // genes — full typed gene instances
+    if (!entity.genes.empty()) {
+        os << "  \"genes\": [\n";
+        for (std::size_t i = 0; i < entity.genes.size(); ++i) {
+            if (i > 0) os << ",\n";
+            auto const& g = entity.genes[i];
+            os << "    {\"kind\":" << static_cast<std::uint32_t>(g.descriptor.kind)
+               << ",\"schema\":" << g.descriptor.schema_version
+               << ",\"type\":\"" << canonical_escape(g.descriptor.type_id) << "\""
+               << ",\"source\":\"" << canonical_escape(g.source_module) << "\""
+               << ",\"values\":{";
+            bool first_val = true;
+            for (auto const& [k, v] : g.values) {
+                if (!first_val) os << ",";
+                first_val = false;
+                auto tag = static_cast<std::uint32_t>(gene_value_variant_index(v));
+                os << "\"" << canonical_escape(k) << "\":{\"t\":" << tag
+                   << ",\"v\":" << gene_value_to_json(v) << "}";
+            }
+            os << "}}";
+        }
+        os << "\n  ],\n";
+    }
     os << "  \"gene_count\": " << entity.genes.size() << "\n";
     os << "}";
     return os.str();
@@ -607,6 +630,37 @@ CanonicalEntityDeserializeResult CanonicalEntitySerializer::from_json(
     auto has_more = [&](std::size_t p) -> bool {
         skip_ws(p);
         return p < json.size() && json[p] != '}' && json[p] != ']';
+    };
+    auto read_raw_value = [&](std::size_t& p) -> std::string {
+        skip_ws(p);
+        if (p >= json.size()) return {};
+        std::size_t start = p;
+        if (json[p] == '"') {
+            read_str(p);
+        } else if (json[p] == '{') {
+            int d = 1; ++p;
+            while (p < json.size() && d > 0) {
+                if (json[p] == '{') ++d;
+                else if (json[p] == '}') --d;
+                else if (json[p] == '"') read_str(p);
+                else ++p;
+            }
+        } else if (json[p] == '[') {
+            int d = 1; ++p;
+            while (p < json.size() && d > 0) {
+                if (json[p] == '[') ++d;
+                else if (json[p] == ']') --d;
+                else if (json[p] == '"') read_str(p);
+                else ++p;
+            }
+        } else if (json[p] == 't' || json[p] == 'f') {
+            read_b(p);
+        } else if (json[p] == 'n') {
+            p += 4;
+        } else {
+            while (p < json.size() && json[p] != ',' && json[p] != '}' && json[p] != ']' && json[p] != '\n') ++p;
+        }
+        return std::string(json.substr(start, p - start));
     };
 
     std::size_t pos = 0;
@@ -1102,6 +1156,85 @@ CanonicalEntityDeserializeResult CanonicalEntitySerializer::from_json(
             }
             skip_ws(pos); if (pos < json.size() && json[pos] == '}') ++pos;
             ce.runtime = std::move(rt);
+        } else if (key == "genes") {
+            skip_ws(pos);
+            if (pos < json.size() && json[pos] == '[') { ++pos;
+                GeneRegistry registry;
+                while (has_more(pos)) {
+                    skip_ws(pos);
+                    if (pos >= json.size() || json[pos] != '{') break;
+                    ++pos;
+                    GeneInstance gi;
+                    while (has_more(pos)) {
+                        auto gk = read_str(pos);
+                        if (gk.empty()) break;
+                        skip_ws(pos); if (pos >= json.size() || json[pos] != ':') break; ++pos;
+                        if (gk == "kind") {
+                            auto kind_val = static_cast<GeneKind>(read_i64(pos));
+                            auto const* desc = registry.lookup(kind_val);
+                            if (desc) gi.descriptor = *desc;
+                            else gi.descriptor.kind = kind_val;
+                        } else if (gk == "schema") {
+                            gi.descriptor.schema_version = static_cast<std::uint32_t>(read_i64(pos));
+                        } else if (gk == "type") {
+                            gi.descriptor.type_id = read_str(pos);
+                        } else if (gk == "source") {
+                            gi.source_module = read_str(pos);
+                        } else if (gk == "values") {
+                            skip_ws(pos);
+                            if (pos < json.size() && json[pos] == '{') { ++pos;
+                                while (has_more(pos)) {
+                                    auto vk = read_str(pos);
+                                    if (vk.empty()) break;
+                                    skip_ws(pos); if (pos >= json.size() || json[pos] != ':') break; ++pos;
+                                    skip_ws(pos);
+                                    if (pos < json.size() && json[pos] == '{') { ++pos;
+                                        std::uint32_t tag_val = 0;
+                                        std::string raw_val;
+                                        while (has_more(pos)) {
+                                            auto tk = read_str(pos);
+                                            if (tk.empty()) break;
+                                            skip_ws(pos); if (pos >= json.size() || json[pos] != ':') break; ++pos;
+                                            if (tk == "t") {
+                                                tag_val = static_cast<std::uint32_t>(read_i64(pos));
+                                            } else if (tk == "v") {
+                                                raw_val = read_raw_value(pos);
+                                            } else {
+                                                skip_val(pos);
+                                            }
+                                            skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                                        }
+                                        skip_ws(pos); if (pos < json.size() && json[pos] == '}') ++pos;
+                                        if (!raw_val.empty()) {
+                                            auto tag = static_cast<GeneValueTag>(tag_val);
+                                            gi.values[vk] = json_to_gene_value(raw_val, tag);
+                                        }
+                                    } else {
+                                        // Legacy format: bare string value
+                                        auto vv = read_str(pos);
+                                        if (!vv.empty()) {
+                                            gi.values[vk] = std::string{vv};
+                                        }
+                                    }
+                                    skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                                }
+                                skip_ws(pos); if (pos < json.size() && json[pos] == '}') ++pos;
+                            }
+                        } else {
+                            skip_val(pos);
+                        }
+                        skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                    }
+                    if (!gi.descriptor.type_id.empty()) {
+                        ce.genes.push_back(std::move(gi));
+                    }
+                    skip_ws(pos); if (pos < json.size() && json[pos] == '}') ++pos;
+                    skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
+                }
+                skip_ws(pos); if (pos < json.size() && json[pos] == ']') ++pos;
+            }
+        } else if (key == "gene_count") {
+            read_i64(pos); // consume but ignore — count is derived from parsed genes array
         } else {
             skip_val(pos);
         }
