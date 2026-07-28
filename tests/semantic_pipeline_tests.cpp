@@ -2,6 +2,7 @@
 #include "gspl/cli.hpp"
 #include "gspl/semantics.hpp"
 #include "gspl/lowering.hpp"
+#include "gspl/json.hpp"
 #include "gspl_sprites/core.hpp"
 
 #include <filesystem>
@@ -735,6 +736,440 @@ int main() {
             opt2.execute(ctx);
             auto hash2 = gspl::CanonicalEntityIdentity(ctx.canonical).hash();
             check(hash1 == hash2, "Repeated optimization should be idempotent");
+        }
+
+        // ---- 21. DEF-0012: Maximally populated CanonicalEntity round-trip ----
+        {
+            gspl::CanonicalEntity ce;
+            ce.schema_version = "gspl.canonical-entity/1.0";
+            ce.stable_id = "maximal.roundtrip.test";
+            ce.name = "Maximal Roundtrip Entity";
+            ce.classification = "biological.fictional.dragon";
+            ce.rights = "ORIGINAL_USER_CREATION";
+            ce.rights_allow_export = false;
+            ce.entropy_root = 12345678901234567890ULL;
+            ce.primary_color = "#FF4500";
+            ce.accent_color = "#FFD700";
+            ce.storm_primary_color = "#00BFFF";
+            ce.storm_accent_color = "#1E90FF";
+            ce.emissive_color = "#FF0000";
+            ce.aura_color = "#FF69B4";
+            ce.provenance_hash = "sha256:abcdef1234567890";
+            ce.provenance_source = "gspl-source://maximal.fixture/1.0";
+            ce.initial_state = "idle";
+
+            // Forms
+            gspl::CanonicalForm f1;
+            f1.id = "base";
+            f1.transformation_ids = {"ascend", "rage"};
+            f1.resource_capacity = 200;
+            f1.collision_scale = 1.0;
+            f1.ability_envelope = 1.0;
+            f1.max_health = 150;
+            ce.forms.push_back(f1);
+
+            gspl::CanonicalForm f2;
+            f2.id = "storm";
+            f2.transformation_ids = {"descend"};
+            f2.resource_capacity = 300;
+            f2.collision_scale = 1.5;
+            f2.ability_envelope = 2.0;
+            f2.max_health = 250;
+            ce.forms.push_back(f2);
+
+            // Transformations
+            gspl::CanonicalTransformation t1;
+            t1.id = "ascend";
+            t1.from_form = "base";
+            t1.to_form = "storm";
+            t1.trigger_condition = "resource >= 100";
+            t1.duration_ticks = 300;
+            t1.resource_cost = 50;
+            ce.transformations.push_back(t1);
+
+            // Morphology
+            gspl::CanonicalPart head;
+            head.name = "head";
+            head.parent = "root";
+            head.x = 0; head.y = 80; head.z = 0;
+            head.size_x = 30; head.size_y = 25; head.size_z = 20;
+            head.color = "#FF4500";
+            head.rotation_degrees = 0;
+            head.emissive = false;
+            head.electrical_marking = false;
+            ce.morphology["head"] = head;
+
+            gspl::CanonicalPart torso;
+            torso.name = "torso";
+            torso.parent = "head";
+            torso.x = 0; torso.y = 40; torso.z = 0;
+            torso.size_x = 40; torso.size_y = 50; torso.size_z = 25;
+            torso.color = "#FF4500";
+            torso.rotation_degrees = 0;
+            torso.emissive = false;
+            ce.morphology["torso"] = torso;
+
+            // Abilities
+            gspl::CanonicalAbility a1;
+            a1.id = "fire_breath";
+            a1.effect = "elemental.fire";
+            a1.cost = 30;
+            a1.cooldown_ticks = 60;
+            a1.active_ticks = 20;
+            a1.origin_socket = "mouth";
+            a1.speed_mm_per_tick = 15.0;
+            a1.collision_radius_mm = 8.0;
+            a1.status_id = "burning";
+            a1.status_duration_ticks = 40;
+            ce.abilities.push_back(a1);
+
+            gspl::CanonicalAbility sa1;
+            sa1.id = "storm_fire_breath";
+            sa1.effect = "elemental.fire.storm";
+            sa1.cost = 50;
+            sa1.cooldown_ticks = 40;
+            sa1.active_ticks = 30;
+            sa1.origin_socket = "mouth";
+            sa1.speed_mm_per_tick = 25.0;
+            sa1.collision_radius_mm = 14.0;
+            ce.storm_abilities.push_back(sa1);
+
+            // Bones
+            gspl::CanonicalSkeletalBone b1;
+            b1.id = "spine";
+            b1.parent = "root";
+            b1.x = 0; b1.y = 45; b1.z = 0;
+            b1.scale_x = 1.0; b1.scale_y = 1.0;
+            b1.length_mm = 80;
+            b1.min_rotation = -30;
+            b1.max_rotation = 30;
+            ce.bones.push_back(b1);
+
+            // Sockets
+            gspl::CanonicalSocket s1;
+            s1.id = "mouth";
+            s1.bone = "spine";
+            s1.x = 0; s1.y = 85; s1.z = 12;
+            s1.scale_x = 1.0; s1.scale_y = 1.0;
+            ce.sockets.push_back(s1);
+
+            // Animation clips
+            gspl::CanonicalAnimationClip clip;
+            clip.name = "idle";
+            clip.loop = true;
+            gspl::CanonicalAnimationClip::Track track;
+            track.bone = "spine";
+            track.keys = {{0, "pose:idle_0"}, {30, "pose:idle_30"}, {60, "pose:idle_0"}};
+            clip.tracks.push_back(track);
+            clip.clip_events = {{0, "event:loop_start"}, {60, "event:loop_end"}};
+            ce.clips.push_back(clip);
+
+            // States
+            gspl::CanonicalAnimationState state;
+            state.name = "idle";
+            state.clip_name = "idle";
+            ce.states.push_back(state);
+
+            // Transitions
+            gspl::CanonicalTransition trans;
+            trans.from_state = "idle";
+            trans.to_state = "attacking";
+            trans.ability_id = "fire_breath";
+            trans.comparison = "GREATER_EQUAL";
+            trans.threshold = 80;
+            trans.resource_cost = 5;
+            trans.cooldown_ticks = 10;
+            ce.transitions.push_back(trans);
+
+            // Collision shapes
+            gspl::CanonicalCollisionShape cshape;
+            cshape.id = "body_hitbox";
+            cshape.shape_type = "CIRCLE";
+            cshape.socket = "spine";
+            cshape.radius_mm = 25.0;
+            cshape.offset_x = 0;
+            cshape.offset_y = 30;
+            cshape.scale_x = 1.0;
+            cshape.scale_y = 1.0;
+            ce.collision_shapes.push_back(cshape);
+
+            // Collision windows
+            gspl::CanonicalCollisionWindow cwin;
+            cwin.ability_id = "fire_breath";
+            cwin.shape_id = "body_hitbox";
+            cwin.start_tick = 5;
+            cwin.duration_ticks = 15;
+            cwin.active = true;
+            ce.collision_windows.push_back(cwin);
+
+            // Resources
+            gspl::CanonicalResource res;
+            res.id = "mana";
+            res.resource_type = "magical";
+            res.min = 0;
+            res.max = 200;
+            res.initial = 100;
+            ce.resources.push_back(res);
+
+            // Runtime
+            gspl::CanonicalRuntime rt;
+            rt.aggression = 85;
+            rt.curiosity = 30;
+            rt.energy = 60;
+            rt.loyalty = 90;
+            gspl::CanonicalAnimationIntent intent;
+            intent.behavior_state = "idle";
+            intent.clip_name = "idle";
+            rt.animation_intents.push_back(intent);
+            ce.runtime = rt;
+
+            // Genes are tested via SpriteIr round-trip below; not round-tripped by CanonicalEntity to_json/from_json
+
+            // Round-trip
+            auto json = gspl::CanonicalEntitySerializer::to_json(ce);
+            auto result = gspl::CanonicalEntitySerializer::from_json(json);
+            check(result.ok(), "DEF-0012: maximally populated round-trip should succeed");
+            check(result.value.has_value(), "DEF-0012: maximally populated round-trip should produce value");
+            auto const& r = *result.value;
+
+            // Root fields
+            check(r.schema_version == ce.schema_version, "DEF-0012: schema_version round-trip");
+            check(r.stable_id == ce.stable_id, "DEF-0012: stable_id round-trip");
+            check(r.name == ce.name, "DEF-0012: name round-trip");
+            check(r.classification == ce.classification, "DEF-0012: classification round-trip");
+            check(r.rights == ce.rights, "DEF-0012: rights round-trip");
+            check(r.rights_allow_export == ce.rights_allow_export, "DEF-0012: rights_allow_export round-trip");
+            check(r.entropy_root == ce.entropy_root, "DEF-0012: entropy_root round-trip");
+            check(r.primary_color == ce.primary_color, "DEF-0012: primary_color round-trip");
+            check(r.accent_color == ce.accent_color, "DEF-0012: accent_color round-trip");
+            check(r.storm_primary_color == ce.storm_primary_color, "DEF-0012: storm_primary_color round-trip");
+            check(r.storm_accent_color == ce.storm_accent_color, "DEF-0012: storm_accent_color round-trip");
+            check(r.emissive_color == ce.emissive_color, "DEF-0012: emissive_color round-trip");
+            check(r.aura_color == ce.aura_color, "DEF-0012: aura_color round-trip");
+            check(r.provenance_hash == ce.provenance_hash, "DEF-0012: provenance_hash round-trip");
+            check(r.provenance_source == ce.provenance_source, "DEF-0012: provenance_source round-trip");
+            check(r.initial_state == ce.initial_state,
+                  ("DEF-0012: initial_state round-trip, expected '" + ce.initial_state + "' got '" + r.initial_state + "'").c_str());
+
+            // Forms
+            check(r.forms.size() == ce.forms.size(), "DEF-0012: forms count round-trip");
+            for (std::size_t i = 0; i < ce.forms.size(); ++i) {
+                check(r.forms[i].id == ce.forms[i].id, ("DEF-0012: form " + std::to_string(i) + " id").c_str());
+                check(r.forms[i].resource_capacity == ce.forms[i].resource_capacity, "DEF-0012: form resource_capacity");
+                check(r.forms[i].collision_scale == ce.forms[i].collision_scale, "DEF-0012: form collision_scale");
+                check(r.forms[i].ability_envelope == ce.forms[i].ability_envelope, "DEF-0012: form ability_envelope");
+                check(r.forms[i].max_health == ce.forms[i].max_health, "DEF-0012: form max_health");
+                check(r.forms[i].transformation_ids.size() == ce.forms[i].transformation_ids.size(), "DEF-0012: form transformation_ids");
+            }
+
+            // Transformations
+            check(r.transformations.size() == ce.transformations.size(), "DEF-0012: transformations count");
+            for (std::size_t i = 0; i < ce.transformations.size(); ++i) {
+                check(r.transformations[i].id == ce.transformations[i].id, "DEF-0012: transformation id");
+                check(r.transformations[i].from_form == ce.transformations[i].from_form, "DEF-0012: transformation from_form");
+                check(r.transformations[i].to_form == ce.transformations[i].to_form, "DEF-0012: transformation to_form");
+                check(r.transformations[i].duration_ticks == ce.transformations[i].duration_ticks, "DEF-0012: transformation duration");
+            }
+
+            // Morphology
+            check(r.morphology.size() == ce.morphology.size(), "DEF-0012: morphology count");
+            for (auto const& [name, part] : ce.morphology) {
+                check(r.morphology.count(name) == 1, ("DEF-0012: morphology key " + name).c_str());
+                auto const& rp = r.morphology.at(name);
+                check(rp.name == part.name, ("DEF-0012: morphology " + name + " name").c_str());
+                check(rp.parent == part.parent, "DEF-0012: morphology parent");
+                check(rp.x == part.x && rp.y == part.y, "DEF-0012: morphology position");
+            }
+
+            // Abilities
+            check(r.abilities.size() == ce.abilities.size(), "DEF-0012: abilities count");
+            check(r.storm_abilities.size() == ce.storm_abilities.size(), "DEF-0012: storm_abilities count");
+            if (!r.abilities.empty()) {
+                check(r.abilities[0].id == ce.abilities[0].id, "DEF-0012: ability id");
+                check(r.abilities[0].cost == ce.abilities[0].cost, "DEF-0012: ability cost");
+                check(r.abilities[0].status_duration_ticks == ce.abilities[0].status_duration_ticks, "DEF-0012: ability status_duration");
+            }
+
+            // Bones
+            check(r.bones.size() == ce.bones.size(), "DEF-0012: bones count");
+            if (!r.bones.empty()) {
+                check(r.bones[0].id == ce.bones[0].id, "DEF-0012: bone id");
+                check(r.bones[0].length_mm == ce.bones[0].length_mm, "DEF-0012: bone length");
+            }
+
+            // Sockets
+            check(r.sockets.size() == ce.sockets.size(), "DEF-0012: sockets count");
+
+            // Clips
+            check(r.clips.size() == ce.clips.size(), "DEF-0012: clips count");
+            if (!r.clips.empty()) {
+                check(r.clips[0].name == ce.clips[0].name, "DEF-0012: clip name");
+                check(r.clips[0].tracks.size() == ce.clips[0].tracks.size(), "DEF-0012: clip tracks count");
+                check(r.clips[0].clip_events.size() == ce.clips[0].clip_events.size(), "DEF-0012: clip events count");
+            }
+
+            // States
+            check(r.states.size() == ce.states.size(), "DEF-0012: states count");
+
+            // Transitions
+            check(r.transitions.size() == ce.transitions.size(), "DEF-0012: transitions count");
+
+            // Collision
+            check(r.collision_shapes.size() == ce.collision_shapes.size(), "DEF-0012: collision_shapes count");
+            check(r.collision_windows.size() == ce.collision_windows.size(), "DEF-0012: collision_windows count");
+
+            // Resources
+            check(r.resources.size() == ce.resources.size(), "DEF-0012: resources count");
+            if (!r.resources.empty()) {
+                check(r.resources[0].id == ce.resources[0].id, "DEF-0012: resource id");
+                check(r.resources[0].max == ce.resources[0].max, "DEF-0012: resource max");
+            }
+
+            // Runtime
+            check(r.runtime.has_value() == ce.runtime.has_value(), "DEF-0012: runtime presence");
+            if (r.runtime && ce.runtime) {
+                check(r.runtime->aggression == ce.runtime->aggression, "DEF-0012: runtime aggression");
+                check(r.runtime->curiosity == ce.runtime->curiosity, "DEF-0012: runtime curiosity");
+                check(r.runtime->energy == ce.runtime->energy, "DEF-0012: runtime energy");
+                check(r.runtime->loyalty == ce.runtime->loyalty, "DEF-0012: runtime loyalty");
+                check(r.runtime->animation_intents.size() == ce.runtime->animation_intents.size(), "DEF-0012: runtime animation_intents");
+            }
+
+            // Identity hash survival
+            auto hash_before = gspl::CanonicalEntityIdentity(ce).hash();
+            auto hash_after = gspl::CanonicalEntityIdentity(r).hash();
+            check(hash_before == hash_after, "DEF-0012: identity hash survives maximally populated round-trip");
+
+            // SpriteIr round-trip with genes
+            gspl::SpriteIr ir;
+            ir.entity_id = "maximal-ir-test";
+            ir.seed_identity = "seed-maximal";
+            ir.entity = std::make_unique<gspl::EntityIr>();
+            ir.entity->entity_id = "maximal-ir-test";
+            ir.entity->identity = "ir-identity";
+            ir.entity->schema_version = 1;
+            ir.entity->genes = ce.genes;
+            ir.entity->dependency_ids = {"gene.identity/1.0", "gene.appearance/1.0"};
+
+            auto ir_json = gspl::IrSerializer::serialize(ir);
+            auto ir_deser = gspl::IrSerializer::deserialize(ir_json);
+            check(ir_deser.ok(), "DEF-0012: SpriteIr maximally populated round-trip should succeed");
+            check(ir_deser.value.has_value(), "DEF-0012: SpriteIr maximally populated should produce value");
+            auto const& restored_ir = *ir_deser.value;
+            check(restored_ir.entity_id == ir.entity_id, "DEF-0012: SpriteIr entity_id round-trip");
+            check(restored_ir.entity != nullptr, "DEF-0012: SpriteIr entity present");
+            check(restored_ir.entity->genes.size() == ir.entity->genes.size(), "DEF-0012: SpriteIr genes count");
+
+            // Verify GeneValue type survival in IR round-trip
+            if (!restored_ir.entity->genes.empty()) {
+                auto const& g = restored_ir.entity->genes.back();
+                check(g.values.count("is_boss") == 1, "DEF-0012: gene bool value key present");
+                check(g.values.count("level") == 1, "DEF-0012: gene int64 value key present");
+                check(g.values.count("experience") == 1, "DEF-0012: gene uint64 value key present");
+                check(g.values.count("scale_factor") == 1, "DEF-0012: gene double value key present");
+                check(g.values.count("tags") == 1, "DEF-0012: gene string_list value key present");
+            }
+        }
+
+        // ---- 22. DEF-0014: Resource-limit boundary tests ----
+        {
+            // max_input_bytes: limit-1, limit, limit+1
+            {
+                gspl::BoundedJsonConfig cfg;
+                cfg.max_input_bytes = 10;
+
+                // limit-1: 9 bytes should parse
+                std::string valid = "{\"a\":1}"; // 7 bytes
+                gspl::BoundedJsonReader r1(valid, cfg);
+                check(!r1.has_error(), "DEF-0014: 7 bytes under 10-byte limit should succeed");
+
+                // limit+1: 11+ bytes should fail
+                std::string over = "{\"abcdef\":1}"; // 12 bytes
+                gspl::BoundedJsonReader r2(over, cfg);
+                check(r2.has_error(), "DEF-0014: 12 bytes over 10-byte limit should fail");
+            }
+
+            // max_nesting_depth: limit-1, limit, limit+1
+            {
+                gspl::BoundedJsonConfig cfg;
+                cfg.max_nesting_depth = 3;
+
+                // limit-1: depth 2 should work
+                std::string d2 = "{\"a\":{\"b\":1}}";
+                gspl::BoundedJsonReader r1(d2, cfg);
+                r1.skip_value();
+                check(!r1.has_error(), "DEF-0014: depth 2 under limit 3 should succeed");
+
+                // limit+1: depth 4 should fail
+                std::string d4 = "{\"a\":{\"b\":{\"c\":{\"d\":1}}}}";
+                gspl::BoundedJsonReader r2(d4, cfg);
+                r2.skip_value();
+                check(r2.has_error(), "DEF-0014: depth 4 over limit 3 should fail");
+            }
+
+            // max_string_length: limit-1, limit, limit+1
+            {
+                gspl::BoundedJsonConfig cfg;
+                cfg.max_string_length = 10;
+
+                // limit-1: string of 9 chars should work
+                std::string s9 = "\"123456789\"";
+                gspl::BoundedJsonReader r1(s9, cfg);
+                auto val = r1.read_string();
+                check(val == "123456789", "DEF-0014: 9-char string under 10 limit should succeed");
+
+                // limit+1: string of 11 chars should fail
+                std::string s11 = "\"12345678901\"";
+                gspl::BoundedJsonReader r2(s11, cfg);
+                r2.read_string();
+                check(r2.has_error(), "DEF-0014: 11-char string over 10 limit should fail");
+            }
+
+            // max_object_members: limit-1, limit, limit+1
+            {
+                gspl::BoundedJsonConfig cfg;
+                cfg.max_object_members = 3;
+
+                // limit-1: 2 members should work
+                std::string m2 = "{\"a\":1,\"b\":2}";
+                gspl::BoundedJsonReader r1(m2, cfg);
+                r1.skip_value();
+                check(!r1.has_error(), "DEF-0014: 2 members under limit 3 should succeed");
+
+                // limit+1: 4 members should fail
+                std::string m4 = "{\"a\":1,\"b\":2,\"c\":3,\"d\":4}";
+                gspl::BoundedJsonReader r2(m4, cfg);
+                r2.skip_value();
+                check(r2.has_error(), "DEF-0014: 4 members over limit 3 should fail");
+            }
+
+            // max_array_length: limit-1, limit, limit+1
+            {
+                gspl::BoundedJsonConfig cfg;
+                cfg.max_array_length = 3;
+
+                // limit-1: 2 elements should work
+                std::string a2 = "[1,2]";
+                gspl::BoundedJsonReader r1(a2, cfg);
+                r1.skip_value();
+                check(!r1.has_error(), "DEF-0014: 2 elements under limit 3 should succeed");
+
+                // limit+1: 4 elements should fail
+                std::string a4 = "[1,2,3,4]";
+                gspl::BoundedJsonReader r2(a4, cfg);
+                r2.skip_value();
+                check(r2.has_error(), "DEF-0014: 4 elements over limit 3 should fail");
+            }
+
+            // edge: at-limit (3) should work
+            {
+                gspl::BoundedJsonConfig cfg;
+                cfg.max_array_length = 3;
+                std::string a3 = "[1,2,3]";
+                gspl::BoundedJsonReader r(a3, cfg);
+                r.skip_value();
+                check(!r.has_error(), "DEF-0014: 3 elements at limit 3 should succeed");
+            }
         }
 
         std::cout << "ALL SEMANTIC PIPELINE TESTS PASSED\n";

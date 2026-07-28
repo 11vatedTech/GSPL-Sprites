@@ -302,6 +302,8 @@ std::string CanonicalEntitySerializer::to_json(CanonicalEntity const& entity) {
     os << "  \"aura_color\": \"" << entity.aura_color << "\",\n";
     os << "  \"provenance_hash\": \"" << entity.provenance_hash << "\",\n";
     os << "  \"provenance_source\": \"" << entity.provenance_source << "\",\n";
+    // initial_state — must be parsed before any array to avoid cascading breakout
+    os << "  \"initial_state\": \"" << canonical_escape(entity.initial_state) << "\",\n";
     // forms
     os << "  \"forms\": [";
     for (std::size_t i = 0; i < entity.forms.size(); ++i) {
@@ -433,7 +435,6 @@ std::string CanonicalEntitySerializer::to_json(CanonicalEntity const& entity) {
            << ",\"clip_name\":\"" << canonical_escape(s.clip_name) << "\"}";
     }
     os << "],\n";
-    os << "  \"initial_state\": \"" << canonical_escape(entity.initial_state) << "\",\n";
     // transitions
     os << "  \"transitions\": [";
     for (std::size_t i = 0; i < entity.transitions.size(); ++i) {
@@ -691,6 +692,7 @@ CanonicalEntityDeserializeResult CanonicalEntitySerializer::from_json(
                         skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
                     }
                     ce.forms.push_back(std::move(f));
+                    skip_ws(pos); if (pos < json.size() && json[pos] == '}') ++pos;
                     skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
                 }
                 skip_ws(pos); if (pos < json.size() && json[pos] == ']') ++pos;
@@ -716,6 +718,7 @@ CanonicalEntityDeserializeResult CanonicalEntitySerializer::from_json(
                         skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
                     }
                     ce.transformations.push_back(std::move(t));
+                    skip_ws(pos); if (pos < json.size() && json[pos] == '}') ++pos;
                     skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
                 }
                 skip_ws(pos); if (pos < json.size() && json[pos] == ']') ++pos;
@@ -750,8 +753,10 @@ CanonicalEntityDeserializeResult CanonicalEntitySerializer::from_json(
                         skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
                     }
                     ce.morphology[p.name] = std::move(p);
+                    skip_ws(pos); if (pos < json.size() && json[pos] == '}') ++pos;
                     skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
                 }
+                skip_ws(pos); if (pos < json.size() && json[pos] == '}') ++pos;
             }
         } else if (key == "abilities" || key == "storm_abilities") {
             skip_ws(pos);
@@ -779,6 +784,7 @@ CanonicalEntityDeserializeResult CanonicalEntitySerializer::from_json(
                     }
                     if (key == "storm_abilities") ce.storm_abilities.push_back(std::move(a));
                     else ce.abilities.push_back(std::move(a));
+                    skip_ws(pos); if (pos < json.size() && json[pos] == '}') ++pos;
                     skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
                 }
                 skip_ws(pos); if (pos < json.size() && json[pos] == ']') ++pos;
@@ -808,6 +814,7 @@ CanonicalEntityDeserializeResult CanonicalEntitySerializer::from_json(
                         skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
                     }
                     ce.bones.push_back(std::move(b));
+                    skip_ws(pos); if (pos < json.size() && json[pos] == '}') ++pos;
                     skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
                 }
                 skip_ws(pos); if (pos < json.size() && json[pos] == ']') ++pos;
@@ -834,6 +841,7 @@ CanonicalEntityDeserializeResult CanonicalEntitySerializer::from_json(
                         skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
                     }
                     ce.sockets.push_back(std::move(s));
+                    skip_ws(pos); if (pos < json.size() && json[pos] == '}') ++pos;
                     skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
                 }
                 skip_ws(pos); if (pos < json.size() && json[pos] == ']') ++pos;
@@ -880,6 +888,7 @@ CanonicalEntityDeserializeResult CanonicalEntitySerializer::from_json(
                                                         skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
                                                     }
                                                     tr.keys.push_back({tick, val});
+                                                    skip_ws(pos); if (pos < json.size() && json[pos] == '}') ++pos;
                                                     skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
                                                 }
                                                 skip_ws(pos); if (pos < json.size() && json[pos] == ']') ++pos;
@@ -888,6 +897,7 @@ CanonicalEntityDeserializeResult CanonicalEntitySerializer::from_json(
                                         skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
                                     }
                                     c.tracks.push_back(std::move(tr));
+                                    skip_ws(pos); if (pos < json.size() && json[pos] == '}') ++pos;
                                     skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
                                 }
                                 skip_ws(pos); if (pos < json.size() && json[pos] == ']') ++pos;
@@ -909,6 +919,7 @@ CanonicalEntityDeserializeResult CanonicalEntitySerializer::from_json(
                                         skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
                                     }
                                     c.clip_events.push_back({tick, eid});
+                                    skip_ws(pos); if (pos < json.size() && json[pos] == '}') ++pos;
                                     skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
                                 }
                                 skip_ws(pos); if (pos < json.size() && json[pos] == ']') ++pos;
@@ -917,6 +928,7 @@ CanonicalEntityDeserializeResult CanonicalEntitySerializer::from_json(
                         skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
                     }
                     ce.clips.push_back(std::move(c));
+                    skip_ws(pos); if (pos < json.size() && json[pos] == '}') ++pos;
                     skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
                 }
                 skip_ws(pos); if (pos < json.size() && json[pos] == ']') ++pos;
@@ -938,6 +950,7 @@ CanonicalEntityDeserializeResult CanonicalEntitySerializer::from_json(
                         skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
                     }
                     ce.states.push_back(std::move(s));
+                    skip_ws(pos); if (pos < json.size() && json[pos] == '}') ++pos;
                     skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
                 }
                 skip_ws(pos); if (pos < json.size() && json[pos] == ']') ++pos;
@@ -966,6 +979,7 @@ CanonicalEntityDeserializeResult CanonicalEntitySerializer::from_json(
                         skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
                     }
                     ce.transitions.push_back(std::move(t));
+                    skip_ws(pos); if (pos < json.size() && json[pos] == '}') ++pos;
                     skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
                 }
                 skip_ws(pos); if (pos < json.size() && json[pos] == ']') ++pos;
@@ -993,6 +1007,7 @@ CanonicalEntityDeserializeResult CanonicalEntitySerializer::from_json(
                         skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
                     }
                     ce.collision_shapes.push_back(std::move(cs));
+                    skip_ws(pos); if (pos < json.size() && json[pos] == '}') ++pos;
                     skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
                 }
                 skip_ws(pos); if (pos < json.size() && json[pos] == ']') ++pos;
@@ -1017,6 +1032,7 @@ CanonicalEntityDeserializeResult CanonicalEntitySerializer::from_json(
                         skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
                     }
                     ce.collision_windows.push_back(std::move(cw));
+                    skip_ws(pos); if (pos < json.size() && json[pos] == '}') ++pos;
                     skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
                 }
                 skip_ws(pos); if (pos < json.size() && json[pos] == ']') ++pos;
@@ -1041,6 +1057,7 @@ CanonicalEntityDeserializeResult CanonicalEntitySerializer::from_json(
                         skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
                     }
                     ce.resources.push_back(std::move(res));
+                    skip_ws(pos); if (pos < json.size() && json[pos] == '}') ++pos;
                     skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
                 }
                 skip_ws(pos); if (pos < json.size() && json[pos] == ']') ++pos;
@@ -1075,6 +1092,7 @@ CanonicalEntityDeserializeResult CanonicalEntitySerializer::from_json(
                                 skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
                             }
                             rt.animation_intents.push_back(std::move(ai));
+                            skip_ws(pos); if (pos < json.size() && json[pos] == '}') ++pos;
                             skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
                         }
                         skip_ws(pos); if (pos < json.size() && json[pos] == ']') ++pos;
@@ -1082,6 +1100,7 @@ CanonicalEntityDeserializeResult CanonicalEntitySerializer::from_json(
                 } else skip_val(pos);
                 skip_ws(pos); if (pos < json.size() && json[pos] != ',') break; ++pos;
             }
+            skip_ws(pos); if (pos < json.size() && json[pos] == '}') ++pos;
             ce.runtime = std::move(rt);
         } else {
             skip_val(pos);

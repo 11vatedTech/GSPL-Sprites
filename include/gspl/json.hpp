@@ -1,4 +1,5 @@
 #pragma once
+#include "gspl/genes.hpp"
 #include <charconv>
 #include <cstdint>
 #include <cstdlib>

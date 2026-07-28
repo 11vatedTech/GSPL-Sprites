@@ -141,6 +141,7 @@ add_library(gspl_sprites_core
   src/types.cpp
   src/expressions.cpp
   src/genes.cpp
+  src/json.cpp
   src/ir.cpp
   src/passes.cpp
   src/semantics.cpp

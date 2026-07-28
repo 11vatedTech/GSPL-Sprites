@@ -1,5 +1,6 @@
 #include "gspl/ir.hpp"
 #include "gspl/genes.hpp"
+#include "gspl/json.hpp"
 #include <algorithm>
 #include <cctype>
 #include <charconv>
@@ -11,7 +12,7 @@ namespace {
 
 // ── minimal bounded JSON helpers ───────────────────────────
 
-std::string json_escape(std::string_view sv) {
+std::string ir_json_escape(std::string_view sv) {
     std::ostringstream out;
     for (auto c : sv) {
         switch (c) {
@@ -29,19 +30,19 @@ std::string json_escape(std::string_view sv) {
 void json_append(std::ostringstream& ss, std::string_view key, std::string_view value, bool& first) {
     if (!first) ss << ",\n";
     first = false;
-    ss << "  \"" << json_escape(key) << "\": \"" << json_escape(value) << "\"";
+    ss << "  \"" << ir_json_escape(key) << "\": \"" << ir_json_escape(value) << "\"";
 }
 
 void json_append_int(std::ostringstream& ss, std::string_view key, auto value, bool& first) {
     if (!first) ss << ",\n";
     first = false;
-    ss << "  \"" << json_escape(key) << "\": " << value;
+    ss << "  \"" << ir_json_escape(key) << "\": " << value;
 }
 
 void json_append_bool(std::ostringstream& ss, std::string_view key, bool value, bool& first) {
     if (!first) ss << ",\n";
     first = false;
-    ss << "  \"" << json_escape(key) << "\": " << (value ? "true" : "false");
+    ss << "  \"" << ir_json_escape(key) << "\": " << (value ? "true" : "false");
 }
 
 std::string serialize_entity_ir(EntityIr const& entity) {
@@ -63,14 +64,16 @@ std::string serialize_entity_ir(EntityIr const& entity) {
         first_gene = false;
         ss << "{\"kind\":" << static_cast<std::uint32_t>(g.descriptor.kind)
            << ",\"schema\":" << g.descriptor.schema_version
-           << ",\"type\":\"" << json_escape(g.descriptor.type_id) << "\""
-           << ",\"source\":\"" << json_escape(g.source_module) << "\""
+           << ",\"type\":\"" << ir_json_escape(g.descriptor.type_id) << "\""
+           << ",\"source\":\"" << ir_json_escape(g.source_module) << "\""
            << ",\"values\":{";
         bool first_val = true;
         for (auto const& [k, v] : g.values) {
             if (!first_val) ss << ",";
             first_val = false;
-            ss << "\"" << json_escape(k) << "\":\"" << json_escape(gene_value_to_string(v)) << "\"";
+            auto tag = static_cast<std::uint32_t>(gene_value_variant_index(v));
+            ss << "\"" << ir_json_escape(k) << "\":{\"t\":" << tag
+               << ",\"v\":" << gene_value_to_json(v) << "}";
         }
         ss << "}}";
     }
@@ -82,7 +85,7 @@ std::string serialize_entity_ir(EntityIr const& entity) {
     for (auto const& [k, v] : entity.properties) {
         if (!first_prop) ss << ", ";
         first_prop = false;
-        ss << "\"" << json_escape(k) << "\":\"" << json_escape(v) << "\"";
+        ss << "\"" << ir_json_escape(k) << "\":\"" << ir_json_escape(v) << "\"";
     }
     ss << "}";
 
@@ -92,7 +95,7 @@ std::string serialize_entity_ir(EntityIr const& entity) {
     for (auto const& d : entity.dependency_ids) {
         if (!first_dep) ss << ", ";
         first_dep = false;
-        ss << "\"" << json_escape(d) << "\"";
+        ss << "\"" << ir_json_escape(d) << "\"";
     }
     ss << "]";
 
@@ -103,14 +106,14 @@ std::string serialize_entity_ir(EntityIr const& entity) {
         if (!first_child) ss << ",\n  ";
         first_child = false;
         ss << "{\"kind\":" << static_cast<std::uint32_t>(child->kind)
-           << ",\"identity\":\"" << json_escape(child->identity) << "\"";
+           << ",\"identity\":\"" << ir_json_escape(child->identity) << "\"";
         if (!child->properties.empty()) {
             ss << ",\"properties\":{";
             bool fp = true;
             for (auto const& [k, v] : child->properties) {
                 if (!fp) ss << ",";
                 fp = false;
-                ss << "\"" << json_escape(k) << "\":\"" << json_escape(v) << "\"";
+                ss << "\"" << ir_json_escape(k) << "\":\"" << ir_json_escape(v) << "\"";
             }
             ss << "}";
         }
@@ -120,7 +123,7 @@ std::string serialize_entity_ir(EntityIr const& entity) {
             for (auto const& d : child->dependency_ids) {
                 if (!fd) ss << ",";
                 fd = false;
-                ss << "\"" << json_escape(d) << "\"";
+                ss << "\"" << ir_json_escape(d) << "\"";
             }
             ss << "]";
         }
@@ -221,6 +224,29 @@ public:
 
     bool has_more() const { return pos_ < src_.size(); }
 
+    std::string read_typed_value() {
+        skip_ws();
+        if (pos_ >= src_.size()) return {};
+        char c = src_[pos_];
+        if (c == '"') {
+            auto start = pos_;
+            read_string();
+            return std::string(src_.substr(start, pos_ - start));
+        }
+        if (c == '{' || c == '[') {
+            auto start = pos_;
+            skip_value();
+            return std::string(src_.substr(start, pos_ - start));
+        }
+        std::string scalar;
+        while (pos_ < src_.size() && src_[pos_] != ',' && src_[pos_] != '}' &&
+               src_[pos_] != ']' && src_[pos_] != '\n' && src_[pos_] != '\r') {
+            scalar += src_[pos_];
+            ++pos_;
+        }
+        return scalar;
+    }
+
     void skip_value() {
         skip_ws();
         if (pos_ >= src_.size()) return;
@@ -281,7 +307,7 @@ std::string IrSerializer::serialize(SpriteIr const& ir) {
     for (std::size_t i = 0; i < ir.representations.size(); ++i) {
         if (i > 0) ss << ",";
         ss << "{\"kind\":" << static_cast<std::uint32_t>(ir.representations[i]->kind)
-           << ",\"identity\":\"" << json_escape(ir.representations[i]->identity) << "\"}";
+           << ",\"identity\":\"" << ir_json_escape(ir.representations[i]->identity) << "\"}";
     }
     ss << "]";
 
@@ -387,9 +413,36 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json) {
                                                 auto vk = r.read_string();
                                                 if (vk.empty()) break;
                                                 if (!r.expect(':')) break;
-                                                auto vv = r.read_string();
-                                                if (!vv.empty()) {
-                                                    gi.values[vk] = std::string{vv};
+                                                r.skip_ws();
+                                                if (r.expect('{')) {
+                                                    std::uint32_t tag_val = 0;
+                                                    std::string raw_val;
+                                                    while (r.has_more()) {
+                                                        r.skip_ws();
+                                                        auto tk = r.read_string();
+                                                        if (tk.empty()) break;
+                                                        if (!r.expect(':')) break;
+                                                        if (tk == "t") {
+                                                            tag_val = static_cast<std::uint32_t>(r.read_int());
+                                                        } else if (tk == "v") {
+                                                            raw_val = r.read_typed_value();
+                                                        } else {
+                                                            r.skip_value();
+                                                        }
+                                                        r.skip_ws();
+                                                        if (!r.expect(',')) break;
+                                                    }
+                                                    r.expect('}');
+                                                    if (!raw_val.empty()) {
+                                                        auto tag = static_cast<GeneValueTag>(tag_val);
+                                                        gi.values[vk] = json_to_gene_value(raw_val, tag);
+                                                    }
+                                                } else {
+                                                    // Legacy format: bare string value
+                                                    auto vv = r.read_string();
+                                                    if (!vv.empty()) {
+                                                        gi.values[vk] = std::string{vv};
+                                                    }
                                                 }
                                                 r.skip_ws();
                                                 if (!r.expect(',')) break;
