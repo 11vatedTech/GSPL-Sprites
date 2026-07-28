@@ -1,6 +1,6 @@
 # Known Defects
 
-Updated: 2026-07-28 (session: serialization overhaul — fail-closed Result types, BoundedJsonReader, GeneValue type preservation, structural from_json)
+Updated: 2026-07-28 (session: unification and lossless persistence — DEF-0012/13/14 reclassified as PARTIALLY RESOLVED, remaining gaps documented)
 
 Severity scale: Critical / High / Medium / Low.
 
@@ -89,23 +89,39 @@ _All previously open defects (DEF-0006 through DEF-0008) have been resolved. See
 ### DEF-0012 — Full structural round-trip tests deferred
 
 - Severity: Medium
-- Status: ✅ RESOLVED (commit `9dca9a5`)
-- Resolution: Test 21 (semantic_pipeline_tests.cpp) provides maximally populated CanonicalEntity fixture with 2 forms, 1 transformation, 2 morphology parts, normal + storm abilities, 1 bone, 1 socket, 1 clip (with 3-key track + 2 events), 1 state, 1 transition, 1 collision shape, 1 collision window, 1 resource, and runtime with animation intents. Exact field equality asserted for every structural collection. Identity hash survives round-trip. SpriteIr round-trip tested with typed gene values (all 6 GeneValue alternatives: string, bool, int64, uint64, double, string_list). `from_json` now correctly consumes closing `}` after every element in all 16 array/object parsers plus morphology and runtime.
-- Verification: `gspl_sprites_semantic_pipeline_tests` test 21 (ALL PASSED), `gspl_sprites_gene_tests` (ALL PASSED), `gspl_sprites_compiler_tests` (ALL PASSED).
+- Status: ⚠️ PARTIALLY RESOLVED (commit `9dca9a5`)
+- Resolved: maximally populated CanonicalEntity round-trip test with exact field equality for forms, transformations, morphology, abilities, bones, sockets, clips, states, transitions, collisions, resources, runtime. Identity hash survival verified. SpriteIr round-trip with typed gene value key presence checked.
+- Remaining gaps:
+  * Canonical genes are not serialized (to_json outputs `gene_count` only).
+  * `form_morphology_overrides` is not serialized.
+  * Sprite IR runtime plans are not serialized structurally.
+  * Sprite IR package plans are not serialized structurally.
+  * representations preserve only kind and identity.
+  * children are not reconstructed.
+  * properties are not reconstructed.
+  * complete recursive equality is not tested.
 
 ### DEF-0013 — GeneValue type-tagged JSON format not yet wired into IrSerializer
 
 - Severity: Low
-- Status: ✅ RESOLVED (commit `9dca9a5`)
-- Resolution: `IrSerializer::serialize_entity_ir()` now emits type-tagged gene values as `{"t":<GeneValueTag>,"v":<typed_json>}` using `gene_value_variant_index()` + `gene_value_to_json()`. Deserialization parses this format with legacy bare-string fallback. Local `ir_json_escape` avoids conflict with `gspl::json_escape`. `static_assert` on `variant_size_v<GeneValue> == 6` ensures tag alignment.
-- Verification: `gspl_sprites_semantic_pipeline_tests` test 21 verifies all 6 GeneValue types survive SpriteIr round-trip (key presence checked for is_boss, level, experience, scale_factor, tags).
+- Status: ⚠️ PARTIALLY RESOLVED (commit `9dca9a5`)
+- Resolved: type-tagged format `{"t":<tag>,"v":<json>}` wired into IrSerializer. Key presence checked for all 6 types.
+- Remaining gaps:
+  * tests check gene key presence, not exact type and value.
+  * malformed typed values silently become strings or false.
+  * unknown tags silently become strings.
+  * legacy fallback can conceal corruption.
 
 ### DEF-0014 — Resource-limit boundary tests not yet implemented
 
 - Severity: Medium
-- Status: ✅ RESOLVED (commit `9dca9a5`)
-- Resolution: Test 22 provides boundary tests for all 5 limit dimensions: `max_input_bytes` (7 bytes OK, 12 bytes fail), `max_nesting_depth` (depth 2 OK, depth 4 fail), `max_string_length` (9 chars OK, 11 chars fail), `max_object_members` (2 OK, 4 fail), `max_array_length` (2 OK, 4 fail, at-limit 3 OK). `BoundedJsonReader::skip_value()` now enforces nesting depth on nested objects/arrays via `obj_depth`/`arr_depth` checks. Array element double-counting bug fixed (last element counted only once).
-- Verification: `gspl_sprites_semantic_pipeline_tests` test 22 (ALL PASSED).
+- Status: ⚠️ PARTIALLY RESOLVED (commit `9dca9a5`)
+- Resolved: boundary tests for all 5 limit dimensions on BoundedJsonReader directly. Depth enforcement in skip_value().
+- Remaining gaps:
+  * production deserializers do not use `BoundedJsonReader`.
+  * four of the five dimensions lack exact-at-limit tests.
+  * mixed object/array nesting is not counted correctly.
+  * Unicode and malformed numeric handling remain incomplete.
 
 ## Historical defects reverified as currently mitigated or partially mitigated
 
