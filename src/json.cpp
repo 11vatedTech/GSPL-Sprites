@@ -64,12 +64,13 @@ void json_append_key_double(std::ostringstream& ss, std::string_view key,
     if (!first) ss << ",\n";
     first = false;
     if (!std::isfinite(value)) {
-        ss << "  \"" << json_escape(key) << "\": null";
-    } else {
-        char buf[64];
-        std::snprintf(buf, sizeof(buf), "%.17g", value);
-        ss << "  \"" << json_escape(key) << "\": " << buf;
+        throw std::invalid_argument(
+            "json_append_key_double: non-finite double value for key '" +
+            std::string(key) + "' — NaN and Infinity are not valid JSON");
     }
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%.17g", value);
+    ss << "  \"" << json_escape(key) << "\": " << buf;
 }
 
 void json_append_key_bool(std::ostringstream& ss, std::string_view key,
@@ -159,6 +160,38 @@ void BoundedJsonReader::skip_ws() {
 
 // ── Navigation ────────────────────────────────────────────
 
+bool BoundedJsonReader::require(char expected, std::string_view path) {
+    skip_ws();
+    if (has_error_) return false;
+    if (pos_ >= src_.size()) {
+        set_error(std::string(path) + ": expected '" + expected + "', got end-of-input at line " +
+                  std::to_string(line_) + " column " + std::to_string(col_));
+        return false;
+    }
+    if (src_[pos_] != expected) {
+        char buf[32];
+        if (static_cast<unsigned char>(src_[pos_]) >= 0x20 &&
+            static_cast<unsigned char>(src_[pos_]) <= 0x7E) {
+            std::snprintf(buf, sizeof(buf), "'%c'", src_[pos_]);
+        } else {
+            std::snprintf(buf, sizeof(buf), "0x%02x",
+                          static_cast<unsigned>(static_cast<unsigned char>(src_[pos_])));
+        }
+        set_error(std::string(path) + ": expected '" + expected + "', got " + buf +
+                  " at line " + std::to_string(line_) + " column " + std::to_string(col_));
+        return false;
+    }
+    advance_pos();
+    return true;
+}
+
+bool BoundedJsonReader::consume_if(char token) {
+    skip_ws();
+    if (has_error_ || pos_ >= src_.size() || src_[pos_] != token) return false;
+    advance_pos();
+    return true;
+}
+
 bool BoundedJsonReader::expect(char c) {
     skip_ws();
     if (has_error_ || pos_ >= src_.size() || src_[pos_] != c) return false;
@@ -167,6 +200,7 @@ bool BoundedJsonReader::expect(char c) {
 }
 
 bool BoundedJsonReader::has_more() const {
+    if (has_error_) return false;
     auto p = pos_;
     while (p < src_.size()) {
         char c = src_[p];
@@ -723,7 +757,11 @@ std::string gene_value_to_json(GeneValue const& value) {
         } else if constexpr (std::is_same_v<T, std::uint64_t>) {
             return std::to_string(v);
         } else if constexpr (std::is_same_v<T, double>) {
-            if (!std::isfinite(v)) return "null";
+            if (!std::isfinite(v)) {
+                throw std::invalid_argument(
+                    "gene_value_to_json: non-finite double value — "
+                    "NaN and Infinity are not valid JSON");
+            }
             char buf[64];
             std::snprintf(buf, sizeof(buf), "%.17g", v);
             return std::string(buf);
@@ -753,19 +791,34 @@ GeneValueDeserializeResult json_to_gene_value_result(std::string_view json,
                                                       GeneValueTag tag) {
     GeneValueDeserializeResult result;
 
+    // Trim trailing whitespace — from_chars doesn't skip it
+    while (!json.empty() && (json.back() == ' ' || json.back() == '\n' ||
+           json.back() == '\r' || json.back() == '\t')) {
+        json.remove_suffix(1);
+    }
+
     switch (tag) {
     case GeneValueTag::string_val:
         if (json.size() >= 2 && json.front() == '"' && json.back() == '"') {
             BoundedJsonReader r(json);
             auto s = r.read_string_result();
             if (s.ok()) {
+                // Verify complete consumption after closing quote
+                r.skip_ws();
+                if (r.position() < r.source().size()) {
+                    result.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
+                                                 "trailing data after string value", {});
+                    return result;
+                }
                 result.value = GeneValue{std::in_place_index<0>, *s.value};
                 return result;
             }
             result.diagnostics = s.diagnostics;
             return result;
         }
-        result.value = GeneValue{std::in_place_index<0>, std::string(json)};
+        // Reject unquoted strings in current schema
+        result.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
+                                     "string value must be JSON-quoted", {});
         return result;
 
     case GeneValueTag::bool_val: {
@@ -790,6 +843,12 @@ GeneValueDeserializeResult json_to_gene_value_result(std::string_view json,
                                          "int64 parse failure: " + std::string(json), {});
             return result;
         }
+        // Require complete consumption — reject trailing data
+        if (ptr != json.data() + json.size()) {
+            result.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
+                                         "trailing data after int64: " + std::string(json), {});
+            return result;
+        }
         result.value = GeneValue{std::in_place_index<2>, v};
         return result;
     }
@@ -808,6 +867,12 @@ GeneValueDeserializeResult json_to_gene_value_result(std::string_view json,
                                          "uint64 parse failure: " + std::string(json), {});
             return result;
         }
+        // Require complete consumption
+        if (ptr != json.data() + json.size()) {
+            result.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
+                                         "trailing data after uint64: " + std::string(json), {});
+            return result;
+        }
         result.value = GeneValue{std::in_place_index<3>, v};
         return result;
     }
@@ -819,6 +884,12 @@ GeneValueDeserializeResult json_to_gene_value_result(std::string_view json,
         if (end == s.c_str()) {
             result.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
                                          "double parse failure: " + s, {});
+            return result;
+        }
+        // Require complete consumption
+        if (end != s.c_str() + s.size()) {
+            result.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
+                                         "trailing data after double: " + s, {});
             return result;
         }
         if (!std::isfinite(v)) {

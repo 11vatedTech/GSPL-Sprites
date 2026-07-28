@@ -106,7 +106,8 @@ std::string serialize_entity_ir(EntityIr const& entity) {
         if (!first_child) ss << ",\n  ";
         first_child = false;
         ss << "{\"kind\":" << static_cast<std::uint32_t>(child->kind)
-           << ",\"identity\":\"" << ir_json_escape(child->identity) << "\"";
+           << ",\"identity\":\"" << ir_json_escape(child->identity) << "\""
+           << ",\"schema_version\":" << child->schema_version;
         if (!child->properties.empty()) {
             ss << ",\"properties\":{";
             bool fp = true;
@@ -248,6 +249,15 @@ std::string IrSerializer::serialize(SpriteIr const& ir) {
     return ss.str();
 }
 
+// ── Node kind validation ───────────────────────────────────
+
+namespace {
+bool is_valid_ir_node_kind(std::int64_t raw) noexcept {
+    return raw >= 0 &&
+           raw <= static_cast<std::int64_t>(IrNodeKind::target_requirement);
+}
+} // namespace
+
 SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json) {
     SpriteIrDeserializeResult result;
     SpriteIr ir;
@@ -264,9 +274,10 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json) {
                                      r.error_message(), {});
         return result;
     }
-    if (!r.expect('{')) {
+    r.require('{', "deserialize: root object");
+    if (r.has_error()) {
         result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR,
-                                     "deserialize: expected '{'", {});
+                                     r.error_message(), {});
         return result;
     }
 
@@ -289,13 +300,13 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json) {
         } else if (key == "schema_version") {
             r.read_int64();
         } else if (key == "entity") {
-            if (r.expect('{')) {
+            if (r.require('{', "deserialize: entity object")) {
                 ir.entity = std::make_unique<EntityIr>();
                 ir.entity->kind = IrNodeKind::entity;
                 while (r.has_more()) {
                     auto ek = r.read_string();
                     if (ek.empty() || r.has_error()) break;
-                    if (!r.expect(':')) break;
+                    if (!r.require(':', ("deserialize: ':' after entity key '" + ek + "'").c_str())) break;
                     if (ek == "identity") {
                         ir.entity->identity = r.read_string();
                     } else if (ek == "entity_id") {
@@ -333,7 +344,13 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json) {
                                     if (ck.empty()) break;
                                     if (!r.expect(':')) break;
                                     if (ck == "kind") {
-                                        child->kind = static_cast<IrNodeKind>(r.read_int64());
+                                        auto kind_raw = r.read_int64();
+                                        if (!is_valid_ir_node_kind(kind_raw)) {
+                                            result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR,
+                                                "deserialize: unknown child node kind: " + std::to_string(kind_raw), {});
+                                            return result;
+                                        }
+                                        child->kind = static_cast<IrNodeKind>(kind_raw);
                                     } else if (ck == "identity") {
                                         child->identity = r.read_string();
                                     } else if (ck == "schema_version") {
@@ -416,15 +433,15 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json) {
                                                     r.expect('}');
                                                     if (!raw_val.empty()) {
                                                         auto tag = static_cast<GeneValueTag>(tag_val);
-                                                        gi.values[vk] = json_to_gene_value(raw_val, tag);
-                                                    }
-                                                } else {
-                                                    // Legacy format: bare string value
-                                                    auto vv = r.read_string();
-                                                    if (!vv.empty()) {
-                                                        gi.values[vk] = std::string{vv};
+                                                        auto gv_result = json_to_gene_value_result(raw_val, tag);
+                                                        if (!gv_result.ok()) {
+                                                            result.diagnostics = gv_result.diagnostics;
+                                                            return result;
+                                                        }
+                                                        gi.values[vk] = *gv_result.value;
                                                     }
                                                 }
+                                                // Current schema: reject bare string values (no legacy fallback)
                                                 if (!r.expect(',')) break;
                                             }
                                             r.expect('}');
@@ -459,7 +476,13 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json) {
                         if (rk.empty()) break;
                         if (!r.expect(':')) break;
                         if (rk == "kind") {
-                            rep->kind = static_cast<IrNodeKind>(r.read_int64());
+                            auto kind_raw = r.read_int64();
+                            if (!is_valid_ir_node_kind(kind_raw)) {
+                                result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR,
+                                    "deserialize: unknown representation node kind: " + std::to_string(kind_raw), {});
+                                return result;
+                            }
+                            rep->kind = static_cast<IrNodeKind>(kind_raw);
                         } else if (rk == "identity") {
                             rep->identity = r.read_string();
                         } else if (rk == "schema_version") {
@@ -505,8 +528,15 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json) {
                         auto pk = r.read_string();
                         if (pk.empty()) break;
                         if (!r.expect(':')) break;
-                        if (pk == "kind") plan->kind = static_cast<IrNodeKind>(r.read_int64());
-                        else if (pk == "identity") plan->identity = r.read_string();
+                        if (pk == "kind") {
+                            auto kind_raw = r.read_int64();
+                            if (!is_valid_ir_node_kind(kind_raw)) {
+                                result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR,
+                                    "deserialize: unknown runtime_plan node kind: " + std::to_string(kind_raw), {});
+                                return result;
+                            }
+                            plan->kind = static_cast<IrNodeKind>(kind_raw);
+                        } else if (pk == "identity") plan->identity = r.read_string();
                         else if (pk == "schema_version") plan->schema_version = static_cast<std::uint32_t>(r.read_int64());
                         else if (pk == "properties" && r.expect('{')) {
                             while (r.has_more()) {
@@ -543,8 +573,15 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json) {
                         auto pk = r.read_string();
                         if (pk.empty()) break;
                         if (!r.expect(':')) break;
-                        if (pk == "kind") plan->kind = static_cast<IrNodeKind>(r.read_int64());
-                        else if (pk == "identity") plan->identity = r.read_string();
+                        if (pk == "kind") {
+                            auto kind_raw = r.read_int64();
+                            if (!is_valid_ir_node_kind(kind_raw)) {
+                                result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR,
+                                    "deserialize: unknown package_plan node kind: " + std::to_string(kind_raw), {});
+                                return result;
+                            }
+                            plan->kind = static_cast<IrNodeKind>(kind_raw);
+                        } else if (pk == "identity") plan->identity = r.read_string();
                         else if (pk == "schema_version") plan->schema_version = static_cast<std::uint32_t>(r.read_int64());
                         else if (pk == "properties" && r.expect('{')) {
                             while (r.has_more()) {
@@ -578,6 +615,22 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json) {
         if (!r.expect(',')) break;
     }
 
+    // Document closure: consume closing '}' and reject trailing data
+    if (!r.has_error()) {
+        r.skip_ws();
+        if (!r.consume_if('}')) {
+            result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR,
+                                         "deserialize: missing closing '}' of root object", {});
+            return result;
+        }
+        r.skip_ws();
+        if (r.position() < r.source().size()) {
+            result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR,
+                                         "deserialize: trailing data after root '}'", {});
+            return result;
+        }
+    }
+
     if (r.has_error()) {
         result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR,
                                      r.error_message(), {});
@@ -589,7 +642,17 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json) {
         return result;
     }
 
-    // Fail-closed: require valid entity_id and entity
+    // Fail-closed: require valid ir_version, seed_identity, entity_id, and entity
+    if (ir.ir_version != "gspl-ir/1.0") {
+        result.diagnostics.add_error(DiagnosticCode::GSPL_IR_UNSUPPORTED_VERSION,
+                                     "deserialize: unsupported ir_version: " + ir.ir_version, {});
+        return result;
+    }
+    if (ir.seed_identity.empty()) {
+        result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR,
+                                     "deserialize: missing required seed_identity", {});
+        return result;
+    }
     if (ir.entity_id.empty()) {
         result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR,
                                      "deserialize: missing required entity_id", {});
@@ -598,6 +661,13 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json) {
     if (!ir.entity) {
         result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR,
                                      "deserialize: missing required entity", {});
+        return result;
+    }
+
+    // Run structural validation
+    auto validation = IrSerializer::validate(ir);
+    if (!validation.ok()) {
+        result.diagnostics = validation;
         return result;
     }
 

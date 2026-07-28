@@ -306,6 +306,7 @@ std::string canonical_identity_payload(CanonicalEntity const& entity) {
 
 // ── CanonicalEntitySerializer ──────────────────────────────────────
 std::string CanonicalEntitySerializer::to_json(CanonicalEntity const& entity) {
+    try {
     std::ostringstream os;
     os << "{\n";
     os << "  \"schema_version\": \"" << entity.schema_version << "\",\n";
@@ -573,6 +574,10 @@ std::string CanonicalEntitySerializer::to_json(CanonicalEntity const& entity) {
     os << "  \"gene_count\": " << entity.genes.size() << "\n";
     os << "}";
     return os.str();
+    } catch (std::invalid_argument const&) {
+        // Nonfinite double detected — fail with empty string (caller should validate first)
+        return std::string{};
+    }
 }
 
 CanonicalEntityDeserializeResult CanonicalEntitySerializer::from_json(
@@ -1357,7 +1362,10 @@ CanonicalEntityDeserializeResult CanonicalEntitySerializer::from_json(
         return result;
     }
     if (ce.name.empty()) {
-        ce.name = ce.stable_id;
+        // Required field missing — must be explicitly provided
+        result.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
+                       "from_json: missing required field 'name'", {});
+        return result;
     }
 
     result.value = std::move(ce);

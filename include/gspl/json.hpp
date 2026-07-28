@@ -62,12 +62,23 @@ public:
 
     // Position / navigation
     void skip_ws();
+
+    // Fail-closed mandatory token consumption — sets error state on mismatch
+    bool require(char expected, std::string_view path);
+
+    // Optional token probe — no error on mismatch, advances if match
+    bool consume_if(char token);
+
+    // Prefer require() or consume_if() instead
     bool expect(char c);
+
     bool has_more() const;
     std::size_t depth() const { return depth_; }
     JsonSourcePosition source_position() const;
     std::size_t byte_offset() const { return pos_; }
+    std::size_t position() const { return pos_; }
     char peek() const;
+    std::string_view source() const { return src_; }
 
     // Legacy fallback-returning reads (deprecated — use Result variants)
     std::string read_string();

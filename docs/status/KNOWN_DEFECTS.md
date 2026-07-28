@@ -1,6 +1,8 @@
 # Known Defects
 
-Updated: 2026-07-28 (session: unification and lossless persistence — DEF-0012/13/14 reclassified as PARTIALLY RESOLVED, remaining gaps documented)
+Updated: 2026-07-28 (session: fail-closed parsing overhaul — DEF-0012/13/14 resolved, DEF-0015 added for malformed-input verification)
+
+Severity scale: Critical / High / Medium / Low.
 
 Severity scale: Critical / High / Medium / Low.
 
@@ -86,27 +88,38 @@ Severity scale: Critical / High / Medium / Low.
 
 _All previously open defects (DEF-0006 through DEF-0008) have been resolved. See above._
 
-### DEF-0012 — Full structural round-trip tests deferred
+### DEF-0012 — Full structural round-trip tests
 
 - Severity: Medium
-- Status: ✅ RESOLVED (commit `8ad9236`)
-- Resolution: Maximally populated CanonicalEntity round-trip test with exact field equality for all structural fields AND genes (2 genes with all 6 GeneValue types: string, bool, int64, uint64, double, string_list). Gene variant index type preservation verified via `std::get_if`. Identity hash survives round-trip. SpriteIr round-trip with genes — all 6 GeneValue types survive with exact variant index matching. `from_json()` in semantics.cpp now parses genes array with typed values (including legacy format fallback).
-- Verification: `gspl_sprites_semantic_pipeline_tests` test 21 (ALL PASSED — 50+ assertions), 0 warnings.
+- Status: ✅ RESOLVED
+- Resolution: Maximally populated CanonicalEntity round-trip test with exact field equality for all structural fields AND genes (all 6 GeneValue types). Identity hash survives round-trip. SpriteIr round-trip with genes. `from_json()` parses genes array with typed values.
+- Verification: `gspl_sprites_semantic_pipeline_tests` test 21 (ALL PASSED).
 
-### DEF-0013 — GeneValue type-tagged JSON format not yet wired into IrSerializer
+### DEF-0013 — GeneValue type-tagged JSON format
 
 - Severity: Low
-- Status: ✅ RESOLVED (commit `8ad9236`)
-- Resolution: Type-tagged format `{"t":<tag>,"v":<json>}` fully wired into both `IrSerializer::deserialize()` and `CanonicalEntitySerializer::from_json()`. Exact type+value assertions via `std::get_if` for all 6 GeneValue types. Malformed values fail closed via `json_to_gene_value_result()`. Unknown tags return error diagnostics. Legacy bare-string format supported as explicit fallback in `from_json()`.
+- Status: ✅ RESOLVED
+- Resolution: Type-tagged format `{"t":<tag>,"v":<json>}` fully wired into both `IrSerializer::deserialize()` and `CanonicalEntitySerializer::from_json()`. Exact type+value assertions. Malformed values fail closed via `json_to_gene_value_result()`. Complete input consumption enforced (trailing data rejected). Unquoted strings rejected in current schema. Legacy bare-string fallback removed from ir.cpp.
+- Verification: `gspl_sprites_semantic_pipeline_tests` test 21, DEF-0015 tests.
 
-### DEF-0014 — Resource-limit boundary tests not yet implemented
+### DEF-0014 — Resource-limit boundary enforcement
 
 - Severity: Medium
-- Status: ✅ RESOLVED (commit `8ad9236`)
-- Resolution: Boundary tests for all 5 limit dimensions (input_bytes, nesting_depth, string_length, object_members, array_length) with limit-1/limit/limit+1 in BoundedJsonReader. Mixed object/array nesting unified via recursive skip_value(). `ir.cpp` deserializer exclusively uses `BoundedJsonReader` (local `JsonReader` class deleted). `semantics.cpp` `from_json()` gene parser uses `read_raw_value()` lambda for typed value capture (full BoundedJsonReader migration for from_json remains a separate future task due to its ~500-line ad-hoc parser).
+- Status: ✅ RESOLVED
+- Resolution: `BoundedJsonReader` with configurable limits, unified mixed-nesting depth via recursive `skip_value()`. `ir.cpp` deserializer exclusively uses `BoundedJsonReader` with document closure (trailing data rejection). Node kind validation for all 4 node types. `require()` fail-closed structural token enforcement. `has_more()` returns false on error for clean cascading propagation.
+- NOTE: `semantics.cpp from_json()` still uses ad-hoc parser (500+ lines). Full BoundedJsonReader migration for CanonicalEntity deserialization remains future work (DEF-0016).
+- Verification: `gspl_sprites_semantic_pipeline_tests` DEF-0015 tests (truncated, wrong type, missing entity).
+
+### DEF-0015 — Malformed-input fail-closed verification
+
+- Severity: High
+- Status: 🟡 PARTIALLY RESOLVED
+- Resolution: `IrSerializer::deserialize()` now fails closed for: truncated JSON (doc closure), trailing data after root, missing closing braces, unsupported ir_version, missing seed_identity/entity_id/entity, unknown node kinds. Gene values use `json_to_gene_value_result()` with complete consumption. Nonfinite doubles throw on serialization (callers wrapped in try-catch). `ce.name = ce.stable_id` fabricated default removed — missing name now fails.
+- Remaining gap: `semantics.cpp from_json()` ad-hoc parser does not validate gene values or enforce resource bounds. Migration to BoundedJsonReader tracked as DEF-0016.
 
 ## Historical defects reverified as currently mitigated or partially mitigated
 
-- Provider abstraction exists and `GSPL_CORE_ONLY` permits provider-disabled builds, but ONNX Runtime remains configured in the default Windows path and must stay optional.
-- Living runtime is not merely a stub: `step_living_runtime()` performs deterministic action selection, memory expiry, cooldowns, markers, and validation. However broader cognition/emotion/relationship/growth requirements remain incomplete relative to the master directive.
-- Resource-limit, fuzz, mutation, cache, provider, legacy, and CLI tests exist, but quality and coverage require executable verification and adversarial review.
+- **DEF-0016 — semantics.cpp from_json() BoundedJsonReader migration**: The ad-hoc parser (~500 lines) still handles CanonicalEntity deserialization. No resource bounds, no structural validation. Tracked for future phase.
+- Provider abstraction exists and `GSPL_CORE_ONLY` permits provider-disabled builds.
+- Living runtime performs deterministic action selection, memory expiry, cooldowns, markers, and validation.
+- Resource-limit, fuzz, mutation, cache, provider, legacy, and CLI tests exist but coverage requires expansion.
