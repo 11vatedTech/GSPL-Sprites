@@ -453,7 +453,66 @@ DiagnosticResult IrValidatePhase::execute(CompilationContext& ctx) {
 }
 
 DiagnosticResult IrOptimizePhase::execute(CompilationContext& ctx) {
-    (void)ctx;
+    // Canonical-normalization pass: applies deterministic ordering to
+    // collection fields so that serialized output is stable regardless
+    // of insertion order. This pass does NOT alter semantic behavior.
+    // Contract: behavior(before) == behavior(after).
+
+    if (ctx.canonical.stable_id.empty()) return {}; // nothing to normalize
+
+    auto& ce = ctx.canonical;
+
+    // Sort forms by id
+    std::sort(ce.forms.begin(), ce.forms.end(),
+              [](auto const& a, auto const& b) { return a.id < b.id; });
+
+    // Sort transformations by id
+    std::sort(ce.transformations.begin(), ce.transformations.end(),
+              [](auto const& a, auto const& b) { return a.id < b.id; });
+
+    // Sort abilities by id
+    std::sort(ce.abilities.begin(), ce.abilities.end(),
+              [](auto const& a, auto const& b) { return a.id < b.id; });
+    std::sort(ce.storm_abilities.begin(), ce.storm_abilities.end(),
+              [](auto const& a, auto const& b) { return a.id < b.id; });
+
+    // Sort bones by id
+    std::sort(ce.bones.begin(), ce.bones.end(),
+              [](auto const& a, auto const& b) { return a.id < b.id; });
+
+    // Sort sockets by id
+    std::sort(ce.sockets.begin(), ce.sockets.end(),
+              [](auto const& a, auto const& b) { return a.id < b.id; });
+
+    // Sort clips by name
+    std::sort(ce.clips.begin(), ce.clips.end(),
+              [](auto const& a, auto const& b) { return a.name < b.name; });
+
+    // Sort states by name
+    std::sort(ce.states.begin(), ce.states.end(),
+              [](auto const& a, auto const& b) { return a.name < b.name; });
+
+    // Sort collision shapes by id
+    std::sort(ce.collision_shapes.begin(), ce.collision_shapes.end(),
+              [](auto const& a, auto const& b) { return a.id < b.id; });
+
+    // Sort collision windows by ability_id then shape_id
+    std::sort(ce.collision_windows.begin(), ce.collision_windows.end(),
+              [](auto const& a, auto const& b) {
+                  if (a.ability_id != b.ability_id) return a.ability_id < b.ability_id;
+                  return a.shape_id < b.shape_id;
+              });
+
+    // Sort resources by id
+    std::sort(ce.resources.begin(), ce.resources.end(),
+              [](auto const& a, auto const& b) { return a.id < b.id; });
+
+    // Sort genes by kind for deterministic serialization
+    std::sort(ce.genes.begin(), ce.genes.end(),
+              [](auto const& a, auto const& b) {
+                  return a.descriptor.kind < b.descriptor.kind;
+              });
+
     return {};
 }
 

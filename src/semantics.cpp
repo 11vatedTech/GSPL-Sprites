@@ -319,11 +319,171 @@ std::string CanonicalEntitySerializer::to_json(CanonicalEntity const& entity) {
 }
 
 std::optional<CanonicalEntity> CanonicalEntitySerializer::from_json(
-    std::string_view json, DiagnosticResult&) {
-    // Minimal deserialization; full parser would use a JSON library
-    // Returns empty for now; full implementation would parse key-value pairs
-    (void)json;
-    return std::nullopt;
+    std::string_view json, DiagnosticResult& diag) {
+    if (json.empty()) {
+        diag.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
+                       "from_json: empty input", {});
+        return std::nullopt;
+    }
+
+    // minimal bounded JSON key-value parser for canonical entity format
+    auto skip_ws = [&](std::size_t& pos) {
+        while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\n' ||
+               json[pos] == '\r' || json[pos] == '\t')) ++pos;
+    };
+
+    auto read_string = [&](std::size_t& pos) -> std::string {
+        skip_ws(pos);
+        if (pos >= json.size() || json[pos] != '"') return {};
+        ++pos;
+        std::string out;
+        while (pos < json.size() && json[pos] != '"') {
+            if (json[pos] == '\\' && pos + 1 < json.size()) {
+                ++pos;
+                switch (json[pos]) {
+                case '"': out += '"'; break;
+                case '\\': out += '\\'; break;
+                case 'n': out += '\n'; break;
+                case 'r': out += '\r'; break;
+                case 't': out += '\t'; break;
+                default: out += json[pos]; break;
+                }
+            } else {
+                out += json[pos];
+            }
+            ++pos;
+        }
+        if (pos < json.size()) ++pos;
+        return out;
+    };
+
+    auto read_bool = [&](std::size_t& pos) -> bool {
+        skip_ws(pos);
+        if (pos + 4 <= json.size() && json.substr(pos, 4) == "true") { pos += 4; return true; }
+        if (pos + 5 <= json.size() && json.substr(pos, 5) == "false") { pos += 5; return false; }
+        return false;
+    };
+
+    auto read_uint64 = [&](std::size_t& pos) -> std::uint64_t {
+        skip_ws(pos);
+        std::string num;
+        while (pos < json.size() && std::isdigit(static_cast<unsigned char>(json[pos]))) {
+            num += json[pos];
+            ++pos;
+        }
+        if (num.empty()) return 0;
+        std::uint64_t v{};
+        auto [ptr, ec] = std::from_chars(num.data(), num.data() + num.size(), v);
+        if (ec != std::errc{}) return 0;
+        return v;
+    };
+
+    std::size_t pos = 0;
+    skip_ws(pos);
+    if (pos >= json.size() || json[pos] != '{') {
+        diag.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
+                       "from_json: expected '{'", {});
+        return std::nullopt;
+    }
+    ++pos;
+
+    CanonicalEntity ce;
+    bool parsed_any = false;
+
+    while (pos < json.size()) {
+        skip_ws(pos);
+        if (pos >= json.size()) break;
+        if (json[pos] == '}') { ++pos; break; }
+        if (json[pos] == ',') { ++pos; continue; }
+
+        auto key = read_string(pos);
+        if (key.empty()) break;
+        skip_ws(pos);
+        if (pos >= json.size() || json[pos] != ':') break;
+        ++pos; // skip ':'
+
+        parsed_any = true;
+
+        if (key == "schema_version") {
+            ce.schema_version = read_string(pos);
+        } else if (key == "stable_id") {
+            ce.stable_id = read_string(pos);
+        } else if (key == "name") {
+            ce.name = read_string(pos);
+        } else if (key == "classification") {
+            ce.classification = read_string(pos);
+        } else if (key == "rights") {
+            ce.rights = read_string(pos);
+        } else if (key == "rights_allow_export") {
+            skip_ws(pos);
+            ce.rights_allow_export = read_bool(pos);
+        } else if (key == "entropy_root") {
+            ce.entropy_root = read_uint64(pos);
+        } else if (key == "primary_color") {
+            ce.primary_color = read_string(pos);
+        } else if (key == "accent_color") {
+            ce.accent_color = read_string(pos);
+        } else if (key == "storm_primary_color") {
+            ce.storm_primary_color = read_string(pos);
+        } else if (key == "storm_accent_color") {
+            ce.storm_accent_color = read_string(pos);
+        } else if (key == "emissive_color") {
+            ce.emissive_color = read_string(pos);
+        } else if (key == "aura_color") {
+            ce.aura_color = read_string(pos);
+        } else if (key == "provenance_hash") {
+            ce.provenance_hash = read_string(pos);
+        } else if (key == "provenance_source") {
+            ce.provenance_source = read_string(pos);
+        } else {
+            // skip unknown values (counts, arrays, nested objects)
+            skip_ws(pos);
+            if (pos < json.size()) {
+                if (json[pos] == '"') { read_string(pos); }
+                else if (json[pos] == '{') {
+                    int depth = 1; ++pos;
+                    while (pos < json.size() && depth > 0) {
+                        if (json[pos] == '{') ++depth;
+                        else if (json[pos] == '}') --depth;
+                        else if (json[pos] == '"') read_string(pos);
+                        else ++pos;
+                    }
+                } else if (json[pos] == '[') {
+                    int depth = 1; ++pos;
+                    while (pos < json.size() && depth > 0) {
+                        if (json[pos] == '[') ++depth;
+                        else if (json[pos] == ']') --depth;
+                        else if (json[pos] == '"') read_string(pos);
+                        else ++pos;
+                    }
+                } else {
+                    while (pos < json.size() && json[pos] != ',' && json[pos] != '}' &&
+                           json[pos] != '\n') ++pos;
+                }
+            }
+        }
+    }
+
+    if (!parsed_any) {
+        diag.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
+                       "from_json: no fields parsed from input", {});
+        return std::nullopt;
+    }
+
+    // Validate required identity fields
+    if (ce.stable_id.empty()) {
+        diag.add_error(DiagnosticCode::GSPL_NAME_UNKNOWN,
+                       "from_json: deserialized entity missing required stable_id", {});
+        return std::nullopt;
+    }
+    if (ce.name.empty()) {
+        ce.name = ce.stable_id; // fallback: name defaults to stable_id
+    }
+    if (ce.rights.empty()) {
+        ce.rights = "UNCLASSIFIED";
+    }
+
+    return ce;
 }
 
 std::string CanonicalEntitySerializer::to_yaml(CanonicalEntity const& entity) {

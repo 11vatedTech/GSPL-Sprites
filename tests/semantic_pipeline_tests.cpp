@@ -607,6 +607,133 @@ int main() {
             check(ce.runtime->aggression == 80, "Runtime aggression should be 80");
         }
 
+        // ---- 16. CanonicalEntitySerializer from_json round-trip ----
+        {
+            gspl::CanonicalEntity ce;
+            ce.stable_id = "roundtrip.test";
+            ce.name = "Roundtrip Test";
+            ce.classification = "test.roundtrip";
+            ce.rights = "ORIGINAL_USER_CREATION";
+            ce.rights_allow_export = true;
+            ce.primary_color = "#242038";
+            ce.accent_color = "#56F1FF";
+            ce.provenance_hash = "abcd1234";
+            ce.entropy_root = 42;
+
+            auto json = gspl::CanonicalEntitySerializer::to_json(ce);
+            gspl::DiagnosticResult diag;
+            auto restored = gspl::CanonicalEntitySerializer::from_json(json, diag);
+            check(restored.has_value(), "from_json should produce a value for valid JSON");
+            check(restored->stable_id == "roundtrip.test", "from_json should preserve stable_id");
+            check(restored->name == "Roundtrip Test", "from_json should preserve name");
+            check(restored->classification == "test.roundtrip", "from_json should preserve classification");
+            check(restored->rights == "ORIGINAL_USER_CREATION", "from_json should preserve rights");
+            check(restored->rights_allow_export == true, "from_json should preserve rights_allow_export");
+            check(restored->primary_color == "#242038", "from_json should preserve primary_color");
+            check(restored->accent_color == "#56F1FF", "from_json should preserve accent_color");
+            check(restored->provenance_hash == "abcd1234", "from_json should preserve provenance_hash");
+            check(restored->entropy_root == 42, "from_json should preserve entropy_root");
+
+            auto hash_before = gspl::CanonicalEntityIdentity(ce).hash();
+            auto hash_after = gspl::CanonicalEntityIdentity(*restored).hash();
+            check(hash_before == hash_after, "CanonicalEntity identity should survive JSON round-trip");
+        }
+
+        // ---- 17. from_json malformed input ----
+        {
+            gspl::DiagnosticResult diag;
+            auto result = gspl::CanonicalEntitySerializer::from_json("", diag);
+            check(!result.has_value(), "from_json should reject empty input");
+
+            gspl::DiagnosticResult diag2;
+            auto result2 = gspl::CanonicalEntitySerializer::from_json("not json", diag2);
+            check(!result2.has_value(), "from_json should reject non-JSON input");
+        }
+
+        // ---- 18. from_json missing required stable_id ----
+        {
+            gspl::DiagnosticResult diag;
+            auto result = gspl::CanonicalEntitySerializer::from_json(
+                "{\"name\": \"Missing ID\"}", diag);
+            check(!result.has_value(), "from_json should reject entity without stable_id");
+        }
+
+        // ---- 19. IrSerializer round-trip ----
+        {
+            gspl::SpriteIr ir;
+            ir.entity_id = "serialize-test";
+            ir.seed_identity = "seed-42";
+            ir.entity = std::make_unique<gspl::EntityIr>();
+            ir.entity->entity_id = "serialize-test";
+            ir.entity->identity = "test-identity";
+            ir.entity->dependency_ids = {"dep-a", "dep-b"};
+
+            auto json = gspl::IrSerializer::serialize(ir);
+            check(!json.empty(), "serialize should produce output");
+            check(json.find("gspl-ir/1.0") != std::string::npos, "serialize should embed ir_version");
+            check(json.find("serialize-test") != std::string::npos, "serialize should embed entity_id");
+            check(json.find("entity") != std::string::npos, "serialize should embed entity tree");
+            check(json.find("dep-a") != std::string::npos, "serialize should embed dependency_ids");
+
+            auto restored = gspl::IrSerializer::deserialize(json);
+            check(restored.entity_id == "serialize-test", "deserialize should restore entity_id");
+            check(restored.seed_identity == "seed-42", "deserialize should restore seed_identity");
+            check(restored.entity != nullptr, "deserialize should restore entity");
+            check(restored.entity->entity_id == "serialize-test", "deserialize should restore entity.entity_id");
+            check(restored.entity->identity == "test-identity", "deserialize should restore entity.identity");
+            check(restored.entity->dependency_ids.size() == 2, "deserialize should restore dependency_ids");
+
+            auto deps = gspl::IrSerializer::dependencies(ir, "");
+            check(deps.size() == 2, "dependencies() should return entity dependency_ids");
+            check(deps[0] == "dep-a", "dependencies should be sorted");
+            check(deps[1] == "dep-b", "dependencies should be sorted");
+        }
+
+        // ---- 20. IrOptimizePhase canonical ordering ----
+        {
+            gspl::CompilationContext ctx;
+            auto buf = gspl::SourceBuffer::from_string("order.gspl",
+                "module order;\n"
+                "entity OrderTest {\n"
+                "  rights ORIGINAL_USER_CREATION PUBLIC;\n"
+                "  gene identity { stable_id: \"order.test\" }\n"
+                "  gene classification { taxonomy: \"order.test\" }\n"
+                "  ability z_ability {}\n"
+                "  ability a_ability {}\n"
+                "  bone z_bone { parent: \"root\"; }\n"
+                "  bone a_bone { parent: \"root\"; }\n"
+                "  form default {}\n"
+                "  morphology {}\n"
+                "}\n");
+            ctx.sources.register_buffer(std::move(buf));
+            gspl::LexPhase lex; lex.execute(ctx);
+            gspl::ParsePhase parse; parse.execute(ctx);
+            ctx.diagnostics = {};
+            gspl::NameResolvePhase name_res; name_res.execute(ctx);
+            ctx.diagnostics = {};
+            gspl::TypeCheckPhase type_check; type_check.execute(ctx);
+            ctx.diagnostics = {};
+            gspl::GeneCompositionPhase gene_comp; gene_comp.execute(ctx);
+            gspl::CanonicalizePhase canon; canon.execute(ctx);
+
+            gspl::IrOptimizePhase opt;
+            opt.execute(ctx);
+
+            check(ctx.canonical.abilities.size() == 2, "Should have 2 abilities");
+            check(ctx.canonical.abilities[0].id == "a_ability", "Abilities should be sorted (a before z)");
+            check(ctx.canonical.abilities[1].id == "z_ability", "Abilities should be sorted (a before z)");
+
+            check(ctx.canonical.bones.size() == 2, "Should have 2 bones");
+            check(ctx.canonical.bones[0].id == "a_bone", "Bones should be sorted (a before z)");
+            check(ctx.canonical.bones[1].id == "z_bone", "Bones should be sorted (a before z)");
+
+            auto hash1 = gspl::CanonicalEntityIdentity(ctx.canonical).hash();
+            gspl::IrOptimizePhase opt2;
+            opt2.execute(ctx);
+            auto hash2 = gspl::CanonicalEntityIdentity(ctx.canonical).hash();
+            check(hash1 == hash2, "Repeated optimization should be idempotent");
+        }
+
         std::cout << "ALL SEMANTIC PIPELINE TESTS PASSED\n";
         return 0;
     } catch (std::exception const& e) {
