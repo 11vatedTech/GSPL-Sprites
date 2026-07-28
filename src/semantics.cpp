@@ -287,10 +287,10 @@ std::string CanonicalEntitySerializer::to_json(CanonicalEntity const& entity) {
     std::ostringstream os;
     os << "{\n";
     os << "  \"schema_version\": \"" << entity.schema_version << "\",\n";
-    os << "  \"stable_id\": \"" << entity.stable_id << "\",\n";
-    os << "  \"name\": \"" << entity.name << "\",\n";
-    os << "  \"classification\": \"" << entity.classification << "\",\n";
-    os << "  \"rights\": \"" << entity.rights << "\",\n";
+    os << "  \"stable_id\": \"" << canonical_escape(entity.stable_id) << "\",\n";
+    os << "  \"name\": \"" << canonical_escape(entity.name) << "\",\n";
+    os << "  \"classification\": \"" << canonical_escape(entity.classification) << "\",\n";
+    os << "  \"rights\": \"" << canonical_escape(entity.rights) << "\",\n";
     os << "  \"rights_allow_export\": " << (entity.rights_allow_export ? "true" : "false") << ",\n";
     os << "  \"entropy_root\": " << entity.entropy_root << ",\n";
     os << "  \"primary_color\": \"" << entity.primary_color << "\",\n";
@@ -301,18 +301,204 @@ std::string CanonicalEntitySerializer::to_json(CanonicalEntity const& entity) {
     os << "  \"aura_color\": \"" << entity.aura_color << "\",\n";
     os << "  \"provenance_hash\": \"" << entity.provenance_hash << "\",\n";
     os << "  \"provenance_source\": \"" << entity.provenance_source << "\",\n";
-    os << "  \"form_count\": " << entity.forms.size() << ",\n";
-    os << "  \"transformation_count\": " << entity.transformations.size() << ",\n";
-    os << "  \"morphology_part_count\": " << entity.morphology.size() << ",\n";
-    os << "  \"ability_count\": " << entity.abilities.size() << ",\n";
-    os << "  \"storm_ability_count\": " << entity.storm_abilities.size() << ",\n";
-    os << "  \"bone_count\": " << entity.bones.size() << ",\n";
-    os << "  \"socket_count\": " << entity.sockets.size() << ",\n";
-    os << "  \"clip_count\": " << entity.clips.size() << ",\n";
-    os << "  \"state_count\": " << entity.states.size() << ",\n";
-    os << "  \"transition_count\": " << entity.transitions.size() << ",\n";
-    os << "  \"collision_shape_count\": " << entity.collision_shapes.size() << ",\n";
-    os << "  \"collision_window_count\": " << entity.collision_windows.size() << ",\n";
+    // forms
+    os << "  \"forms\": [";
+    for (std::size_t i = 0; i < entity.forms.size(); ++i) {
+        if (i > 0) os << ", ";
+        auto const& f = entity.forms[i];
+        os << "{\"id\":\"" << canonical_escape(f.id) << "\""
+           << ",\"resource_capacity\":" << f.resource_capacity
+           << ",\"collision_scale\":" << f.collision_scale
+           << ",\"ability_envelope\":" << f.ability_envelope
+           << ",\"max_health\":" << f.max_health
+           << ",\"transformation_ids\":[";
+        for (std::size_t j = 0; j < f.transformation_ids.size(); ++j) {
+            if (j > 0) os << ",";
+            os << "\"" << canonical_escape(f.transformation_ids[j]) << "\"";
+        }
+        os << "]}";
+    }
+    os << "],\n";
+    // transformations
+    os << "  \"transformations\": [";
+    for (std::size_t i = 0; i < entity.transformations.size(); ++i) {
+        if (i > 0) os << ", ";
+        auto const& t = entity.transformations[i];
+        os << "{\"id\":\"" << canonical_escape(t.id) << "\""
+           << ",\"from_form\":\"" << canonical_escape(t.from_form) << "\""
+           << ",\"to_form\":\"" << canonical_escape(t.to_form) << "\""
+           << ",\"trigger_condition\":\"" << canonical_escape(t.trigger_condition) << "\""
+           << ",\"duration_ticks\":" << t.duration_ticks
+           << ",\"resource_cost\":" << t.resource_cost << "}";
+    }
+    os << "],\n";
+    // morphology
+    os << "  \"morphology\": {";
+    bool first_morph = true;
+    for (auto const& [name, part] : entity.morphology) {
+        if (!first_morph) os << ", ";
+        first_morph = false;
+        os << "\"" << canonical_escape(name) << "\":{"
+           << "\"parent\":\"" << canonical_escape(part.parent) << "\""
+           << ",\"x\":" << part.x << ",\"y\":" << part.y << ",\"z\":" << part.z
+           << ",\"size_x\":" << part.size_x << ",\"size_y\":" << part.size_y << ",\"size_z\":" << part.size_z
+           << ",\"color\":\"" << canonical_escape(part.color) << "\""
+           << ",\"rotation_degrees\":" << part.rotation_degrees
+           << ",\"emissive\":" << (part.emissive ? "true" : "false")
+           << ",\"electrical_marking\":" << (part.electrical_marking ? "true" : "false")
+           << "}";
+    }
+    os << "},\n";
+    // abilities
+    auto append_abilities_json = [&](std::string_view key, std::vector<CanonicalAbility> const& abilities) {
+        os << "  \"" << key << "\": [";
+        for (std::size_t i = 0; i < abilities.size(); ++i) {
+            if (i > 0) os << ", ";
+            auto const& a = abilities[i];
+            os << "{\"id\":\"" << canonical_escape(a.id) << "\""
+               << ",\"effect\":\"" << canonical_escape(a.effect) << "\""
+               << ",\"cost\":" << a.cost
+               << ",\"cooldown_ticks\":" << a.cooldown_ticks
+               << ",\"active_ticks\":" << a.active_ticks
+               << ",\"origin_socket\":\"" << canonical_escape(a.origin_socket) << "\""
+               << ",\"speed_mm_per_tick\":" << a.speed_mm_per_tick
+               << ",\"collision_radius_mm\":" << a.collision_radius_mm
+               << ",\"status_id\":\"" << canonical_escape(a.status_id) << "\""
+               << ",\"status_duration_ticks\":" << a.status_duration_ticks << "}";
+        }
+        os << "],\n";
+    };
+    append_abilities_json("abilities", entity.abilities);
+    append_abilities_json("storm_abilities", entity.storm_abilities);
+    // bones
+    os << "  \"bones\": [";
+    for (std::size_t i = 0; i < entity.bones.size(); ++i) {
+        if (i > 0) os << ", ";
+        auto const& b = entity.bones[i];
+        os << "{\"id\":\"" << canonical_escape(b.id) << "\""
+           << ",\"parent\":\"" << canonical_escape(b.parent) << "\""
+           << ",\"x\":" << b.x << ",\"y\":" << b.y << ",\"z\":" << b.z
+           << ",\"scale_x\":" << b.scale_x << ",\"scale_y\":" << b.scale_y
+           << ",\"length_mm\":" << b.length_mm
+           << ",\"min_rotation\":" << b.min_rotation
+           << ",\"max_rotation\":" << b.max_rotation << "}";
+    }
+    os << "],\n";
+    // sockets
+    os << "  \"sockets\": [";
+    for (std::size_t i = 0; i < entity.sockets.size(); ++i) {
+        if (i > 0) os << ", ";
+        auto const& s = entity.sockets[i];
+        os << "{\"id\":\"" << canonical_escape(s.id) << "\""
+           << ",\"bone\":\"" << canonical_escape(s.bone) << "\""
+           << ",\"x\":" << s.x << ",\"y\":" << s.y << ",\"z\":" << s.z
+           << ",\"scale_x\":" << s.scale_x << ",\"scale_y\":" << s.scale_y << "}";
+    }
+    os << "],\n";
+    // clips
+    os << "  \"clips\": [";
+    for (std::size_t i = 0; i < entity.clips.size(); ++i) {
+        if (i > 0) os << ", ";
+        auto const& c = entity.clips[i];
+        os << "{\"name\":\"" << canonical_escape(c.name) << "\""
+           << ",\"loop\":" << (c.loop ? "true" : "false")
+           << ",\"tracks\":[";
+        for (std::size_t j = 0; j < c.tracks.size(); ++j) {
+            if (j > 0) os << ",";
+            auto const& tr = c.tracks[j];
+            os << "{\"bone\":\"" << canonical_escape(tr.bone) << "\",\"keys\":[";
+            for (std::size_t k = 0; k < tr.keys.size(); ++k) {
+                if (k > 0) os << ",";
+                os << "{\"tick\":" << tr.keys[k].first
+                   << ",\"value\":\"" << canonical_escape(tr.keys[k].second) << "\"}";
+            }
+            os << "]}";
+        }
+        os << "],\"events\":[";
+        for (std::size_t j = 0; j < c.clip_events.size(); ++j) {
+            if (j > 0) os << ",";
+            os << "{\"tick\":" << c.clip_events[j].first
+               << ",\"id\":\"" << canonical_escape(c.clip_events[j].second) << "\"}";
+        }
+        os << "]}";
+    }
+    os << "],\n";
+    // states
+    os << "  \"states\": [";
+    for (std::size_t i = 0; i < entity.states.size(); ++i) {
+        if (i > 0) os << ", ";
+        auto const& s = entity.states[i];
+        os << "{\"name\":\"" << canonical_escape(s.name) << "\""
+           << ",\"clip_name\":\"" << canonical_escape(s.clip_name) << "\"}";
+    }
+    os << "],\n";
+    os << "  \"initial_state\": \"" << canonical_escape(entity.initial_state) << "\",\n";
+    // transitions
+    os << "  \"transitions\": [";
+    for (std::size_t i = 0; i < entity.transitions.size(); ++i) {
+        if (i > 0) os << ", ";
+        auto const& t = entity.transitions[i];
+        os << "{\"from_state\":\"" << canonical_escape(t.from_state) << "\""
+           << ",\"to_state\":\"" << canonical_escape(t.to_state) << "\""
+           << ",\"ability_id\":\"" << canonical_escape(t.ability_id) << "\""
+           << ",\"comparison\":\"" << canonical_escape(t.comparison) << "\""
+           << ",\"threshold\":" << t.threshold
+           << ",\"resource_cost\":" << t.resource_cost
+           << ",\"cooldown_ticks\":" << t.cooldown_ticks << "}";
+    }
+    os << "],\n";
+    // collision shapes
+    os << "  \"collision_shapes\": [";
+    for (std::size_t i = 0; i < entity.collision_shapes.size(); ++i) {
+        if (i > 0) os << ", ";
+        auto const& cs = entity.collision_shapes[i];
+        os << "{\"id\":\"" << canonical_escape(cs.id) << "\""
+           << ",\"shape_type\":\"" << canonical_escape(cs.shape_type) << "\""
+           << ",\"socket\":\"" << canonical_escape(cs.socket) << "\""
+           << ",\"radius_mm\":" << cs.radius_mm
+           << ",\"offset_x\":" << cs.offset_x << ",\"offset_y\":" << cs.offset_y
+           << ",\"scale_x\":" << cs.scale_x << ",\"scale_y\":" << cs.scale_y << "}";
+    }
+    os << "],\n";
+    // collision windows
+    os << "  \"collision_windows\": [";
+    for (std::size_t i = 0; i < entity.collision_windows.size(); ++i) {
+        if (i > 0) os << ", ";
+        auto const& cw = entity.collision_windows[i];
+        os << "{\"ability_id\":\"" << canonical_escape(cw.ability_id) << "\""
+           << ",\"shape_id\":\"" << canonical_escape(cw.shape_id) << "\""
+           << ",\"start_tick\":" << cw.start_tick
+           << ",\"duration_ticks\":" << cw.duration_ticks
+           << ",\"active\":" << (cw.active ? "true" : "false") << "}";
+    }
+    os << "],\n";
+    // resources
+    os << "  \"resources\": [";
+    for (std::size_t i = 0; i < entity.resources.size(); ++i) {
+        if (i > 0) os << ", ";
+        auto const& r = entity.resources[i];
+        os << "{\"id\":\"" << canonical_escape(r.id) << "\""
+           << ",\"resource_type\":\"" << canonical_escape(r.resource_type) << "\""
+           << ",\"min\":" << r.min << ",\"max\":" << r.max
+           << ",\"initial\":" << r.initial << "}";
+    }
+    os << "],\n";
+    // runtime
+    if (entity.runtime) {
+        os << "  \"runtime\": {"
+           << "\"aggression\":" << entity.runtime->aggression
+           << ",\"curiosity\":" << entity.runtime->curiosity
+           << ",\"energy\":" << entity.runtime->energy
+           << ",\"loyalty\":" << entity.runtime->loyalty
+           << ",\"animation_intents\":[";
+        for (std::size_t i = 0; i < entity.runtime->animation_intents.size(); ++i) {
+            if (i > 0) os << ",";
+            os << "{\"behavior_state\":\"" << canonical_escape(entity.runtime->animation_intents[i].behavior_state) << "\""
+               << ",\"clip_name\":\"" << canonical_escape(entity.runtime->animation_intents[i].clip_name) << "\"}";
+        }
+        os << "]},\n";
+    }
+    // genes (count only — full gene data is in canonical_identity_payload)
     os << "  \"gene_count\": " << entity.genes.size() << "\n";
     os << "}";
     return os.str();

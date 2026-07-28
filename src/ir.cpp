@@ -1,4 +1,5 @@
 #include "gspl/ir.hpp"
+#include "gspl/genes.hpp"
 #include <algorithm>
 #include <cctype>
 #include <charconv>
@@ -338,6 +339,60 @@ SpriteIr IrSerializer::deserialize(std::string_view json) {
                                 r.skip_ws();
                                 if (!r.expect(',')) break;
                             }
+                            r.expect(']'); // consume closing bracket
+                        }
+                    } else if (ek == "genes") {
+                        r.skip_ws();
+                        if (r.expect('[')) {
+                            GeneRegistry registry;
+                            for (;;) {
+                                r.skip_ws();
+                                if (!r.expect('{')) break;
+                                GeneInstance gi;
+                                while (r.has_more()) {
+                                    r.skip_ws();
+                                    auto gk = r.read_string();
+                                    if (gk.empty()) break;
+                                    if (!r.expect(':')) break;
+                                    if (gk == "kind") {
+                                        auto kind_val = static_cast<GeneKind>(r.read_int());
+                                        auto const* desc = registry.lookup(kind_val);
+                                        if (desc) gi.descriptor = *desc;
+                                    } else if (gk == "schema") {
+                                        gi.descriptor.schema_version = static_cast<std::uint32_t>(r.read_int());
+                                    } else if (gk == "type") {
+                                        gi.descriptor.type_id = r.read_string();
+                                    } else if (gk == "source") {
+                                        gi.source_module = r.read_string();
+                                    } else if (gk == "values") {
+                                        r.skip_ws();
+                                        if (r.expect('{')) {
+                                            for (;;) {
+                                                r.skip_ws();
+                                                auto vk = r.read_string();
+                                                if (vk.empty()) break;
+                                                if (!r.expect(':')) break;
+                                                auto vv = r.read_string();
+                                                if (!vv.empty()) {
+                                                    gi.values[vk] = std::string{vv};
+                                                }
+                                                r.skip_ws();
+                                                if (!r.expect(',')) break;
+                                            }
+                                        }
+                                    } else {
+                                        r.skip_value();
+                                    }
+                                    r.skip_ws();
+                                    if (!r.expect(',')) break;
+                                }
+                                if (!gi.descriptor.type_id.empty()) {
+                                    ir.entity->genes.push_back(std::move(gi));
+                                }
+                                r.skip_ws();
+                                if (!r.expect(',')) break;
+                            }
+                            r.expect(']'); // consume closing bracket
                         }
                     } else {
                         r.skip_value();

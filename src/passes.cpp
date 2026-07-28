@@ -513,6 +513,18 @@ DiagnosticResult IrOptimizePhase::execute(CompilationContext& ctx) {
                   return a.descriptor.kind < b.descriptor.kind;
               });
 
+    // Also normalize Sprite IR if present
+    if (!ctx.ir.entity_id.empty() && ctx.ir.entity) {
+        // Sort IR entity dependency_ids
+        std::sort(ctx.ir.entity->dependency_ids.begin(),
+                  ctx.ir.entity->dependency_ids.end());
+        // Sort IR entity genes by kind
+        std::sort(ctx.ir.entity->genes.begin(), ctx.ir.entity->genes.end(),
+                  [](auto const& a, auto const& b) {
+                      return a.descriptor.kind < b.descriptor.kind;
+                  });
+    }
+
     return {};
 }
 
