@@ -140,6 +140,128 @@ void BoundedJsonReader::leave_array() {
     if (depth_ > 0) --depth_;
 }
 
+// ── Governed container APIs ────────────────────────────────
+
+bool BoundedJsonReader::begin_object(std::string_view path) {
+    if (!require('{', path)) return false;
+    enter_object();
+    member_count_ = 0;
+    return true;
+}
+
+bool BoundedJsonReader::end_object(std::string_view path) {
+    leave_object();
+    return require('}', path);
+}
+
+bool BoundedJsonReader::begin_array(std::string_view path) {
+    if (!require('[', path)) return false;
+    enter_array();
+    element_count_ = 0;
+    return true;
+}
+
+bool BoundedJsonReader::end_array(std::string_view path) {
+    leave_array();
+    return require(']', path);
+}
+
+bool BoundedJsonReader::record_object_member(std::string_view path) {
+    ++member_count_;
+    if (member_count_ > cfg_.max_object_members) {
+        set_error(std::string(path) + ": object member count (" +
+                  std::to_string(member_count_) + ") exceeds max_object_members (" +
+                  std::to_string(cfg_.max_object_members) + ")");
+        return false;
+    }
+    return true;
+}
+
+bool BoundedJsonReader::record_array_element(std::string_view path) {
+    ++element_count_;
+    if (element_count_ > cfg_.max_array_length) {
+        set_error(std::string(path) + ": array element count (" +
+                  std::to_string(element_count_) + ") exceeds max_array_length (" +
+                  std::to_string(cfg_.max_array_length) + ")");
+        return false;
+    }
+    return true;
+}
+
+bool BoundedJsonReader::next_object_member(std::string_view path) {
+    skip_ws();
+    if (has_error_) return false;
+    if (pos_ >= src_.size()) {
+        set_error(std::string(path) + ": unterminated object");
+        return false;
+    }
+    if (src_[pos_] == '}') return false;
+    if (src_[pos_] != ',') {
+        set_error(std::string(path) + ": expected ',' or '}' after object member at line " +
+                  std::to_string(line_) + " column " + std::to_string(col_));
+        return false;
+    }
+    advance_pos(); // consume comma
+    skip_ws();
+    // Check for trailing comma
+    if (has_error_) return false;
+    if (pos_ < src_.size() && src_[pos_] == '}') {
+        set_error(std::string(path) + ": trailing comma in object at line " +
+                  std::to_string(line_) + " column " + std::to_string(col_));
+        return false;
+    }
+    return true;
+}
+
+bool BoundedJsonReader::next_array_element(std::string_view path) {
+    skip_ws();
+    if (has_error_) return false;
+    if (pos_ >= src_.size()) {
+        set_error(std::string(path) + ": unterminated array");
+        return false;
+    }
+    if (src_[pos_] == ']') return false;
+    if (src_[pos_] != ',') {
+        set_error(std::string(path) + ": expected ',' or ']' after array element at line " +
+                  std::to_string(line_) + " column " + std::to_string(col_));
+        return false;
+    }
+    advance_pos(); // consume comma
+    skip_ws();
+    // Check for trailing comma
+    if (has_error_) return false;
+    if (pos_ < src_.size() && src_[pos_] == ']') {
+        set_error(std::string(path) + ": trailing comma in array at line " +
+                  std::to_string(line_) + " column " + std::to_string(col_));
+        return false;
+    }
+    return true;
+}
+
+// ── Typed uint32 read ─────────────────────────────────────
+
+JsonReadResult<std::uint32_t> BoundedJsonReader::read_uint32_result() {
+    JsonReadResult<std::uint32_t> result;
+    auto int_res = read_int64_result();
+    if (!int_res.ok()) {
+        result.diagnostics = std::move(int_res.diagnostics);
+        return result;
+    }
+    auto val = *int_res.value;
+    if (val < 0) {
+        result.diagnostics.add_error(DiagnosticCode::GSPL_LEX_NUMERIC_OVERFLOW,
+                                     "expected uint32, got negative value", {});
+        return result;
+    }
+    if (static_cast<std::uint64_t>(val) > static_cast<std::uint64_t>(UINT32_MAX)) {
+        result.diagnostics.add_error(DiagnosticCode::GSPL_LEX_NUMERIC_OVERFLOW,
+                                     "uint32 overflow: " + std::to_string(val), {});
+        return result;
+    }
+    result.value = static_cast<std::uint32_t>(val);
+    return result;
+}
+
 // ── Whitespace ────────────────────────────────────────────
 
 void BoundedJsonReader::skip_ws() {

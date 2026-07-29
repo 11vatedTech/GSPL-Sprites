@@ -1333,12 +1333,10 @@ int main() {
                     "\"genes\": [{\"kind\":1,\"schema\":1,\"type\":\"test\","
                     "\"source\":\"test\",\"values\":{\"bad\":{\"t\":1,\"v\":\"not-bool\"}}}],");
                 auto r3 = gspl::CanonicalEntitySerializer::from_json(bad_json);
-                // Should still parse — malformed values become strings via legacy fallback
-                // NOTE: semantics.cpp from_json() still uses ad-hoc parser that doesn't
-                // validate gene values. IrSerializer path correctly rejects them.
-                // This test validates structural correctness of the ad-hoc parser.
-                check(r3.ok() || !r3.value.has_value(),
-                      "DEF-0015: from_json handles malformed gene injection (ad-hoc parser skips unknown)");
+                // DEF-0015: Malformed gene values must fail closed.
+                // Both semantics.cpp and ir.cpp now use BoundedJsonReader with fail-closed parsing.
+                check(!r3.ok(), "DEF-0015: from_json should reject malformed gene injection");
+                check(!r3.value.has_value(), "DEF-0015: from_json should not return a value for malformed genes");
             }
 
             // IrSerializer: empty input

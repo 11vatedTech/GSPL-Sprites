@@ -110,10 +110,27 @@ public:
     void enter_array();
     void leave_array();
 
+    // Governed container parsing — enforces bounds, separators, trailing commas
+    bool begin_object(std::string_view path);   // require '{' + enter + reset member count
+    bool end_object(std::string_view path);     // require '}' + leave
+    bool begin_array(std::string_view path);    // require '[' + enter + reset element count
+    bool end_array(std::string_view path);      // require ']' + leave
+    bool record_object_member(std::string_view path);  // count + enforce limit
+    bool record_array_element(std::string_view path);  // count + enforce limit
+    // Returns true if comma consumed (more items), false if at closing delimiter.
+    // Sets error on trailing comma or missing comma.
+    bool next_object_member(std::string_view path);
+    bool next_array_element(std::string_view path);
+
+    // Typed uint32 read with checked narrowing
+    JsonReadResult<std::uint32_t> read_uint32_result();
+
 private:
     std::string_view src_;
     std::size_t pos_{};
     std::size_t depth_{};
+    std::size_t member_count_{0};
+    std::size_t element_count_{0};
     std::size_t line_{1};
     std::size_t col_{1};
     BoundedJsonConfig cfg_;

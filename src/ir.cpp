@@ -307,21 +307,11 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json) {
         }
     };
 
-    auto expect_sep = [&](const char* ctx) -> bool {
-        // Returns true if comma consumed (more items follow)
-        if (r.consume_if(',')) return true;
-        // Check for trailing comma
-        r.skip_ws();
-        if (r.consume_if(',')) {
-            result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR, ctx, {});
-            return true;
-        }
-        return false;
-    };
+    // Separator handling now uses governed r.next_object_member() / r.next_array_element()
+    // which reject trailing commas and missing commas with diagnostic errors.
 
-    // Parse a generic IrNode object (used for representations, runtime_plans, package_plans)
     auto parse_ir_node = [&](IrNode& node, const char* label) -> bool {
-        if (!r.require('{', label)) {
+        if (!r.begin_object(label)) {
             result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR,
                                          r.error_message(), {});
             return false;
@@ -360,33 +350,36 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json) {
                     auto pv_opt = read_str(label);
                     if (!pv_opt) return false;
                     node.properties[*pk_opt] = std::move(*pv_opt);
-                    if (!expect_sep("deserialize: trailing comma in node properties")) break;
+                    if (!r.next_object_member(label)) break;
                 }
-                require('}', label);
+                if (!r.end_object(label)) { result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR, r.error_message(), {}); return false; }
             } else if (key == "dependency_ids") {
-                require('[', label);
-                if (r.has_error()) return false;
+                if (!r.begin_array(label)) { result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR, r.error_message(), {}); return false; }
                 while (r.has_more() && !r.has_error()) {
                     auto dep_opt = read_str(label);
                     if (!dep_opt) return false;
                     node.dependency_ids.push_back(std::move(*dep_opt));
-                    if (!expect_sep("deserialize: trailing comma in node dependency_ids")) break;
+                    if (!r.next_array_element(label)) break;
                 }
-                require(']', label);
+                if (!r.end_array(label)) { result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR, r.error_message(), {}); return false; }
             } else {
                 r.skip_value();
             }
-            if (!expect_sep("deserialize: trailing comma in node")) break;
+            if (!r.next_object_member(label)) break;
         }
-        require('}', label);
+        if (!r.end_object(label)) { result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR, r.error_message(), {}); return false; }
         return !r.has_error();
     };
 
     // ── Root object ──────────────────────────────────────
-    require('{', "deserialize: root object");
-    if (r.has_error()) return result;
+    if (!r.begin_object("deserialize: root")) {
+        result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR,
+                                     r.error_message(), {});
+        return result;
+    }
 
     bool parsed_any = false;
+    std::int64_t root_schema_version = 0;
 
     while (r.has_more() && !r.has_error()) {
         auto key_opt = read_str("deserialize: root key");
@@ -410,12 +403,15 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json) {
             if (!v_opt) return result;
             ir.seed_identity = std::move(*v_opt);
         } else if (key == "schema_version") {
-            auto v_opt = read_i64("schema_version");
+            auto v_opt = read_i64("root.schema_version");
             if (!v_opt) return result;
-            // consumed, validated below
+            root_schema_version = *v_opt;
         } else if (key == "entity") {
-            require('{', "deserialize: entity object");
-            if (r.has_error()) return result;
+            if (!r.begin_object("entity")) {
+                result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR,
+                                             r.error_message(), {});
+                return result;
+            }
             ir.entity = std::make_unique<EntityIr>();
             ir.entity->kind = IrNodeKind::entity;
             while (r.has_more() && !r.has_error()) {
@@ -438,18 +434,26 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json) {
                     if (!v_opt) return result;
                     ir.entity->schema_version = static_cast<std::uint32_t>(*v_opt);
                 } else if (ek == "dependency_ids") {
-                    require('[', "entity.dependency_ids");
-                    if (r.has_error()) return result;
+                    if (!r.begin_array("entity.dependency_ids")) {
+                        result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR, r.error_message(), {});
+                        return result;
+                    }
                     while (r.has_more() && !r.has_error()) {
                         auto dep_opt = read_str("entity.dependency_ids[]");
                         if (!dep_opt) return result;
                         ir.entity->dependency_ids.push_back(std::move(*dep_opt));
-                        if (!expect_sep("deserialize: trailing comma in entity.dependency_ids")) break;
+                        r.record_array_element("entity.dependency_ids");
+                        if (!r.next_array_element("entity.dependency_ids")) break;
                     }
-                    require(']', "entity.dependency_ids");
+                    if (!r.end_array("entity.dependency_ids")) {
+                        result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR, r.error_message(), {});
+                        return result;
+                    }
                 } else if (ek == "properties") {
-                    require('{', "entity.properties");
-                    if (r.has_error()) return result;
+                    if (!r.begin_object("entity.properties")) {
+                        result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR, r.error_message(), {});
+                        return result;
+                    }
                     while (r.has_more() && !r.has_error()) {
                         auto pk_opt = read_str("entity.properties key");
                         if (!pk_opt) return result;
@@ -458,26 +462,40 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json) {
                         auto pv_opt = read_str("entity.properties value");
                         if (!pv_opt) return result;
                         ir.entity->properties[*pk_opt] = std::move(*pv_opt);
-                        if (!expect_sep("deserialize: trailing comma in entity.properties")) break;
+                        r.record_object_member("entity.properties");
+                        if (!r.next_object_member("entity.properties")) break;
                     }
-                    require('}', "entity.properties");
+                    if (!r.end_object("entity.properties")) {
+                        result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR, r.error_message(), {});
+                        return result;
+                    }
                 } else if (ek == "children") {
-                    require('[', "entity.children");
-                    if (r.has_error()) return result;
+                    if (!r.begin_array("entity.children")) {
+                        result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR, r.error_message(), {});
+                        return result;
+                    }
                     while (r.has_more() && !r.has_error()) {
                         auto child = std::make_unique<IrNode>();
                         if (!parse_ir_node(*child, "entity.children[]")) return result;
                         ir.entity->children.push_back(std::move(child));
-                        if (!expect_sep("deserialize: trailing comma in entity.children")) break;
+                        r.record_array_element("entity.children");
+                        if (!r.next_array_element("entity.children")) break;
                     }
-                    require(']', "entity.children");
+                    if (!r.end_array("entity.children")) {
+                        result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR, r.error_message(), {});
+                        return result;
+                    }
                 } else if (ek == "genes") {
-                    require('[', "entity.genes");
-                    if (r.has_error()) return result;
+                    if (!r.begin_array("entity.genes")) {
+                        result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR, r.error_message(), {});
+                        return result;
+                    }
                     GeneRegistry registry;
                     while (r.has_more() && !r.has_error()) {
-                        require('{', "entity.genes[]");
-                        if (r.has_error()) return result;
+                        if (!r.begin_object("entity.genes[]")) {
+                            result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR, r.error_message(), {});
+                            return result;
+                        }
                         GeneInstance gi;
                         bool saw_kind = false, saw_schema = false, saw_type = false;
                         while (r.has_more() && !r.has_error()) {
@@ -510,14 +528,17 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json) {
                                 if (!s_opt) return result;
                                 gi.source_module = std::move(*s_opt);
                             } else if (gk == "values") {
-                                require('{', "gene.values");
-                                if (r.has_error()) return result;
+                                if (!r.begin_object("gene.values")) {
+                                    result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR, r.error_message(), {});
+                                    return result;
+                                }
                                 while (r.has_more() && !r.has_error()) {
                                     auto vk_opt = read_str("gene.value key");
                                     if (!vk_opt) return result;
                                     require(':', ("gene.values['" + *vk_opt + "']").c_str());
                                     if (r.has_error()) return result;
                                     if (r.consume_if('{')) {
+                                        r.enter_object();
                                         bool saw_tag = false, saw_value = false;
                                         std::uint32_t tag_val = 0;
                                         std::string raw_val;
@@ -539,10 +560,13 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json) {
                                             } else {
                                                 r.skip_value();
                                             }
-                                            in_tagged_value = expect_sep("deserialize: trailing comma in gene tagged value");
+                                            in_tagged_value = r.next_object_member("gene.value");
                                         }
-                                        require('}', "gene.value tagged object");
-                                        if (r.has_error()) return result;
+                                        r.leave_object();
+                                        if (!r.require('}', "gene.value")) {
+                                            result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR, r.error_message(), {});
+                                            return result;
+                                        }
                                         if (!saw_tag) { fail("deserialize: gene value missing required 't' field"); return result; }
                                         if (!saw_value) { fail("deserialize: gene value missing required 'v' field"); return result; }
                                         if (!raw_val.empty()) {
@@ -555,76 +579,107 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json) {
                                             gi.values[*vk_opt] = *gv_result.value;
                                         }
                                     }
-                                    // Current schema: reject bare string values
-                                    if (!expect_sep("deserialize: trailing comma in gene values")) break;
+                                    r.record_object_member("gene.values");
+                                    if (!r.next_object_member("gene.values")) break;
                                 }
-                                require('}', "gene.values");
+                                if (!r.end_object("gene.values")) {
+                                    result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR, r.error_message(), {});
+                                    return result;
+                                }
                             } else {
                                 r.skip_value();
                             }
-                            if (!expect_sep("deserialize: trailing comma in gene")) break;
+                            if (!r.next_object_member("gene")) break;
                         }
-                        require('}', "gene object");
-                        if (r.has_error()) return result;
+                        if (!r.end_object("gene")) {
+                            result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR, r.error_message(), {});
+                            return result;
+                        }
                         if (saw_kind && saw_schema && saw_type && !gi.descriptor.type_id.empty()) {
                             ir.entity->genes.push_back(std::move(gi));
                         }
-                        if (!expect_sep("deserialize: trailing comma in genes array")) break;
+                        r.record_array_element("entity.genes");
+                        if (!r.next_array_element("entity.genes")) break;
                     }
-                    require(']', "entity.genes");
+                    if (!r.end_array("entity.genes")) {
+                        result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR, r.error_message(), {});
+                        return result;
+                    }
                 } else {
                     r.skip_value();
                 }
-                if (!expect_sep("deserialize: trailing comma in entity")) break;
+                if (!r.next_object_member("entity")) break;
             }
-            require('}', "entity object");
-            if (r.has_error()) return result;
+            if (!r.end_object("entity")) {
+                result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR,
+                                             r.error_message(), {});
+                return result;
+            }
         } else if (key == "representations") {
-            require('[', "representations");
-            if (r.has_error()) return result;
+            if (!r.begin_array("representations")) {
+                result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR, r.error_message(), {});
+                return result;
+            }
             while (r.has_more() && !r.has_error()) {
                 auto rep = std::make_unique<IrNode>();
                 if (!parse_ir_node(*rep, "representations[]")) return result;
                 ir.representations.push_back(std::move(rep));
-                if (!expect_sep("deserialize: trailing comma in representations")) break;
+                r.record_array_element("representations");
+                if (!r.next_array_element("representations")) break;
             }
-            require(']', "representations");
+            if (!r.end_array("representations")) {
+                result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR, r.error_message(), {});
+                return result;
+            }
         } else if (key == "runtime_plans") {
-            require('[', "runtime_plans");
-            if (r.has_error()) return result;
+            if (!r.begin_array("runtime_plans")) {
+                result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR, r.error_message(), {});
+                return result;
+            }
             while (r.has_more() && !r.has_error()) {
                 auto plan = std::make_unique<IrNode>();
                 if (!parse_ir_node(*plan, "runtime_plans[]")) return result;
                 ir.runtime_plans.push_back(std::move(plan));
-                if (!expect_sep("deserialize: trailing comma in runtime_plans")) break;
+                r.record_array_element("runtime_plans");
+                if (!r.next_array_element("runtime_plans")) break;
             }
-            require(']', "runtime_plans");
+            if (!r.end_array("runtime_plans")) {
+                result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR, r.error_message(), {});
+                return result;
+            }
         } else if (key == "package_plans") {
-            require('[', "package_plans");
-            if (r.has_error()) return result;
+            if (!r.begin_array("package_plans")) {
+                result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR, r.error_message(), {});
+                return result;
+            }
             while (r.has_more() && !r.has_error()) {
                 auto plan = std::make_unique<IrNode>();
                 if (!parse_ir_node(*plan, "package_plans[]")) return result;
                 ir.package_plans.push_back(std::move(plan));
-                if (!expect_sep("deserialize: trailing comma in package_plans")) break;
+                r.record_array_element("package_plans");
+                if (!r.next_array_element("package_plans")) break;
             }
-            require(']', "package_plans");
+            if (!r.end_array("package_plans")) {
+                result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR, r.error_message(), {});
+                return result;
+            }
         } else {
             r.skip_value();
         }
-        if (!expect_sep("deserialize: trailing comma in root")) break;
+        if (!r.next_object_member("root")) break;
     }
 
-    // Document closure: consume closing '}' and reject trailing data
-    if (!r.has_error()) {
-        r.skip_ws();
-        if (!r.consume_if('}')) {
-            fail("deserialize: missing closing '}' of root object"); return result;
-        }
-        r.skip_ws();
-        if (r.position() < r.source().size()) {
-            fail("deserialize: trailing data after root '}'"); return result;
-        }
+    // Root object closure
+    if (!r.end_object("root")) {
+        result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR,
+                                     r.error_message(), {});
+        return result;
+    }
+
+    // Trailing data check (root '}' already consumed by end_object above)
+    r.skip_ws();
+    if (r.position() < r.source().size()) {
+        fail("deserialize: trailing data after root '}'"); return result;
     }
 
     if (r.has_error()) {
@@ -632,6 +687,12 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json) {
     }
     if (!parsed_any) {
         fail("deserialize: no fields parsed"); return result;
+    }
+
+    // Fail-closed: validate root schema_version
+    if (root_schema_version != 1) {
+        fail(("deserialize: unsupported root schema_version: " + std::to_string(root_schema_version) + " (expected 1)").c_str());
+        return result;
     }
 
     // Fail-closed: require valid ir_version, seed_identity, entity_id, and entity
