@@ -18,6 +18,7 @@ struct CliOptions {
     bool verbose{false};
     bool package_output{false};
     bool verify{false};
+    bool synthesize{false};
     std::filesystem::path package_dir;
     bool deterministic_seed{false};
     std::uint64_t deterministic_entropy{42};

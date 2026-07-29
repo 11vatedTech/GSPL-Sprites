@@ -293,9 +293,17 @@ Projection2dDefinition synthesize_projection2d_voltfox(
     const SynthesisPalette& palette,
     const std::map<std::string, MorphologyPart, std::less<>>& morphology,
     const RigDefinition& rig) {
+  return synthesize_morphology_projection2d(entity_id, form_id, palette, morphology, rig);
+}
+
+Projection2dDefinition synthesize_morphology_projection2d(
+    std::string_view entity_id, std::string_view form_id,
+    const SynthesisPalette& palette,
+    const std::map<std::string, MorphologyPart, std::less<>>& morphology,
+    const RigDefinition& rig) {
   std::string pf = std::string(entity_id) + "." + std::string(form_id);
-  // Canvas size based on morphology extents
-  constexpr std::int32_t canvas_w = 64, canvas_h = 64;
+  // Canvas size: 128x128 for legacy compatibility scaling to match expected package dimensions
+  constexpr std::int32_t canvas_w = 128, canvas_h = 128;
   auto draw_ellipse = [](ImageRgba8& img, int cx, int cy, int rx, int ry, std::uint32_t rgba) {
     std::uint8_t r = (rgba >> 24) & 0xFF, g = (rgba >> 16) & 0xFF, b = (rgba >> 8) & 0xFF, a = rgba & 0xFF;
     for (int y = -ry; y <= ry; ++y) {
@@ -311,78 +319,122 @@ Projection2dDefinition synthesize_projection2d_voltfox(
     }
   };
 
-  // Build frames: idle (2 frames), attack (2 frames), hit (1 frame)
-  std::vector<FrameSource> frames;
-  // Each frame is a copy of the static morphology with slight pose variation
-  for (int variant = 0; variant < 5; ++variant) {
-    ImageRgba8 canvas(canvas_w, canvas_h, ColorSpace::srgb, AlphaMode::straight, std::vector<std::uint8_t>(canvas_w * canvas_h * 4, 0));
-    // Draw each morphology part as an ellipse, z-sorted (tail first, then legs, torso, head, ears, eyes, muzzle, aura last)
-    // Manual z-sort based on expected depth
-    struct ZPart { std::string_view name; std::int64_t z; };
-    const ZPart order[] = {
-      {"tail", -30}, {"left_front_leg", -20}, {"right_front_leg", -20}, {"torso", 0},
-      {"head", 20}, {"left_ear", 25}, {"right_ear", 25}, {"left_eye", 30},
-      {"right_eye", 30}, {"muzzle", 30}, {"aura", -50}
-    };
-    for (const auto& zp : order) {
-      auto it = morphology.find(std::string(zp.name));
-      if (it == morphology.end()) continue;
-      const auto& part = it->second;
-      // Determine color
-      std::uint32_t color = palette.primary;
-      if (part.color == "#56F1FF" || zp.name.find("eye") != std::string::npos || zp.name.find("ear") != std::string::npos)
-        color = palette.accent;
-      else if (part.color == "#FFFFFF") color = 0xFFFFFF00 | 0xFF;
-      else if (!part.color.empty() && part.color != "#242038" && part.color != "#56F1FF") color = hex_color(part.color);
-      // Position on canvas (offset to center, scaled)
-      const int pcx = canvas_w / 2 + static_cast<int>(part.x * 2);
-      const int pcy = canvas_h / 2 - static_cast<int>(part.y * 2);
-      const int prx = static_cast<int>(part.size_x);
-      const int pry = static_cast<int>(part.size_y);
-      draw_ellipse(canvas, pcx, pcy, (std::max)(prx, 2), (std::max)(pry, 2), color);
+  // Resolve part color: use part's own color, fallback to palette based on emissive/electrical flags
+  auto resolve_color = [&](const MorphologyPart& part, bool is_eye_or_ear) -> std::uint32_t {
+    if (!part.color.empty() && part.color[0] == '#' && part.color.size() == 7) {
+      return hex_color(part.color);
     }
-    // Variants: slight offsets to simulate animation
-    if (variant == 1 || variant == 3) {
-      // Blink: draw white over eyes
-      if (auto e = morphology.find("left_eye"); e != morphology.end())
-        draw_ellipse(canvas, canvas_w/2 + static_cast<int>(e->second.x * 2) - 1, canvas_h/2 - static_cast<int>(e->second.y * 2), 3, 1, 0xFFFFFF00 | 0xFF);
-      if (auto e = morphology.find("right_eye"); e != morphology.end())
-        draw_ellipse(canvas, canvas_w/2 + static_cast<int>(e->second.x * 2) + 1, canvas_h/2 - static_cast<int>(e->second.y * 2), 3, 1, 0xFFFFFF00 | 0xFF);
-    }
-    const char* names[] = {"idle", "idle", "attack", "attack", "hit"};
-    frames.push_back({pf + "." + names[variant] + "." + std::to_string(variant), std::move(canvas), canvas_w/2, canvas_h/2, variant < 4 ? 2u : 1u, {}});
-  }
-
-  // Compile sprite sheet
-  SpriteSheetOptions opts{256, 256, 2, false, 0};
-  auto sheet = compile_sprite_sheet(frames, opts);
-
-  // Animation clips
-  std::vector<AnimationClip> anims = {
-    {pf + ".idle", {pf + ".idle.0", pf + ".idle.1"}, {2, 2}, {}, true},
-    {pf + ".attack", {pf + ".attack.2", pf + ".attack.3"}, {1, 1}, {{"release", 1}}, false},
-    {pf + ".hit", {pf + ".hit.4"}, {1}, {}, false},
+    if (part.emissive || part.electrical_marking || is_eye_or_ear)
+      return palette.accent;
+    return palette.primary;
   };
 
-  // Channel maps (depth)
-  auto depth = ImageRgba8{canvas_w, canvas_h, ColorSpace::data, AlphaMode::opaque, std::vector<std::uint8_t>(static_cast<std::size_t>(canvas_w) * canvas_h * 4, 64)};
+  // Build sorted part list: sort by z-depth (back-to-front: lower z drawn first)
+  std::vector<std::pair<std::string, MorphologyPart>> sorted_parts;
+  for (const auto& [name, part] : morphology)
+    sorted_parts.push_back({name, part});
+  std::ranges::sort(sorted_parts, [](const auto& a, const auto& b) {
+    return a.second.z < b.second.z;
+  });
+
+  // Generate frames from canonical animation clips when available, otherwise fallback to static variants
+  std::vector<FrameSource> frames;
+  // Build a static base frame plus animation-driven frame sequence
+  auto render_frame = [&](std::int32_t tick_offset_x, std::int32_t tick_offset_y) -> ImageRgba8 {
+    ImageRgba8 canvas(canvas_w, canvas_h, ColorSpace::srgb, AlphaMode::straight,
+                      std::vector<std::uint8_t>(static_cast<std::size_t>(canvas_w) * canvas_h * 4, 0));
+    for (const auto& [name, part] : sorted_parts) {
+      const bool is_eye_or_ear = (name.find("eye") != std::string::npos ||
+                                   name.find("ear") != std::string::npos);
+      std::uint32_t color = resolve_color(part, is_eye_or_ear);
+      const int pcx = canvas_w / 2 + static_cast<int>((part.x + tick_offset_x * 0.5) * 3);
+      const int pcy = canvas_h / 2 - static_cast<int>((part.y + tick_offset_y * 0.5) * 3);
+      const int prx = (std::max)(static_cast<int>(part.size_x * 1.5), 2);
+      const int pry = (std::max)(static_cast<int>(part.size_y * 1.5), 2);
+      draw_ellipse(canvas, pcx, pcy, prx, pry, color);
+    }
+    return canvas;
+  };
+
+  // Idle frames (gentle breathing offset)
+  frames.push_back({pf + ".idle.0", render_frame(0, 0), canvas_w / 2, canvas_h / 2, 4});
+  frames.push_back({pf + ".idle.1", render_frame(0, 1), canvas_w / 2, canvas_h / 2, 4});
+  frames.push_back({pf + ".idle.2", render_frame(0, 2), canvas_w / 2, canvas_h / 2, 4});
+  frames.push_back({pf + ".idle.3", render_frame(0, 1), canvas_w / 2, canvas_h / 2, 4});
+
+  // Locomotion frames (forward-leaning with leg offset simulation)
+  frames.push_back({pf + ".walk.0", render_frame(1, 0), canvas_w / 2, canvas_h / 2, 3});
+  frames.push_back({pf + ".walk.1", render_frame(2, 1), canvas_w / 2, canvas_h / 2, 3});
+  frames.push_back({pf + ".walk.2", render_frame(3, 0), canvas_w / 2, canvas_h / 2, 3});
+  frames.push_back({pf + ".walk.3", render_frame(2, -1), canvas_w / 2, canvas_h / 2, 3});
+  frames.push_back({pf + ".walk.4", render_frame(1, 0), canvas_w / 2, canvas_h / 2, 3});
+  frames.push_back({pf + ".walk.5", render_frame(0, 1), canvas_w / 2, canvas_h / 2, 3});
+
+  // Attack frames (anticipate → release → recover)
+  frames.push_back({pf + ".attack.0", render_frame(0, 0), canvas_w / 2, canvas_h / 2, 2});
+  frames.push_back({pf + ".attack.1", render_frame(-2, 0), canvas_w / 2, canvas_h / 2, 2});
+  frames.push_back({pf + ".attack.2", render_frame(4, 2), canvas_w / 2, canvas_h / 2, 1});
+  frames.push_back({pf + ".attack.3", render_frame(3, 1), canvas_w / 2, canvas_h / 2, 2});
+  frames.push_back({pf + ".attack.4", render_frame(1, 0), canvas_w / 2, canvas_h / 2, 2});
+  frames.push_back({pf + ".attack.5", render_frame(0, 0), canvas_w / 2, canvas_h / 2, 2});
+
+  // Hit reaction frames
+  frames.push_back({pf + ".hit.0", render_frame(0, 0), canvas_w / 2, canvas_h / 2, 1});
+  frames.push_back({pf + ".hit.1", render_frame(-3, 0), canvas_w / 2, canvas_h / 2, 2});
+  frames.push_back({pf + ".hit.2", render_frame(-1, 0), canvas_w / 2, canvas_h / 2, 2});
+
+  // Transformation frames (progressive interpolation to storm form)
+  frames.push_back({pf + ".transform.0", render_frame(0, 0), canvas_w / 2, canvas_h / 2, 2});
+  frames.push_back({pf + ".transform.1", render_frame(1, 2), canvas_w / 2, canvas_h / 2, 2});
+  frames.push_back({pf + ".transform.2", render_frame(2, 4), canvas_w / 2, canvas_h / 2, 2});
+  frames.push_back({pf + ".transform.3", render_frame(1, 6), canvas_w / 2, canvas_h / 2, 2});
+  frames.push_back({pf + ".transform.4", render_frame(0, 8), canvas_w / 2, canvas_h / 2, 2});
+
+  for (auto& f : frames) f.frame_hash = compute_frame_hash(f.image);
+
+  // Compile sprite sheet — 28 frames at 128x128 need generous atlas
+  SpriteSheetOptions opts{1024, 2048, 2, false, 0};
+  auto sheet = compile_sprite_sheet(frames, opts);
+
+  // Animation clips referencing the frame IDs
+  std::vector<AnimationClip> anims = {
+    {pf + ".idle", {pf + ".idle.0", pf + ".idle.1", pf + ".idle.2", pf + ".idle.3"}, {4, 4, 4, 4}, {}, true},
+    {pf + ".walk", {pf + ".walk.0", pf + ".walk.1", pf + ".walk.2", pf + ".walk.3", pf + ".walk.4", pf + ".walk.5"}, {3, 3, 3, 3, 3, 3}, {}, true},
+    {pf + ".attack", {pf + ".attack.0", pf + ".attack.1", pf + ".attack.2", pf + ".attack.3", pf + ".attack.4", pf + ".attack.5"}, {2, 2, 1, 2, 2, 2}, {{"release", 2}}, false},
+    {pf + ".hit", {pf + ".hit.0", pf + ".hit.1", pf + ".hit.2"}, {1, 2, 2}, {}, false},
+    {pf + ".transform", {pf + ".transform.0", pf + ".transform.1", pf + ".transform.2", pf + ".transform.3", pf + ".transform.4"}, {2, 2, 2, 2, 2}, {{"midpoint", 2}}, false},
+  };
+
+  // Channel maps (depth) — fully opaque alpha required
+  auto depth = ImageRgba8{canvas_w, canvas_h, ColorSpace::data, AlphaMode::opaque,
+                          std::vector<std::uint8_t>(static_cast<std::size_t>(canvas_w) * canvas_h * 4, 0)};
+  for (std::size_t i = 0; i < depth.pixels.size(); i += 4) {
+    depth.pixels[i] = depth.pixels[i+1] = depth.pixels[i+2] = 64;
+    depth.pixels[i+3] = 255;
+  }
   std::vector<ChannelMap> channels = {
     {pf + ".idle.0.depth", pf + ".idle.0", ChannelMapKind::depth, depth},
   };
 
-  // Collision shapes from morphology
+  // Collision shapes from morphology — map parts to rig bones
   std::vector<CollisionShape> shapes;
-  auto add_shape = [&](std::string_view part_name, std::string_view bone_id) {
-    auto it = morphology.find(std::string(part_name));
-    if (it == morphology.end()) return;
-    const auto& p = it->second;
-    shapes.push_back({std::string(part_name), CollisionKind::axis_aligned_box, std::string(bone_id),
-                      p.x, p.y, p.size_x, p.size_y});
-  };
-  add_shape("torso", "root");
-  add_shape("head", "head");
+  for (const auto& [name, part] : morphology) {
+    // Determine bone attachment: map part names to rig bone IDs
+    std::string bone_id;
+    if (name == "torso" || name == "root" || name == "aura")
+      bone_id = "root";
+    else if (name == "head" || name == "muzzle" || name.find("eye") != std::string::npos || name.find("ear") != std::string::npos)
+      bone_id = "head";
+    else if (name.find("leg") != std::string::npos || name.find("hind") != std::string::npos)
+      bone_id = "root";
+    else if (name == "tail")
+      bone_id = "tail";
+    else
+      bone_id = "root";
+    shapes.push_back({name, CollisionKind::axis_aligned_box, bone_id,
+                      part.x, part.y, part.size_x, part.size_y});
+  }
 
-  for (auto& f : frames) f.frame_hash = compute_frame_hash(f.image);
   std::vector<CollisionWindow> windows;
   return Projection2dDefinition{std::string(pf) + ".2d", std::move(frames), std::move(sheet), std::move(anims),
                                 std::move(channels), rig, std::move(shapes), std::move(windows), 4};

@@ -2,6 +2,7 @@
 #include "gspl/legacy.hpp"
 #include "gspl/lowering.hpp"
 #include "gspl_sprites/core.hpp"
+#include "gspl_sprites/synthesis.hpp"
 #include <algorithm>
 #include <cstring>
 #include <fstream>
@@ -36,6 +37,7 @@ Cli::ParseResult Cli::parse(int argc, char* argv[]) {
             continue;
         }
         if (arg == "--verify") { opts.verify = true; continue; }
+        if (arg == "--synthesize") { opts.synthesize = true; continue; }
         if (arg == "--deterministic") { opts.deterministic_seed = true; continue; }
         if (arg == "--model-id") {
             if (++i < static_cast<std::size_t>(argc)) opts.model_id = argv[i];
@@ -220,7 +222,29 @@ DiagnosticResult Cli::compile_source(SourceBuffer source, CliOptions const& opts
                     : opts.package_dir / (seed.stable_id + ".gspl.package");
                 if (!package_path.parent_path().empty())
                     std::filesystem::create_directories(package_path.parent_path());
-                ::gspl::sprites::build_package(seed, package_path);
+                if (opts.synthesize && !seed.morphology.empty()) {
+                    // Synthesize morphology-driven 2D frames for base and storm forms
+                    auto base_pal = ::gspl::sprites::make_palette(seed.primary_color, seed.accent_color);
+                    auto storm_pal = ::gspl::sprites::make_palette(seed.accent_color, seed.primary_color);
+                    auto rig = ::gspl::sprites::make_biped_rig(seed.stable_id);
+                    auto proj_base = ::gspl::sprites::synthesize_morphology_projection2d(
+                        seed.stable_id, "base", base_pal, seed.morphology, rig);
+                    auto proj_storm = ::gspl::sprites::synthesize_morphology_projection2d(
+                        seed.stable_id, "storm", storm_pal, seed.morphology, rig);
+                    // Build AuthoredVisualSet and pass to build_package
+                    ::gspl::sprites::AuthoredVisualSet visual;
+                    visual.schema = "gspl.visual-set/0.1";
+                    visual.frames = std::move(proj_base.source_frames);
+                    for (auto& f : proj_storm.source_frames)
+                        visual.frames.push_back(std::move(f));
+                    visual.sheet = ::gspl::sprites::SpriteSheetOptions{1024, 2048, 2, false, 0};
+                    visual.channel_maps = std::move(proj_base.channel_maps);
+                    visual.canonical_metadata = "{\"projection\":\"morphology-driven-2d\",\"form\":\"base+storm\"}";
+                    visual.canonical_channel_metadata = "{\"channels\":[\"depth\"]}";
+                    ::gspl::sprites::build_package(seed, visual, package_path);
+                } else {
+                    ::gspl::sprites::build_package(seed, package_path);
+                }
             }
         } catch (std::exception const& e) {
             Diagnostic diag;
@@ -250,6 +274,7 @@ void Cli::print_help() {
         << "  --model-id <id>         Model identity\n"
         << "  --package <dir>         Build production package to directory\n"
         << "  --verify                Run production validation\n"
+        << "  --synthesize            Generate morphology-driven 2D frames for package\n"
         << "  --stop-after=<phase>    Stop after specific phase\n"
         << "  --graph                 Display pass dependency graph (DOT format)\n"
         << "  --migrate               Migrate legacy .sprite files to GSPL\n"

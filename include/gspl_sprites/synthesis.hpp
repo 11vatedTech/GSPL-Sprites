@@ -54,6 +54,12 @@ struct SynthesisPalette {
     const std::map<std::string, MorphologyPart, std::less<>>& morphology,
     const RigDefinition& rig);
 
+[[nodiscard]] Projection2dDefinition synthesize_morphology_projection2d(
+    std::string_view entity_id, std::string_view form_id,
+    const SynthesisPalette& palette,
+    const std::map<std::string, MorphologyPart, std::less<>>& morphology,
+    const RigDefinition& rig);
+
 [[nodiscard]] std::vector<AnimationClip3d> synthesize_animation3d_voltfox(
     std::string_view entity_id, std::string_view form_id,
     const std::map<std::string, MorphologyPart, std::less<>>& morphology,
