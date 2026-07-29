@@ -140,16 +140,26 @@ void BoundedJsonReader::leave_array() {
     if (depth_ > 0) --depth_;
 }
 
+// ── Per-container stack helper ─────────────────────────────────
+
+ContainerFrame* BoundedJsonReader::current_frame() noexcept {
+    return container_stack_.empty() ? nullptr : &container_stack_.back();
+}
+
 // ── Governed container APIs ────────────────────────────────
 
 bool BoundedJsonReader::begin_object(std::string_view path) {
     if (!require('{', path)) return false;
     enter_object();
-    member_count_ = 0;
+    ContainerFrame frame;
+    frame.kind = ContainerFrame::object;
+    frame.path = path;
+    container_stack_.push_back(std::move(frame));
     return true;
 }
 
 bool BoundedJsonReader::end_object(std::string_view path) {
+    if (!container_stack_.empty()) container_stack_.pop_back();
     leave_object();
     return require('}', path);
 }
@@ -157,20 +167,29 @@ bool BoundedJsonReader::end_object(std::string_view path) {
 bool BoundedJsonReader::begin_array(std::string_view path) {
     if (!require('[', path)) return false;
     enter_array();
-    element_count_ = 0;
+    ContainerFrame frame;
+    frame.kind = ContainerFrame::array;
+    frame.path = path;
+    container_stack_.push_back(std::move(frame));
     return true;
 }
 
 bool BoundedJsonReader::end_array(std::string_view path) {
+    if (!container_stack_.empty()) container_stack_.pop_back();
     leave_array();
     return require(']', path);
 }
 
 bool BoundedJsonReader::record_object_member(std::string_view path) {
-    ++member_count_;
-    if (member_count_ > cfg_.max_object_members) {
+    auto* frame = current_frame();
+    if (!frame) {
+        set_error(std::string(path) + ": record_object_member called outside governed container");
+        return false;
+    }
+    ++frame->item_count;
+    if (frame->item_count > cfg_.max_object_members) {
         set_error(std::string(path) + ": object member count (" +
-                  std::to_string(member_count_) + ") exceeds max_object_members (" +
+                  std::to_string(frame->item_count) + ") exceeds max_object_members (" +
                   std::to_string(cfg_.max_object_members) + ")");
         return false;
     }
@@ -178,10 +197,15 @@ bool BoundedJsonReader::record_object_member(std::string_view path) {
 }
 
 bool BoundedJsonReader::record_array_element(std::string_view path) {
-    ++element_count_;
-    if (element_count_ > cfg_.max_array_length) {
+    auto* frame = current_frame();
+    if (!frame) {
+        set_error(std::string(path) + ": record_array_element called outside governed container");
+        return false;
+    }
+    ++frame->item_count;
+    if (frame->item_count > cfg_.max_array_length) {
         set_error(std::string(path) + ": array element count (" +
-                  std::to_string(element_count_) + ") exceeds max_array_length (" +
+                  std::to_string(frame->item_count) + ") exceeds max_array_length (" +
                   std::to_string(cfg_.max_array_length) + ")");
         return false;
     }
@@ -189,52 +213,58 @@ bool BoundedJsonReader::record_array_element(std::string_view path) {
 }
 
 bool BoundedJsonReader::next_object_member(std::string_view path) {
+    auto* frame = current_frame();
+    std::string frame_path = frame ? frame->path : std::string(path);
     skip_ws();
     if (has_error_) return false;
     if (pos_ >= src_.size()) {
-        set_error(std::string(path) + ": unterminated object");
+        set_error(frame_path + ": unterminated object");
         return false;
     }
     if (src_[pos_] == '}') return false;
     if (src_[pos_] != ',') {
-        set_error(std::string(path) + ": expected ',' or '}' after object member at line " +
+        set_error(frame_path + ": expected ',' or '}' after object member at line " +
                   std::to_string(line_) + " column " + std::to_string(col_));
         return false;
     }
     advance_pos(); // consume comma
+    if (frame) frame->expect_separator = false;
     skip_ws();
-    // Check for trailing comma
     if (has_error_) return false;
     if (pos_ < src_.size() && src_[pos_] == '}') {
-        set_error(std::string(path) + ": trailing comma in object at line " +
+        set_error(frame_path + ": trailing comma in object at line " +
                   std::to_string(line_) + " column " + std::to_string(col_));
         return false;
     }
+    if (frame) frame->expect_separator = true;
     return true;
 }
 
 bool BoundedJsonReader::next_array_element(std::string_view path) {
+    auto* frame = current_frame();
+    std::string frame_path = frame ? frame->path : std::string(path);
     skip_ws();
     if (has_error_) return false;
     if (pos_ >= src_.size()) {
-        set_error(std::string(path) + ": unterminated array");
+        set_error(frame_path + ": unterminated array");
         return false;
     }
     if (src_[pos_] == ']') return false;
     if (src_[pos_] != ',') {
-        set_error(std::string(path) + ": expected ',' or ']' after array element at line " +
+        set_error(frame_path + ": expected ',' or ']' after array element at line " +
                   std::to_string(line_) + " column " + std::to_string(col_));
         return false;
     }
     advance_pos(); // consume comma
+    if (frame) frame->expect_separator = false;
     skip_ws();
-    // Check for trailing comma
     if (has_error_) return false;
     if (pos_ < src_.size() && src_[pos_] == ']') {
-        set_error(std::string(path) + ": trailing comma in array at line " +
+        set_error(frame_path + ": trailing comma in array at line " +
                   std::to_string(line_) + " column " + std::to_string(col_));
         return false;
     }
+    if (frame) frame->expect_separator = true;
     return true;
 }
 

@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <vector>
 
 namespace gspl {
 
@@ -54,6 +55,15 @@ struct BoundedJsonConfig {
     std::size_t max_object_members{10'000};
     std::size_t max_array_length{100'000};
     std::size_t max_string_length{64 * 1024};
+};
+
+// Per-container tracking frame — nested-safe
+struct ContainerFrame {
+    enum Kind { object, array };
+    Kind kind;
+    std::string path;
+    std::size_t item_count{0};
+    bool expect_separator{false};  // false=expect value/member, true=expect separator or end
 };
 
 class BoundedJsonReader {
@@ -129,14 +139,14 @@ private:
     std::string_view src_;
     std::size_t pos_{};
     std::size_t depth_{};
-    std::size_t member_count_{0};
-    std::size_t element_count_{0};
+    std::vector<ContainerFrame> container_stack_;
     std::size_t line_{1};
     std::size_t col_{1};
     BoundedJsonConfig cfg_;
     bool has_error_{false};
     std::string error_;
 
+    ContainerFrame* current_frame() noexcept;
     void set_error(std::string msg);
     std::string read_raw_string();
     void advance_pos();  // increments pos_, updates line_/col_

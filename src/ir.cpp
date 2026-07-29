@@ -656,7 +656,7 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json, Bound
                                         return result;
                                     }
                                     bool saw_tag = false, saw_value = false;
-                                    std::int64_t tv_opt_val = 0;
+                                    std::uint32_t tv_opt_val = 0;
                                     std::string raw_val;
                                     while (r.has_more() && !r.has_error()) {
                                         auto tk_opt = read_str("gene.value tagged key");
@@ -666,7 +666,7 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json, Bound
                                         if (r.has_error()) return result;
                                         if (tk == "t") {
                                             if (saw_tag) { fail("deserialize: duplicate 't' in gene value wrapper"); return result; }
-                                            auto tv_opt = read_i64("gene.value.t");
+                                            auto tv_opt = read_u32("gene.value.t");
                                             if (!tv_opt) return result;
                                             tv_opt_val = *tv_opt;
                                             saw_tag = true;
@@ -694,6 +694,11 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json, Bound
                                     auto gv_result = json_to_gene_value_result(raw_val, tag);
                                     if (!gv_result.ok()) {
                                         result.diagnostics = gv_result.diagnostics;
+                                        return result;
+                                    }
+                                    // Reject duplicate gene value names
+                                    if (gi.values.find(*vk_opt) != gi.values.end()) {
+                                        fail(("deserialize: duplicate gene value name '" + *vk_opt + "'").c_str());
                                         return result;
                                     }
                                     gi.values[*vk_opt] = *gv_result.value;
