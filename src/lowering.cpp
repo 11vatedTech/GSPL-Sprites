@@ -192,11 +192,15 @@ gspl::sprites::SkeletalClip SpriteIrLowering::lower_clip(CanonicalAnimationClip 
     for (auto const& track : clip.tracks) {
         gspl::sprites::BoneTrack bt;
         bt.bone_id = track.bone;
-        for (auto const& [tick, value] : track.keys) {
-            (void)value;
+        for (auto const& key : track.keys) {
             gspl::sprites::BoneKeyframe kf;
-            kf.tick = tick;
-            max_tick = (std::max)(max_tick, tick);
+            kf.tick = key.tick;
+            kf.transform.x = key.x;
+            kf.transform.y = key.y;
+            kf.transform.rotation_degrees = key.rotation_degrees;
+            kf.transform.scale_x = key.scale_x;
+            kf.transform.scale_y = key.scale_y;
+            max_tick = (std::max)(max_tick, key.tick);
             bt.keys.push_back(std::move(kf));
         }
         sc.tracks.push_back(std::move(bt));

@@ -274,127 +274,127 @@ entity Voltfox {
     // ── Animation Clips ──
     clip base_idle {
         track torso {
-            tick: 0; transform: "rest";
+            key 0 { x: 0.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
         }
         track head {
-            tick: 0; transform: "rest";
+            key 0 { x: 0.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
         }
         track tail {
-            tick: 0; transform: "rest";
-            tick: 30; transform: "sway_left";
-            tick: 60; transform: "sway_right";
+            key 0 { x: 0.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
+            key 30 { x: -2.0; y: 1.0; rotation_degrees: -15.0; scale_x: 1.0; scale_y: 1.0; }
+            key 60 { x: 2.0; y: 1.0; rotation_degrees: 15.0; scale_x: 1.0; scale_y: 1.0; }
         }
     }
     clip base_locomotion {
         track torso {
-            tick: 0; transform: "bounce_up";
-            tick: 8; transform: "bounce_down";
-            tick: 16; transform: "bounce_up";
-            tick: 24; transform: "rest";
+            key 0 { x: 0.0; y: 3.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
+            key 8 { x: 0.0; y: -3.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
+            key 16 { x: 0.0; y: 3.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
+            key 24 { x: 0.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
         }
         track leg_fl {
-            tick: 0; transform: "stride_forward";
-            tick: 12; transform: "stride_back";
-            tick: 24; transform: "rest";
+            key 0 { x: 0.0; y: 0.0; rotation_degrees: -20.0; scale_x: 1.0; scale_y: 1.0; }
+            key 12 { x: 0.0; y: 0.0; rotation_degrees: 20.0; scale_x: 1.0; scale_y: 1.0; }
+            key 24 { x: 0.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
         }
         track leg_fr {
-            tick: 0; transform: "stride_back";
-            tick: 12; transform: "stride_forward";
-            tick: 24; transform: "rest";
+            key 0 { x: 0.0; y: 0.0; rotation_degrees: 20.0; scale_x: 1.0; scale_y: 1.0; }
+            key 12 { x: 0.0; y: 0.0; rotation_degrees: -20.0; scale_x: 1.0; scale_y: 1.0; }
+            key 24 { x: 0.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
         }
         track tail {
-            tick: 0; transform: "trail";
+            key 0 { x: 0.0; y: 0.0; rotation_degrees: 5.0; scale_x: 1.0; scale_y: 1.0; }
         }
     }
     clip base_attack {
         track head {
-            tick: 0; transform: "anticipate";
-            tick: 6; transform: "release";
-            tick: 10; transform: "recover";
-            tick: 16; transform: "rest";
+            key 0 { x: -2.0; y: 1.0; rotation_degrees: -5.0; scale_x: 1.0; scale_y: 1.0; }
+            key 6 { x: 4.0; y: -1.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
+            key 10 { x: 1.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
+            key 16 { x: 0.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
         }
         track torso {
-            tick: 0; transform: "lean_back";
-            tick: 6; transform: "lean_forward";
-            tick: 10; transform: "lean_back";
-            tick: 16; transform: "rest";
+            key 0 { x: -3.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
+            key 6 { x: 3.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
+            key 10 { x: -1.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
+            key 16 { x: 0.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
         }
     }
     clip base_hit {
         track torso {
-            tick: 0; transform: "recoil";
-            tick: 6; transform: "recover";
-            tick: 12; transform: "rest";
+            key 0 { x: -4.0; y: 2.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
+            key 6 { x: -1.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
+            key 12 { x: 0.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
         }
         track head {
-            tick: 0; transform: "flinch";
-            tick: 6; transform: "rest";
+            key 0 { x: 0.0; y: 2.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
+            key 6 { x: 0.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
         }
     }
     clip transform_ascend {
         track torso {
-            tick: 0; transform: "rest";
-            tick: 20; transform: "elevate";
-            tick: 40; transform: "storm_form";
+            key 0 { x: 0.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
+            key 20 { x: 0.0; y: 5.0; rotation_degrees: 0.0; scale_x: 1.1; scale_y: 1.1; }
+            key 40 { x: 0.0; y: 8.0; rotation_degrees: 0.0; scale_x: 1.2; scale_y: 1.2; }
         }
         track head {
-            tick: 0; transform: "rest";
-            tick: 20; transform: "spark";
-            tick: 40; transform: "storm_form";
+            key 0 { x: 0.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
+            key 20 { x: 0.0; y: 2.0; rotation_degrees: 10.0; scale_x: 1.0; scale_y: 1.0; }
+            key 40 { x: 0.0; y: 4.0; rotation_degrees: 0.0; scale_x: 1.15; scale_y: 1.15; }
         }
         track tail {
-            tick: 0; transform: "rest";
-            tick: 20; transform: "electrify";
-            tick: 40; transform: "storm_form";
+            key 0 { x: 0.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
+            key 20 { x: 0.0; y: 1.0; rotation_degrees: 20.0; scale_x: 1.0; scale_y: 1.0; }
+            key 40 { x: 0.0; y: 3.0; rotation_degrees: 0.0; scale_x: 1.3; scale_y: 1.3; }
         }
         track aura_bone {
-            tick: 0; transform: "rest";
-            tick: 10; transform: "grow";
-            tick: 40; transform: "storm_form";
+            key 0 { x: 0.0; y: 0.0; rotation_degrees: 0.0; scale_x: 0.01; scale_y: 0.01; }
+            key 10 { x: 0.0; y: 0.0; rotation_degrees: 0.0; scale_x: 0.8; scale_y: 0.8; }
+            key 40 { x: 0.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.5; scale_y: 1.5; }
         }
     }
     clip storm_idle {
         track torso {
-            tick: 0; transform: "rest";
+            key 0 { x: 0.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
         }
         track head {
-            tick: 0; transform: "rest";
+            key 0 { x: 0.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
         }
         track tail {
-            tick: 0; transform: "rest";
-            tick: 15; transform: "spark_left";
-            tick: 30; transform: "spark_right";
-            tick: 45; transform: "rest";
+            key 0 { x: 0.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
+            key 15 { x: -2.0; y: 1.0; rotation_degrees: -15.0; scale_x: 1.0; scale_y: 1.0; }
+            key 30 { x: 2.0; y: 1.0; rotation_degrees: 15.0; scale_x: 1.0; scale_y: 1.0; }
+            key 45 { x: 0.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
         }
         track aura_bone {
-            tick: 0; transform: "pulse";
-            tick: 20; transform: "rest";
-            tick: 40; transform: "pulse";
+            key 0 { x: 0.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.1; scale_y: 1.1; }
+            key 20 { x: 0.0; y: 0.0; rotation_degrees: 0.0; scale_x: 0.9; scale_y: 0.9; }
+            key 40 { x: 0.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.1; scale_y: 1.1; }
         }
     }
     clip storm_attack {
         track head {
-            tick: 0; transform: "charge";
-            tick: 8; transform: "release";
-            tick: 14; transform: "recover";
-            tick: 20; transform: "rest";
+            key 0 { x: -3.0; y: 1.0; rotation_degrees: -5.0; scale_x: 1.0; scale_y: 1.0; }
+            key 8 { x: 5.0; y: -2.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
+            key 14 { x: 1.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
+            key 20 { x: 0.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
         }
         track torso {
-            tick: 0; transform: "brace";
-            tick: 8; transform: "thrust";
-            tick: 14; transform: "brace";
-            tick: 20; transform: "rest";
+            key 0 { x: -2.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
+            key 8 { x: 4.0; y: -1.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
+            key 14 { x: -1.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
+            key 20 { x: 0.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
         }
         track tail {
-            tick: 0; transform: "charge_tail";
-            tick: 8; transform: "discharge";
-            tick: 14; transform: "rest";
+            key 0 { x: 0.0; y: 0.0; rotation_degrees: 25.0; scale_x: 1.0; scale_y: 1.0; }
+            key 8 { x: 0.0; y: 0.0; rotation_degrees: -10.0; scale_x: 1.0; scale_y: 1.0; }
+            key 14 { x: 0.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
         }
         track aura_bone {
-            tick: 0; transform: "flare";
-            tick: 8; transform: "burst";
-            tick: 14; transform: "fade";
-            tick: 20; transform: "rest";
+            key 0 { x: 0.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.3; scale_y: 1.3; }
+            key 8 { x: 0.0; y: 0.0; rotation_degrees: 0.0; scale_x: 2.0; scale_y: 2.0; }
+            key 14 { x: 0.0; y: 0.0; rotation_degrees: 0.0; scale_x: 0.6; scale_y: 0.6; }
+            key 20 { x: 0.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
         }
     }
 

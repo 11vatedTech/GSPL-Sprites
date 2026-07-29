@@ -202,9 +202,14 @@ std::string canonical_identity_payload(CanonicalEntity const& entity) {
         for (auto const& track : clip.tracks) {
             append_key_value(out, "bone", track.bone);
             out << "keys{";
-            for (auto const& [tick, value] : track.keys) {
-                append_key_value(out, "tick", tick);
-                append_key_value(out, "value", value);
+            for (auto const& kf : track.keys) {
+                append_key_value(out, "tick", kf.tick);
+                if (kf.x != 0.0) out << "x=" << kf.x << ";";
+                if (kf.y != 0.0) out << "y=" << kf.y << ";";
+                if (kf.rotation_degrees != 0.0) out << "rotation_degrees=" << kf.rotation_degrees << ";";
+                if (kf.scale_x != 1.0) out << "scale_x=" << kf.scale_x << ";";
+                if (kf.scale_y != 1.0) out << "scale_y=" << kf.scale_y << ";";
+                if (!kf.legacy_transform.empty()) append_key_value(out, "value", kf.legacy_transform);
             }
             out << "};";
         }
@@ -685,20 +690,39 @@ static JsonReadResult<CanonicalAnimationClip> decode_animation_clip(
                                CanonicalAnimationClip::Track& t, DiagnosticResult& td, BoundedJsonReader& trr) {
                                 DECODE_STRING_FIELD(trr, tk, tfp, t, bone, td);
                                 if (tk == "keys") {
-                                    auto keys = decode_array<std::pair<std::uint32_t, std::string>>(trr, tfp,
+                                    auto keys = decode_array<CanonicalKeyframe>(trr, tfp,
                                         [](BoundedJsonReader& kr, std::string const& kp) {
-                                            return decode_object<std::pair<std::uint32_t, std::string>>(kr, kp, {"tick", "value"},
+                                            return decode_object<CanonicalKeyframe>(kr, kp, {"tick"},
                                                 [](std::string const& kk, std::string const& kfp,
-                                                   std::pair<std::uint32_t, std::string>& kv, DiagnosticResult& kd, BoundedJsonReader& krr) {
+                                                   CanonicalKeyframe& kv, DiagnosticResult& kd, BoundedJsonReader& krr) {
                                                     if (kk == "tick") {
-                                                        auto v = krr.read_uint64_result();
-                                                        if (!v.ok() || !v.value) { kd.merge(v.diagnostics); return; }
-                                                        if (*v.value > 0xFFFFFFFFULL) { kd.add_error(DiagnosticCode::GSPL_CONSTRAINT_UNSATISFIED, kfp + ": tick overflow", {}); return; }
-                                                        kv.first = static_cast<std::uint32_t>(*v.value);
+                                                        auto v = decode_uint32_field(krr, kfp);
+                                                        if (!v.ok()) { kd.merge(v.diagnostics); return; }
+                                                        kv.tick = *v.value;
+                                                    } else if (kk == "x") {
+                                                        auto v = decode_double_field(krr, kfp);
+                                                        if (!v.ok()) { kd.merge(v.diagnostics); return; }
+                                                        kv.x = *v.value;
+                                                    } else if (kk == "y") {
+                                                        auto v = decode_double_field(krr, kfp);
+                                                        if (!v.ok()) { kd.merge(v.diagnostics); return; }
+                                                        kv.y = *v.value;
+                                                    } else if (kk == "rotation_degrees") {
+                                                        auto v = decode_double_field(krr, kfp);
+                                                        if (!v.ok()) { kd.merge(v.diagnostics); return; }
+                                                        kv.rotation_degrees = *v.value;
+                                                    } else if (kk == "scale_x") {
+                                                        auto v = decode_double_field(krr, kfp);
+                                                        if (!v.ok()) { kd.merge(v.diagnostics); return; }
+                                                        kv.scale_x = *v.value;
+                                                    } else if (kk == "scale_y") {
+                                                        auto v = decode_double_field(krr, kfp);
+                                                        if (!v.ok()) { kd.merge(v.diagnostics); return; }
+                                                        kv.scale_y = *v.value;
                                                     } else if (kk == "value") {
-                                                        auto v = krr.read_string_result();
-                                                        if (!v.ok() || !v.value) { kd.merge(v.diagnostics); return; }
-                                                        kv.second = std::move(*v.value);
+                                                        auto v = decode_string_field(krr, kfp);
+                                                        if (!v.ok()) { kd.merge(v.diagnostics); return; }
+                                                        kv.legacy_transform = std::move(*v.value);
                                                     } else krr.skip_value();
                                                 });
                                         });
@@ -1192,8 +1216,14 @@ CanonicalSerializationResult CanonicalEntitySerializer::encode_canonical_entity(
             os << "{\"bone\":\"" << canonical_escape(tr.bone) << "\",\"keys\":[";
             for (std::size_t k = 0; k < tr.keys.size(); ++k) {
                 if (k > 0) os << ",";
-                os << "{\"tick\":" << tr.keys[k].first
-                   << ",\"value\":\"" << canonical_escape(tr.keys[k].second) << "\"}";
+                auto const& kf = tr.keys[k];
+                os << "{\"tick\":" << kf.tick
+                   << ",\"x\":" << kf.x << ",\"y\":" << kf.y
+                   << ",\"rotation_degrees\":" << kf.rotation_degrees
+                   << ",\"scale_x\":" << kf.scale_x << ",\"scale_y\":" << kf.scale_y;
+                if (!kf.legacy_transform.empty())
+                    os << ",\"value\":\"" << canonical_escape(kf.legacy_transform) << "\"";
+                os << "}";
             }
             os << "]}";
         }
@@ -2061,13 +2091,46 @@ void Canonicalizer::lower_generic_block(GenericBlock const& block, CanonicalEnti
             if (gb && (gb->block_type == "track" || gb->block_type == "Track")) {
                 CanonicalAnimationClip::Track track;
                 track.bone = gb->name;
-                for (auto const& key_attr_ptr : gb->attributes) {
-                    auto const* ka = dynamic_cast<AttributeNode const*>(key_attr_ptr.get());
-                    if (ka && ka->key == "tick" && ka->value) {
-                        auto const* kl = dynamic_cast<LiteralNode const*>(ka->value.get());
-                        if (kl) {
-                            auto tick = parse_uint(kl->value);
-                            track.keys.push_back({tick, strip_quotes(get_attr("transform"))});
+                // Process key blocks first (typed keyframe syntax)
+                for (auto const& child_ptr : gb->attributes) {
+                    auto const* child_gb = dynamic_cast<GenericBlock const*>(child_ptr.get());
+                    if (child_gb && (child_gb->block_type == "key")) {
+                        CanonicalKeyframe kf;
+                        kf.tick = parse_uint(child_gb->name);
+                        auto get_key_attr = [&](std::string const& key) -> std::string {
+                            for (auto const& a : child_gb->attributes) {
+                                auto const* attr = dynamic_cast<AttributeNode const*>(a.get());
+                                if (attr && attr->key == key && attr->value) {
+                                    auto const* lit = dynamic_cast<LiteralNode const*>(attr->value.get());
+                                    if (lit) return lit->value;
+                                }
+                            }
+                            return "";
+                        };
+                        auto pd = [&](std::string const& key, double def = 0.0) -> double {
+                            auto v = get_key_attr(key);
+                            if (v.empty()) return def;
+                            try { return std::stod(v); } catch (...) { return def; }
+                        };
+                        kf.x = pd("x");
+                        kf.y = pd("y");
+                        kf.rotation_degrees = pd("rotation_degrees");
+                        kf.scale_x = pd("scale_x", 1.0);
+                        kf.scale_y = pd("scale_y", 1.0);
+                        track.keys.push_back(std::move(kf));
+                    }
+                }
+                // Fallback: legacy tick/transform attributes
+                if (track.keys.empty()) {
+                    for (auto const& key_attr_ptr : gb->attributes) {
+                        auto const* ka = dynamic_cast<AttributeNode const*>(key_attr_ptr.get());
+                        if (ka && ka->key == "tick" && ka->value) {
+                            auto const* kl = dynamic_cast<LiteralNode const*>(ka->value.get());
+                            if (kl) {
+                                CanonicalKeyframe kf;
+                                kf.tick = parse_uint(kl->value);
+                                track.keys.push_back(std::move(kf));
+                            }
                         }
                     }
                 }

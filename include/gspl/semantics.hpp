@@ -55,12 +55,19 @@ struct CanonicalTransformation {
     std::uint32_t resource_cost{};
 };
 
+struct CanonicalKeyframe {
+    std::uint32_t tick{};
+    double x{}, y{}, rotation_degrees{};
+    double scale_x{1.0}, scale_y{1.0};
+    std::string legacy_transform;  // for backward compat with string-based "transform"
+};
+
 struct CanonicalAnimationClip {
     std::string name;
     bool loop{};
     struct Track {
         std::string bone;
-        std::vector<std::pair<std::uint32_t, std::string>> keys;
+        std::vector<CanonicalKeyframe> keys;
     };
     std::vector<Track> tracks;
     std::vector<std::pair<std::uint32_t, std::string>> clip_events;

@@ -296,8 +296,12 @@ std::unique_ptr<RightsDecl> Parser::parse_rights() {
 std::unique_ptr<GenericBlock> Parser::parse_generic_block(std::string const& block_type) {
     advance();
     auto decl = std::make_unique<GenericBlock>(block_type);
-    if (check(TokenKind::identifier) || (static_cast<std::uint8_t>(peek().kind) >= static_cast<std::uint8_t>(TokenKind::keyword_module) && static_cast<std::uint8_t>(peek().kind) <= static_cast<std::uint8_t>(TokenKind::keyword_fn))) {
-        decl->name = parse_name_or_keyword()->name;
+    if (check(TokenKind::identifier) || check(TokenKind::integer_literal) || check(TokenKind::unsigned_literal) || (static_cast<std::uint8_t>(peek().kind) >= static_cast<std::uint8_t>(TokenKind::keyword_module) && static_cast<std::uint8_t>(peek().kind) <= static_cast<std::uint8_t>(TokenKind::keyword_fn))) {
+        if (check(TokenKind::integer_literal) || check(TokenKind::unsigned_literal)) {
+            decl->name = advance().text;
+        } else {
+            decl->name = parse_name_or_keyword()->name;
+        }
     }
     while (check(TokenKind::identifier) || (static_cast<std::uint8_t>(peek().kind) >= static_cast<std::uint8_t>(TokenKind::keyword_module) && static_cast<std::uint8_t>(peek().kind) <= static_cast<std::uint8_t>(TokenKind::keyword_fn))) {
         decl->secondary_names.push_back(parse_name_or_keyword()->name);
@@ -313,7 +317,7 @@ std::unique_ptr<GenericBlock> Parser::parse_generic_block(std::string const& blo
                 (static_cast<std::uint8_t>(t.kind) >= static_cast<std::uint8_t>(TokenKind::keyword_module) &&
                  static_cast<std::uint8_t>(t.kind) <= static_cast<std::uint8_t>(TokenKind::keyword_fn));
             if (is_name) {
-                if (peek(1).kind == TokenKind::identifier || peek(1).kind == TokenKind::lbrace) {
+                if (peek(1).kind == TokenKind::identifier || peek(1).kind == TokenKind::integer_literal || peek(1).kind == TokenKind::unsigned_literal || peek(1).kind == TokenKind::lbrace) {
                     auto nested = parse_generic_block(peek().text);
                     if (nested) decl->attributes.push_back(std::move(nested));
                 } else {
@@ -362,7 +366,7 @@ std::unique_ptr<AstNode> Parser::parse_declaration() {
             std::string text = peek().text;
             if (text == "bone" || text == "clip" || text == "state" ||
                 text == "transition" || text == "runtime" || text == "rig" ||
-                text == "track" || text == "event" || text == "window" ||
+                text == "track" || text == "event" || text == "window" || text == "key" ||
                 text == "initial" || text == "part" || text == "material" ||
                 text == "palette") {
                 result = parse_generic_block(text);
