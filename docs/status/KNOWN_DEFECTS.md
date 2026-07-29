@@ -1,6 +1,9 @@
 # Known Defects
 
-Updated: 2026-07-28 (session: Sprite IR result-based migration — ir.cpp now exclusively uses fail-closed reads, DEF-0014/15/16 updated)
+Updated: 2026-07-29
+Implementation SHA: e6dc40044224ac090fe013676b6ccfb8b3447d18
+Branch: validation/qt-studio-bootstrap
+CTest: 83/83 passed (Debug, MSVC /W4 /WX)
 
 Severity scale: Critical / High / Medium / Low.
 
@@ -120,6 +123,20 @@ _All previously open defects (DEF-0006 through DEF-0008) have been resolved. See
 - Status: ✅ RESOLVED
 - Resolution: All production deserializers now use `BoundedJsonReader` exclusively. CanonicalEntity migrated with typed codecs (`decode_object<T>` template, all 16 codecs rewritten). Sprite IR migrated with result-based lambdas (`read_str`, `read_i64`, `require`, `parse_ir_node`). No deprecated fallback reads remain in any production parser. Duplicate field detection, trailing comma rejection, required fields, schema version enforcement, and validator invocation all in place.
 - Verification: `gspl_sprites_semantic_pipeline_tests` (ALL PASSED), `gspl_sprites_gene_tests` (ALL PASSED), `gspl_sprites_compiler_tests` (ALL PASSED). MSVC `/W4 /WX` clean.
+
+### DEF-0017 — Remaining adversarial gaps
+
+- Severity: Low
+- Status: OPEN
+- Discovered: e6dc400
+- Resolution: None yet
+- Root cause: Several edge cases are not yet covered by adversarial tests or enforcement:
+  1. Duplicate root field detection (ir_version/entity_id/seed_identity/schema_version) is tracked but uses last-write-wins for first occurrence
+  2. `end_object`/`end_array` silently pop wrong frame on begin/end mismatch (no kind verification)
+  3. `ContainerFrame::expect_separator` set but never enforced
+  4. Duplicate gene value check runs after parsing (should check before to avoid wasted work)
+  5. `saw_props`/`saw_deps` tracked in parse_ir_node but properties/deps are intentionally optional (no enforcement gap, just dead tracking)
+- Verification: N/A — not yet implemented
 
 ## Historical defects reverified as currently mitigated or partially mitigated
 

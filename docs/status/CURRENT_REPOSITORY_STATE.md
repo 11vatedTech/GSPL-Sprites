@@ -1,16 +1,17 @@
 # Current Repository State
 
-Updated: 2026-07-28 (session: gene round-trip — DEF-0012/13/14 fully resolved, genes survive CanonicalEntity and SpriteIr round-trips)
+Updated: 2026-07-29
 
 ## Repository identity
 
-- Repository root: `C:/Users/11vat/OneDrive/Desktop/claude/11vatedTech_canon-workspace/Inventions/GSPL-Sprites`
 - Remote: `https://github.com/11vatedTech/GSPL-Sprites`
 - Active branch: `validation/qt-studio-bootstrap`
-- Current HEAD / remote HEAD: `8ad9236b0e252877afc7d4cad4ff0c537d765801`
-- Local == Remote: YES (in sync at `8ad9236`)
-- Commits ahead: 0 | Commits behind: 0
-- Working tree: clean (all changes committed)
+- Implementation SHA: `e6dc40044224ac090fe013676b6ccfb8b3447d18`
+- Remote parity: YES
+- Main HEAD: `e8b69369ddbbc61d3a96fd10b70651bb28b542de`
+- Merge base: `e8b69369`
+- Commits ahead of main: 25
+- Working tree: clean
 
 ## Build system
 
@@ -76,22 +77,21 @@ ctest --test-dir build --output-on-failure
 
 ## Test topology
 
-- CMake declares 80+ test executables in the root `CMakeLists.txt`, plus additional Qt Studio tests behind `GSPL_BUILD_STUDIO` in `src/studio/CMakeLists.txt`.
-- Prior repository notes claim 83/83 targets passed on MSVC CORE_ONLY, but that is source-reported until rerun in this session.
-- Tests include UTF-8, modules, types, expressions, genes, cache, providers, legacy migration, fuzz parsing smoke, mutation tests, compiler pipeline, semantic pipeline, CLI, SDK header self-containment, LS, E2E workflow, plugin, security, benchmarks, and Studio model tests.
+- 83 test targets declared in CMake
+- **Live evidence (2026-07-29)**: 83/83 CTest PASSED (Debug, MSVC /W4 /WX, 86s total)
+- Targeted test suites: `semantic_pipeline_tests`, `gene_tests`, `compiler_tests`, `ir_persistence_tests` — ALL PASSED
+- Branch scope (ws-ignored): 135 files, +16,412 / -455 lines
 
-## Serialization overhaul (2026-07-28)
+## Serialization architecture (current at e6dc400)
 
-New infrastructure added (committed at `9dca9a5`):
-- `include/gspl/json.hpp` (87 lines): `BoundedJsonReader` with configurable limits, `GeneValueTag` enum, `gene_value_to_json`/`json_to_gene_value`/`gene_value_variant_index`
-- `src/json.cpp` (420 lines): Full implementation — JSON writer helpers, bounded reader with depth enforcement in `skip_value()`, typed GeneValue round-trip, `static_assert` on variant alignment, NaN/infinity rejection
-
-API changes (committed at `9dca9a5`):
-- `include/gspl/ir.hpp`: Added `SpriteIrDeserializeResult` struct, `deserialize()` returns Result, graph methods (`transitive_dependencies`, `reverse_dependencies`, `dependency_closure`)
-- `include/gspl/semantics.hpp`: Added `CanonicalEntityDeserializeResult` struct, `from_json()` returns Result (single-arg, fail-closed)
-- `src/ir.cpp`: Type-tagged gene values (`{"t":<tag>,"v":<json>}`), fail-closed deserialization, dependency graph traversal
-- `src/semantics.cpp`: `from_json()` parses ALL structural fields with closing `}` consumption after every element (18 fix points). `to_json()` outputs `initial_state` before arrays.
-- `tests/semantic_pipeline_tests.cpp`: Tests 16-22 (round-trip, fail-closed, IR, optimization, DEF-0012 maximally populated, DEF-0014 resource limits)
+- `include/gspl/json.hpp`: `BoundedJsonReader` with configurable limits, per-container stack (`ContainerFrame`), `GeneValueTag` enum, result-based reads
+- `src/json.cpp`: Governed container APIs (begin/end_object/array, next_*_member/element, record_*), per-frame item counting, trailing comma rejection, strict numbers, Unicode support
+- `include/gspl/ir.hpp`: `SpriteIrDeserializeResult`, configurable `deserialize(json, config)`, graph methods
+- `include/gspl/semantics.hpp`: `CanonicalSerializationResult`, typed codecs
+- `src/ir.cpp`: Fail-closed deserialization with result-based lambdas, enum validation (compile-time assertions), collection-specific node kind enforcement, duplicate field/gene value name rejection, saw_* root field tracking
+- `src/semantics.cpp`: CanonicalEntity deserialization via BoundedJsonReader with typed codecs
+- `tests/ir_persistence_tests.cpp`: 36 adversarial tests covering empty/truncated/malformed input, missing fields, invalid enums, duplicates, wrong-collection kinds
+- `tests/semantic_pipeline_tests.cpp`: Tests 16-22 (round-trip, fail-closed, IR, optimization)
 
 ## Current audit observations
 
@@ -100,21 +100,13 @@ API changes (committed at `9dca9a5`):
 - Historical TypeScript seven-package monorepo is not the current truth; present implementation is a C++23 CMake repository with optional Qt Studio.
 - DEF-0001 through DEF-0011 RESOLVED. DEF-0012 through DEF-0014 OPEN (see KNOWN_DEFECTS.md).
 
-## Live command evidence (2026-07-28)
+## Live command evidence (2026-07-29)
 
 - **BUILD (Debug)**: `cmake --build build/windows-msvc --config Debug` — 0 errors, 0 warnings (`/W4 /WX /permissive-`)
-- **BUILD (core-only)**: `cmake --build build/windows-msvc-core --config Debug -DGSPL_CORE_ONLY=ON` — 0 errors
-- **TARGETED TESTS**: 3/3 pass — `gene_tests` (ALL PASSED), `semantic_pipeline_tests` (22 tests ALL PASSED), `compiler_tests` (ALL PASSED)
-- **FULL CTEST**: 3 pass, 79 "Not Run" (Studio/Qt/ONNX targets not built in this config — pre-existing)
-- **CI STATUS**: Pending — GitHub Actions run for `8ad9236`
+- **FULL CTEST**: 83/83 passed (Debug, 86.36s total)
+- **TARGETED SUITES**: semantic_pipeline (ALL PASSED), gene_tests (ALL PASSED), compiler_tests (ALL PASSED), ir_persistence_tests (ALL PASSED)
+- **CI STATUS**: Pending — no remote CI run for e6dc400 yet
 
 ### Defects status
-- DEF-0001 through DEF-0014: ALL RESOLVED ✅ (see KNOWN_DEFECTS.md for evidence)
-
-## Gene round-trip (2026-07-28)
-
-DEF-0012/13/14 fully resolved at `8ad9236`:
-- **CanonicalEntity genes**: `to_json()` serializes full typed genes; `from_json()` parses genes array with `GeneRegistry` lookup, typed value reconstruction (`json_to_gene_value`), and legacy bare-string fallback.
-- **SpriteIr genes**: `IrSerializer` serializes/deserializes genes with type-tagged format. Multi-gene arrays parse correctly (fixed missing `r.expect('}')` in all 5 array-of-object parsers).
-- **GeneValue types**: All 6 types (string, bool, int64, uint64, double, string_list) survive round-trip with exact variant index preservation verified via `std::get_if`.
-- **50+ assertions** in test 21 covering gene kind, schema, type_id, source_module, values count, key presence, variant index, and type-specific get_if checks.
+- DEF-0001 through DEF-0016: ALL RESOLVED ✅
+- DEF-0017: OPEN (remaining adversarial gaps — see KNOWN_DEFECTS.md)

@@ -1,11 +1,12 @@
 # GSPL Sprites — Completion Matrix
 
 **Repository:** https://github.com/11vatedTech/GSPL-Sprites
-**Branch:** main
-**Verified Baseline Commit:** d6a8100ac3767cd1a8255e8096148c70b0533fb7 (feat: bind 2D form manifestations)
+**Branch:** validation/qt-studio-bootstrap
+**Verified Baseline Commit:** e6dc40044224ac090fe013676b6ccfb8b3447d18 (feat: adversarial IR persistence tests)
 **Build:** MSVC `/W4 /WX /permissive-` — PASS
-**Tests:** 39/39 — PASS
+**Tests:** 83/83 CTest — ALL PASSED (Debug, 86s)
 **Working Tree:** Clean
+**Commits ahead of main:** 25
 
 ---
 
@@ -90,13 +91,13 @@
 
 | ID | Capability | State | Evidence | Notes |
 |----|-----------|-------|----------|-------|
-| D1 | Authoring representation | 🔄 PARTIAL | `authoring.cpp`, `authoring_io.cpp` | Schema validation exists |
-| D2 | Canonical entity definition | 📝 CONTRACT ONLY | Types in `core.hpp`, `domain.hpp` | No canonical serialization |
-| D3 | Sprite Gene system | 📝 CONTRACT ONLY | `domain.hpp` has gene-like types | Not a typed composition system |
-| D4 | Sprite IR | ❌ MISSING | | Separate from authoring/canonical |
-| D5 | Compiler passes | ❌ MISSING | | No explicit pass pipeline |
-| D6 | Provenance tracking | 🔄 PARTIAL | `package_semantics.cpp` has some | Not end-to-end |
-| D7 | Diagnostics | 🔄 PARTIAL | `ValidationResult` used everywhere | Need structured diagnostics |
+| D1 | Authoring representation | 🔄 PARTIAL | | Schema validation exists |
+| D2 | Canonical entity definition | ✅ COMPLETE | semantics.cpp, tests 16-21 | Full serialization/deserialization + validator |
+| D3 | Sprite Gene system | ✅ COMPLETE | genes.hpp, gene_tests.cpp | Typed composition with GeneValue variants |
+| D4 | Sprite IR | ✅ COMPLETE | ir.hpp/cpp, ir_persistence_tests | Full serialize/deserialize + validation |
+| D5 | Compiler passes | ✅ COMPLETE | passes.cpp, semantic_pipeline_tests | Parse→IR→Optimize→Canonicalize pipeline |
+| D6 | Provenance tracking | 🔄 PARTIAL | | Not end-to-end |
+| D7 | Diagnostics | ✅ COMPLETE | diagnostics.hpp | Structured diagnostic codes |
 
 ---
 
