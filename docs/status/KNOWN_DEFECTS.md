@@ -82,12 +82,18 @@ Severity scale: Critical / High / Medium / Low.
 
 - Severity: Medium
 - Status: ✅ RESOLVED
-- Resolution: `GeneValueTag` enum maps variant indices (string_val=0, bool_val=1, int64_val=2, uint64_val=3, double_val=4, string_list_val=5). `static_assert` verifies alignment with `GeneValue` variant size. `gene_value_to_json()` visitor handles all types; doubles use `snprintf("%.17g")` with NaN/infinity → "null". `json_to_gene_value()` reconstructs typed values; parse failures fall back to string representation. `gene_value_variant_index()` provides tag introspection.
-- Verification: Framework in place; exhaustive round-trip tests for all GeneValue types deferred to next phase.
+- Resolution: `GeneValueTag` enum maps variant indices. `static_assert` verifies alignment. `gene_value_to_json()` visitor handles all types; nonfinite doubles throw (no `null` fallback). `json_to_gene_value_result()` provides fail-closed decoding. Legacy `json_to_gene_value()` now throws on failure — current-schema callers must use `_result()` variant. String lists use governed array cursor with trailing-data rejection.
+- Verification: All 6 types tested; adversarial IR persistence tests cover malformed GeneValue cases.
 
 ## Open defects
 
-_All previously open defects (DEF-0006 through DEF-0008) have been resolved. See above._
+### DEF-0017 — Remaining adversarial gaps (see below)
+
+### DEF-0018 — Unified persistence grammar, strict numbers, graph validation, CI matrix, branch cleanup, living sprite
+
+See CONSOLIDATED_PHASE_LEDGER.md for full scope.
+
+_All DEF-0001 through DEF-0016 have been resolved. See above._
 
 ### DEF-0012 — Full structural round-trip tests
 
@@ -124,19 +130,13 @@ _All previously open defects (DEF-0006 through DEF-0008) have been resolved. See
 - Resolution: All production deserializers now use `BoundedJsonReader` exclusively. CanonicalEntity migrated with typed codecs (`decode_object<T>` template, all 16 codecs rewritten). Sprite IR migrated with result-based lambdas (`read_str`, `read_i64`, `require`, `parse_ir_node`). No deprecated fallback reads remain in any production parser. Duplicate field detection, trailing comma rejection, required fields, schema version enforcement, and validator invocation all in place.
 - Verification: `gspl_sprites_semantic_pipeline_tests` (ALL PASSED), `gspl_sprites_gene_tests` (ALL PASSED), `gspl_sprites_compiler_tests` (ALL PASSED). MSVC `/W4 /WX` clean.
 
-### DEF-0017 — Remaining adversarial gaps
+### DEF-0017 — Remaining adversarial and unification gaps
 
-- Severity: Low
-- Status: OPEN
+- Severity: Medium
+- Status: PARTIALLY RESOLVED
 - Discovered: e6dc400
-- Resolution: None yet
-- Root cause: Several edge cases are not yet covered by adversarial tests or enforcement:
-  1. Duplicate root field detection (ir_version/entity_id/seed_identity/schema_version) is tracked but uses last-write-wins for first occurrence
-  2. `end_object`/`end_array` silently pop wrong frame on begin/end mismatch (no kind verification)
-  3. `ContainerFrame::expect_separator` set but never enforced
-  4. Duplicate gene value check runs after parsing (should check before to avoid wasted work)
-  5. `saw_props`/`saw_deps` tracked in parse_ir_node but properties/deps are intentionally optional (no enforcement gap, just dead tracking)
-- Verification: N/A — not yet implemented
+- Resolution: Frame-kind verification added to `end_object`/`end_array` (rejects mismatched closes). `expect_separator` now reset on close delimiter. Strict JSON numbers reject leading zeros, incomplete fractions, incomplete exponents, and trailing letters. GeneValue string lists use governed array cursor with closure verification. Legacy `json_to_gene_value()` now throws (no silent string fallback).
+- Remaining: Duplicate root field detection not enforced at parse level. CanonicalEntity still uses separate `decode_object`/`decode_array` (not unified with container stack). Complete UTF-8 code-point validation not yet implemented. Graph validation still shallow.
 
 ## Historical defects reverified as currently mitigated or partially mitigated
 

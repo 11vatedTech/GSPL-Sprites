@@ -29,10 +29,10 @@
 | ID | Capability | State | Evidence | Notes |
 |----|-----------|-------|----------|-------|
 | A1 | Strict MSVC build | ✅ COMPLETE | Build log, 0 warnings/errors | `/W4 /WX /permissive-` |
-| A2 | Full test suite | ✅ COMPLETE | 39/39 CTest PASS | |
+| A2 | Full test suite | ✅ COMPLETE | 83/83 CTest PASS (Debug) | |
 | A3 | Repository isolation | ✅ COMPLETE | No submodules, no cross-repo deps | |
 | A4 | Clean working tree | ✅ COMPLETE | `git status` clean | |
-| A5 | Local/remote parity | ✅ COMPLETE | `d6a8100` both | |
+| A5 | Local/remote parity | ✅ COMPLETE | `a82d252` both | |
 | A6 | Architecture audit | 🔄 PARTIAL | This matrix | Ongoing |
 | A7 | Dead code audit | 🔄 PARTIAL | Manual review needed | |
 | A8 | Documentation sync | 🔄 PARTIAL | ADR-0036+ exist | Need verification |

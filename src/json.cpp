@@ -5,6 +5,7 @@
 #include <charconv>
 #include <cstdlib>
 #include <sstream>
+#include <stdexcept>
 
 static_assert(std::variant_size_v<gspl::GeneValue> == 6,
               "GeneValue variant size must match GeneValueTag enum count");
@@ -159,7 +160,17 @@ bool BoundedJsonReader::begin_object(std::string_view path) {
 }
 
 bool BoundedJsonReader::end_object(std::string_view path) {
-    if (!container_stack_.empty()) container_stack_.pop_back();
+    // Verify frame kind before popping
+    if (container_stack_.empty()) {
+        set_error(std::string(path) + ": end_object called with empty container stack");
+        return false;
+    }
+    auto& frame = container_stack_.back();
+    if (frame.kind != ContainerFrame::object) {
+        set_error(std::string(path) + ": end_object called but current frame is not an object (" + frame.path + ")");
+        return false;
+    }
+    container_stack_.pop_back();
     leave_object();
     return require('}', path);
 }
@@ -175,7 +186,17 @@ bool BoundedJsonReader::begin_array(std::string_view path) {
 }
 
 bool BoundedJsonReader::end_array(std::string_view path) {
-    if (!container_stack_.empty()) container_stack_.pop_back();
+    // Verify frame kind before popping
+    if (container_stack_.empty()) {
+        set_error(std::string(path) + ": end_array called with empty container stack");
+        return false;
+    }
+    auto& frame = container_stack_.back();
+    if (frame.kind != ContainerFrame::array) {
+        set_error(std::string(path) + ": end_array called but current frame is not an array (" + frame.path + ")");
+        return false;
+    }
+    container_stack_.pop_back();
     leave_array();
     return require(']', path);
 }
@@ -221,7 +242,10 @@ bool BoundedJsonReader::next_object_member(std::string_view path) {
         set_error(frame_path + ": unterminated object");
         return false;
     }
-    if (src_[pos_] == '}') return false;
+    if (src_[pos_] == '}') {
+        if (frame) frame->expect_separator = false;
+        return false;
+    }
     if (src_[pos_] != ',') {
         set_error(frame_path + ": expected ',' or '}' after object member at line " +
                   std::to_string(line_) + " column " + std::to_string(col_));
@@ -236,7 +260,6 @@ bool BoundedJsonReader::next_object_member(std::string_view path) {
                   std::to_string(line_) + " column " + std::to_string(col_));
         return false;
     }
-    if (frame) frame->expect_separator = true;
     return true;
 }
 
@@ -249,7 +272,10 @@ bool BoundedJsonReader::next_array_element(std::string_view path) {
         set_error(frame_path + ": unterminated array");
         return false;
     }
-    if (src_[pos_] == ']') return false;
+    if (src_[pos_] == ']') {
+        if (frame) frame->expect_separator = false;
+        return false;
+    }
     if (src_[pos_] != ',') {
         set_error(frame_path + ": expected ',' or ']' after array element at line " +
                   std::to_string(line_) + " column " + std::to_string(col_));
@@ -264,7 +290,6 @@ bool BoundedJsonReader::next_array_element(std::string_view path) {
                   std::to_string(line_) + " column " + std::to_string(col_));
         return false;
     }
-    if (frame) frame->expect_separator = true;
     return true;
 }
 
@@ -592,6 +617,17 @@ JsonReadResult<std::int64_t> BoundedJsonReader::read_int64_result() {
                                      "invalid integer token", {});
         return result;
     }
+    // Reject leading zero: "0" is valid, "01", "-01" etc are not
+    if (num.size() > 1 && num[0] == '0') {
+        result.diagnostics.add_error(DiagnosticCode::GSPL_LEX_NUMERIC_OVERFLOW,
+                                     "leading zeros not allowed in JSON: " + num, {});
+        return result;
+    }
+    if (num.size() > 2 && num[0] == '-' && num[1] == '0') {
+        result.diagnostics.add_error(DiagnosticCode::GSPL_LEX_NUMERIC_OVERFLOW,
+                                     "leading zeros not allowed in JSON: " + num, {});
+        return result;
+    }
     std::int64_t v{};
     auto [ptr, ec] = std::from_chars(num.data(), num.data() + num.size(), v);
     if (ec != std::errc{}) {
@@ -630,6 +666,12 @@ JsonReadResult<std::uint64_t> BoundedJsonReader::read_uint64_result() {
                                      "invalid unsigned integer token", {});
         return result;
     }
+    // Reject leading zero
+    if (num.size() > 1 && num[0] == '0') {
+        result.diagnostics.add_error(DiagnosticCode::GSPL_LEX_NUMERIC_OVERFLOW,
+                                     "leading zeros not allowed in JSON: " + num, {});
+        return result;
+    }
     std::uint64_t v{};
     auto [ptr, ec] = std::from_chars(num.data(), num.data() + num.size(), v);
     if (ec != std::errc{}) {
@@ -663,22 +705,46 @@ JsonReadResult<double> BoundedJsonReader::read_double_result() {
 
     std::string num;
     if (pos_ < src_.size() && src_[pos_] == '-') { num += src_[pos_]; advance_pos(); }
+    // Integer part
+    bool saw_digit = false;
     while (pos_ < src_.size() && std::isdigit(static_cast<unsigned char>(src_[pos_]))) {
         num += src_[pos_]; advance_pos();
+        saw_digit = true;
     }
+    if (!saw_digit) {
+        result.diagnostics.add_error(DiagnosticCode::GSPL_LEX_NUMERIC_OVERFLOW,
+                                     "expected digit in number", {});
+        return result;
+    }
+    // Fraction
     if (pos_ < src_.size() && src_[pos_] == '.') {
         num += '.'; advance_pos();
+        bool saw_frac = false;
         while (pos_ < src_.size() && std::isdigit(static_cast<unsigned char>(src_[pos_]))) {
             num += src_[pos_]; advance_pos();
+            saw_frac = true;
+        }
+        if (!saw_frac) {
+            result.diagnostics.add_error(DiagnosticCode::GSPL_LEX_NUMERIC_OVERFLOW,
+                                         "incomplete fraction: expected digit after '.'", {});
+            return result;
         }
     }
+    // Exponent
     if (pos_ < src_.size() && (src_[pos_] == 'e' || src_[pos_] == 'E')) {
         num += src_[pos_]; advance_pos();
         if (pos_ < src_.size() && (src_[pos_] == '+' || src_[pos_] == '-')) {
             num += src_[pos_]; advance_pos();
         }
+        bool saw_exp = false;
         while (pos_ < src_.size() && std::isdigit(static_cast<unsigned char>(src_[pos_]))) {
             num += src_[pos_]; advance_pos();
+            saw_exp = true;
+        }
+        if (!saw_exp) {
+            result.diagnostics.add_error(DiagnosticCode::GSPL_LEX_NUMERIC_OVERFLOW,
+                                         "incomplete exponent: expected digit after 'e'", {});
+            return result;
         }
     }
     if (num.empty() || num == "-") {
@@ -688,9 +754,9 @@ JsonReadResult<double> BoundedJsonReader::read_double_result() {
     }
     char* end = nullptr;
     double v = std::strtod(num.c_str(), &end);
-    if (end == num.c_str()) {
+    if (end == num.c_str() || end != num.c_str() + num.size()) {
         result.diagnostics.add_error(DiagnosticCode::GSPL_LEX_NUMERIC_OVERFLOW,
-                                     "failed to parse number", {});
+                                     "failed to parse number: " + num, {});
         return result;
     }
     if (!std::isfinite(v)) {
@@ -935,8 +1001,12 @@ std::string gene_value_to_json(GeneValue const& value) {
 GeneValue json_to_gene_value(std::string_view json, GeneValueTag tag) {
     auto result = json_to_gene_value_result(json, tag);
     if (result.ok()) return *result.value;
-    // Legacy fallback: treat as string
-    return GeneValue{std::in_place_index<0>, std::string(json)};
+    // Legacy migration: only available through explicit migration adapter
+    // Current-schema callers must use json_to_gene_value_result() directly
+    throw std::invalid_argument(
+        "json_to_gene_value: decoding failed for tag " +
+        std::to_string(static_cast<std::uint32_t>(tag)) +
+        " — use json_to_gene_value_result() for fail-closed access");
 }
 
 GeneValueDeserializeResult json_to_gene_value_result(std::string_view json,
@@ -1056,21 +1126,33 @@ GeneValueDeserializeResult json_to_gene_value_result(std::string_view json,
     case GeneValueTag::string_list_val: {
         std::vector<std::string> list;
         BoundedJsonReader r(json);
-        if (!r.expect('[')) {
+        if (!r.begin_array("string_list")) {
             result.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
                                          "expected '[' for string_list", {});
             return result;
         }
-        while (r.has_more()) {
+        while (r.has_more() && !r.has_error()) {
             auto s = r.read_string_result();
             if (!s.ok()) {
                 result.diagnostics = s.diagnostics;
                 return result;
             }
             list.push_back(*s.value);
-            if (!r.expect(',')) break;
+            r.record_array_element("string_list");
+            if (!r.next_array_element("string_list")) break;
         }
-        r.expect(']');
+        if (!r.end_array("string_list")) {
+            result.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
+                                         "expected ']' to close string_list", {});
+            return result;
+        }
+        // Verify complete consumption
+        r.skip_ws();
+        if (r.position() < r.source().size()) {
+            result.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
+                                         "trailing data after string_list", {});
+            return result;
+        }
         result.value = GeneValue{std::in_place_index<5>, std::move(list)};
         return result;
     }
