@@ -20,6 +20,7 @@ struct CliOptions {
     bool verify{false};
     bool synthesize{false};
     bool living_run{false};
+    bool evidence{false};
     std::filesystem::path package_dir;
     bool deterministic_seed{false};
     std::uint64_t deterministic_entropy{42};
