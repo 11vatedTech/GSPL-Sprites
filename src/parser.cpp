@@ -58,6 +58,23 @@ std::unique_ptr<IdentifierRef> Parser::parse_identifier() {
     return std::make_unique<IdentifierRef>(tok.text);
 }
 
+std::unique_ptr<IdentifierRef> Parser::parse_name_or_keyword() {
+    auto const& tok = peek();
+    if (tok.kind == TokenKind::identifier) {
+        advance();
+        return std::make_unique<IdentifierRef>(tok.text);
+    }
+    // Accept keyword tokens as names — essential for gene declarations
+    // like `gene rights`, `gene form`, `gene morphology`, etc.
+    auto k = static_cast<std::uint8_t>(tok.kind);
+    if (k >= static_cast<std::uint8_t>(TokenKind::keyword_module) &&
+        k <= static_cast<std::uint8_t>(TokenKind::keyword_fn)) {
+        advance();
+        return std::make_unique<IdentifierRef>(tok.text);
+    }
+    return parse_identifier(); // produces diagnostic on failure
+}
+
 std::unique_ptr<TypeRef> Parser::parse_type_ref() {
     auto tok = expect(TokenKind::identifier, DiagnosticCode::GSPL_PARSE_UNEXPECTED_TOKEN,
                        "Expected type name");
@@ -83,8 +100,7 @@ std::unique_ptr<LiteralNode> Parser::parse_literal() {
 }
 
 std::unique_ptr<AstNode> Parser::parse_attribute() {
-    auto key = expect(TokenKind::identifier, DiagnosticCode::GSPL_PARSE_UNEXPECTED_TOKEN,
-                       "Expected attribute key");
+    auto key = parse_name_or_keyword()->name;
     expect(TokenKind::colon, DiagnosticCode::GSPL_PARSE_UNEXPECTED_TOKEN, "Expected ':'");
     auto val = parse_literal();
     if (!val) {
@@ -103,7 +119,7 @@ std::unique_ptr<AstNode> Parser::parse_attribute() {
         }
     }
     advance();
-    return std::make_unique<AttributeNode>(key.text, std::move(val));
+    return std::make_unique<AttributeNode>(key, std::move(val));
 }
 
 std::unique_ptr<ImportDecl> Parser::parse_import() {
@@ -139,7 +155,7 @@ std::unique_ptr<EntityDecl> Parser::parse_entity() {
 
 std::unique_ptr<GeneDecl> Parser::parse_gene() {
     advance(); // consume 'gene'
-    auto name = parse_identifier()->name;
+    auto name = parse_name_or_keyword()->name;
     std::vector<std::string> deps;
     if (match(TokenKind::colon)) {
         do { deps.push_back(parse_identifier()->name); }
@@ -280,15 +296,23 @@ std::unique_ptr<RightsDecl> Parser::parse_rights() {
 std::unique_ptr<GenericBlock> Parser::parse_generic_block(std::string const& block_type) {
     advance();
     auto decl = std::make_unique<GenericBlock>(block_type);
-    if (check(TokenKind::identifier)) decl->name = parse_identifier()->name;
-    while (check(TokenKind::identifier)) {
-        decl->secondary_names.push_back(parse_identifier()->name);
+    if (check(TokenKind::identifier) || (static_cast<std::uint8_t>(peek().kind) >= static_cast<std::uint8_t>(TokenKind::keyword_module) && static_cast<std::uint8_t>(peek().kind) <= static_cast<std::uint8_t>(TokenKind::keyword_fn))) {
+        decl->name = parse_name_or_keyword()->name;
+    }
+    while (check(TokenKind::identifier) || (static_cast<std::uint8_t>(peek().kind) >= static_cast<std::uint8_t>(TokenKind::keyword_module) && static_cast<std::uint8_t>(peek().kind) <= static_cast<std::uint8_t>(TokenKind::keyword_fn))) {
+        decl->secondary_names.push_back(parse_name_or_keyword()->name);
     }
     if (!check(TokenKind::semicolon)) {
         expect(TokenKind::lbrace, DiagnosticCode::GSPL_PARSE_UNBALANCED_BRACE, "Expected '{'");
         while (!check(TokenKind::rbrace) && !check(TokenKind::end_of_file)) {
             if (match(TokenKind::semicolon)) continue;
-            if (check(TokenKind::identifier)) {
+            // Accept identifiers AND keyword tokens as attribute keys
+            // (e.g., `ability: "move"` where ability is keyword_ability)
+            auto const& t = peek();
+            bool is_name = t.kind == TokenKind::identifier ||
+                (static_cast<std::uint8_t>(t.kind) >= static_cast<std::uint8_t>(TokenKind::keyword_module) &&
+                 static_cast<std::uint8_t>(t.kind) <= static_cast<std::uint8_t>(TokenKind::keyword_fn));
+            if (is_name) {
                 if (peek(1).kind == TokenKind::identifier || peek(1).kind == TokenKind::lbrace) {
                     auto nested = parse_generic_block(peek().text);
                     if (nested) decl->attributes.push_back(std::move(nested));

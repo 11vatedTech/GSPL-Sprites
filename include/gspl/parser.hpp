@@ -32,6 +32,7 @@ private:
     void synchronize();
     Token const& expect(TokenKind kind, DiagnosticCode code, std::string msg);
     std::unique_ptr<IdentifierRef> parse_identifier();
+    std::unique_ptr<IdentifierRef> parse_name_or_keyword();
     std::unique_ptr<TypeRef> parse_type_ref();
     std::unique_ptr<LiteralNode> parse_literal();
     std::unique_ptr<AstNode> parse_attribute();

@@ -2079,6 +2079,7 @@ void Canonicalizer::lower_generic_block(GenericBlock const& block, CanonicalEnti
         CanonicalAnimationState state;
         state.name = block.name;
         state.clip_name = get_attr("clip");
+        if (out.initial_state.empty()) out.initial_state = state.name;
         out.states.push_back(std::move(state));
     } else if (block.block_type == "transition" || block.block_type == "Transition") {
         CanonicalTransition transition;

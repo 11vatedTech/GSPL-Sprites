@@ -78,7 +78,9 @@ SpriteIrLowering::Result SpriteIrLowering::lower(CanonicalEntity const& entity) 
         for (auto const& t : entity.transitions) {
             for (auto& state : g.states) {
                 if (state.id == t.from_state) {
-                    state.transitions.push_back(lower_transition(t));
+                    auto lt = lower_transition(t);
+                    lt.priority = static_cast<std::uint32_t>(state.transitions.size());
+                    state.transitions.push_back(std::move(lt));
                     break;
                 }
             }
@@ -392,7 +394,9 @@ gspl::sprites::SpriteSeed SpriteSeedLowering::lower(CanonicalEntity const& entit
         for (auto const& t : entity.transitions) {
             for (auto& state : g.states) {
                 if (state.id == t.from_state) {
-                    state.transitions.push_back(lower_transition(t));
+                    auto lt = lower_transition(t);
+                    lt.priority = static_cast<std::uint32_t>(state.transitions.size());
+                    state.transitions.push_back(std::move(lt));
                     break;
                 }
             }

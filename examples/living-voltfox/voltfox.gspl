@@ -1,0 +1,469 @@
+// 11vatedTech — GSPL Voltfox — Original Living Sprite Entity
+// Canonical source-of-truth for the first compiler-generated living GSPL Sprite
+module original.voltfox;
+
+entity Voltfox {
+    // ── Identity & Governance ──
+    gene identity {
+        stable_id: "original.voltfox";
+        name: "Voltfox";
+    }
+
+    gene classification {
+        taxonomy: "fictional";
+        classification: "Elemental Canid";
+    }
+
+    gene appearance {
+        primary_color: "#242038";
+        accent_color: "#56F1FF";
+        storm_primary_color: "#1a1a2e";
+        storm_accent_color: "#F9F871";
+        emissive_color: "#56F1FF";
+        aura_color: "#9067C6";
+    }
+
+    gene rights {
+        classification: "ORIGINAL_USER_CREATION";
+        allow_export: true;
+    }
+
+    gene provenance {
+        hash: "";
+        source: "11vatedTech GSPL authoring pipeline";
+    }
+
+    gene optimization {
+        entropy_root: 42;
+    }
+
+    // ── Forms ──
+    form base {
+        resource_capacity: 100;
+        collision_scale: 1.0;
+        ability_envelope: 1.0;
+        max_health: 100;
+        transformations: "ascend";
+    }
+
+    form storm {
+        resource_capacity: 120;
+        collision_scale: 1.2;
+        ability_envelope: 1.5;
+        max_health: 100;
+        transformations: "descend";
+    }
+
+    // ── Transformations ──
+    transformation ascend base storm {
+        duration: 15;
+        resource_cost: 25;
+    }
+
+    transformation descend storm base {
+        duration: 10;
+        resource_cost: 0;
+    }
+
+    // ── Resource ──
+    resource energy energy {
+        min: 0;
+        max: 100;
+        initial: 100;
+    }
+
+    // ── Morphology: Base Form Parts ──
+    morphology {
+        part torso {
+            parent: "root";
+            x: 0.0; y: 0.0; z: 0.0;
+            size_x: 18.0; size_y: 14.0; size_z: 10.0;
+            color: "#242038";
+        }
+        part head {
+            parent: "torso";
+            x: 0.0; y: -14.0; z: 2.0;
+            size_x: 10.0; size_y: 9.0; size_z: 8.0;
+            color: "#242038";
+        }
+        part muzzle {
+            parent: "head";
+            x: 0.0; y: -5.0; z: 4.0;
+            size_x: 6.0; size_y: 4.0; size_z: 3.0;
+            color: "#56F1FF";
+        }
+        part left_ear {
+            parent: "head";
+            x: -5.0; y: -3.0; z: -2.0;
+            size_x: 4.0; size_y: 6.0; size_z: 2.0;
+            color: "#242038";
+            rotation_degrees: -15.0;
+        }
+        part right_ear {
+            parent: "head";
+            x: 5.0; y: -3.0; z: -2.0;
+            size_x: 4.0; size_y: 6.0; size_z: 2.0;
+            color: "#242038";
+            rotation_degrees: 15.0;
+        }
+        part left_eye {
+            parent: "head";
+            x: -3.0; y: -1.0; z: 5.0;
+            size_x: 2.0; size_y: 2.0; size_z: 1.0;
+            color: "#56F1FF";
+            emissive: true;
+        }
+        part right_eye {
+            parent: "head";
+            x: 3.0; y: -1.0; z: 5.0;
+            size_x: 2.0; size_y: 2.0; size_z: 1.0;
+            color: "#56F1FF";
+            emissive: true;
+        }
+        part left_front_leg {
+            parent: "torso";
+            x: -6.0; y: 8.0; z: 0.0;
+            size_x: 4.0; size_y: 10.0; size_z: 4.0;
+            color: "#242038";
+        }
+        part right_front_leg {
+            parent: "torso";
+            x: 6.0; y: 8.0; z: 0.0;
+            size_x: 4.0; size_y: 10.0; size_z: 4.0;
+            color: "#242038";
+        }
+        part left_hind_leg {
+            parent: "torso";
+            x: -6.0; y: -2.0; z: -2.0;
+            size_x: 5.0; size_y: 10.0; size_z: 5.0;
+            color: "#242038";
+        }
+        part right_hind_leg {
+            parent: "torso";
+            x: 6.0; y: -2.0; z: -2.0;
+            size_x: 5.0; size_y: 10.0; size_z: 5.0;
+            color: "#242038";
+        }
+        part tail {
+            parent: "torso";
+            x: 0.0; y: 10.0; z: -6.0;
+            size_x: 3.0; size_y: 8.0; size_z: 3.0;
+            color: "#56F1FF";
+            rotation_degrees: 30.0;
+        }
+        part aura {
+            parent: "root";
+            x: 0.0; y: 0.0; z: -10.0;
+            size_x: 30.0; size_y: 30.0; size_z: 1.0;
+            color: "#9067C6";
+            emissive: true;
+        }
+    }
+
+    // Note: Storm form overrides use the storm appearance genes
+    // (storm_primary_color, storm_accent_color) for visual differentiation.
+    // Per-part form_morphology_overrides will be wired via the Canonicalizer
+    // in a future iteration.
+
+    // ── Abilities ──
+    ability directional_lightning {
+        effect: "lightning.bolt";
+        cost: 15;
+        cooldown_ticks: 20;
+        active_ticks: 6;
+        origin_socket: "muzzle";
+        speed_mm_per_tick: 8.0;
+        collision_radius_mm: 4.0;
+        status_id: "electrified";
+        status_duration_ticks: 30;
+    }
+
+    ability storm_lightning {
+        effect: "lightning.storm";
+        cost: 30;
+        cooldown_ticks: 35;
+        active_ticks: 8;
+        origin_socket: "muzzle";
+        speed_mm_per_tick: 12.0;
+        collision_radius_mm: 6.0;
+        status_id: "electrified";
+        status_duration_ticks: 45;
+    }
+
+    // ── Skeletal Rig (Bones) ──
+    bone root {
+        x: 0.0; y: 0.0; z: 0.0;
+        scale_x: 1.0; scale_y: 1.0;
+        length_mm: 0.0;
+        min_rotation: 0.0; max_rotation: 0.0;
+    }
+    bone torso {
+        parent: "root";
+        x: 0.0; y: 0.0; z: 0.0;
+        scale_x: 1.0; scale_y: 1.0;
+        length_mm: 18.0;
+        min_rotation: -30.0; max_rotation: 30.0;
+    }
+    bone head {
+        parent: "torso";
+        x: 0.0; y: -14.0; z: 2.0;
+        scale_x: 1.0; scale_y: 1.0;
+        length_mm: 10.0;
+        min_rotation: -45.0; max_rotation: 45.0;
+    }
+    bone tail {
+        parent: "torso";
+        x: 0.0; y: 10.0; z: -6.0;
+        scale_x: 1.0; scale_y: 1.0;
+        length_mm: 12.0;
+        min_rotation: -60.0; max_rotation: 60.0;
+    }
+    bone leg_fl {
+        parent: "torso";
+        x: -6.0; y: 8.0; z: 0.0;
+        scale_x: 1.0; scale_y: 1.0;
+        length_mm: 10.0;
+        min_rotation: -30.0; max_rotation: 30.0;
+    }
+    bone leg_fr {
+        parent: "torso";
+        x: 6.0; y: 8.0; z: 0.0;
+        scale_x: 1.0; scale_y: 1.0;
+        length_mm: 10.0;
+        min_rotation: -30.0; max_rotation: 30.0;
+    }
+    bone leg_hl {
+        parent: "torso";
+        x: -6.0; y: -2.0; z: -2.0;
+        scale_x: 1.0; scale_y: 1.0;
+        length_mm: 10.0;
+        min_rotation: -30.0; max_rotation: 30.0;
+    }
+    bone leg_hr {
+        parent: "torso";
+        x: 6.0; y: -2.0; z: -2.0;
+        scale_x: 1.0; scale_y: 1.0;
+        length_mm: 10.0;
+        min_rotation: -30.0; max_rotation: 30.0;
+    }
+    bone aura_bone {
+        parent: "root";
+        x: 0.0; y: 0.0; z: -10.0;
+        scale_x: 1.0; scale_y: 1.0;
+        length_mm: 0.0;
+        min_rotation: 0.0; max_rotation: 0.0;
+    }
+
+    // ── Sockets ──
+    socket muzzle {
+        bone: "head";
+        x: 0.0; y: -5.0; z: 4.0;
+        scale_x: 1.0; scale_y: 1.0;
+    }
+    socket head_top {
+        bone: "head";
+        x: 0.0; y: -8.0; z: 0.0;
+        scale_x: 1.0; scale_y: 1.0;
+    }
+    socket aura_origin {
+        bone: "aura_bone";
+        x: 0.0; y: 0.0; z: 0.0;
+        scale_x: 1.0; scale_y: 1.0;
+    }
+
+    // ── Animation Clips ──
+    clip base_idle {
+        track torso {
+            tick: 0; transform: "rest";
+        }
+        track head {
+            tick: 0; transform: "rest";
+        }
+        track tail {
+            tick: 0; transform: "rest";
+            tick: 30; transform: "sway_left";
+            tick: 60; transform: "sway_right";
+        }
+    }
+    clip base_locomotion {
+        track torso {
+            tick: 0; transform: "bounce_up";
+            tick: 8; transform: "bounce_down";
+            tick: 16; transform: "bounce_up";
+            tick: 24; transform: "rest";
+        }
+        track leg_fl {
+            tick: 0; transform: "stride_forward";
+            tick: 12; transform: "stride_back";
+            tick: 24; transform: "rest";
+        }
+        track leg_fr {
+            tick: 0; transform: "stride_back";
+            tick: 12; transform: "stride_forward";
+            tick: 24; transform: "rest";
+        }
+        track tail {
+            tick: 0; transform: "trail";
+        }
+    }
+    clip base_attack {
+        track head {
+            tick: 0; transform: "anticipate";
+            tick: 6; transform: "release";
+            tick: 10; transform: "recover";
+            tick: 16; transform: "rest";
+        }
+        track torso {
+            tick: 0; transform: "lean_back";
+            tick: 6; transform: "lean_forward";
+            tick: 10; transform: "lean_back";
+            tick: 16; transform: "rest";
+        }
+    }
+    clip base_hit {
+        track torso {
+            tick: 0; transform: "recoil";
+            tick: 6; transform: "recover";
+            tick: 12; transform: "rest";
+        }
+        track head {
+            tick: 0; transform: "flinch";
+            tick: 6; transform: "rest";
+        }
+    }
+    clip transform_ascend {
+        track torso {
+            tick: 0; transform: "rest";
+            tick: 20; transform: "elevate";
+            tick: 40; transform: "storm_form";
+        }
+        track head {
+            tick: 0; transform: "rest";
+            tick: 20; transform: "spark";
+            tick: 40; transform: "storm_form";
+        }
+        track tail {
+            tick: 0; transform: "rest";
+            tick: 20; transform: "electrify";
+            tick: 40; transform: "storm_form";
+        }
+        track aura_bone {
+            tick: 0; transform: "rest";
+            tick: 10; transform: "grow";
+            tick: 40; transform: "storm_form";
+        }
+    }
+    clip storm_idle {
+        track torso {
+            tick: 0; transform: "rest";
+        }
+        track head {
+            tick: 0; transform: "rest";
+        }
+        track tail {
+            tick: 0; transform: "rest";
+            tick: 15; transform: "spark_left";
+            tick: 30; transform: "spark_right";
+            tick: 45; transform: "rest";
+        }
+        track aura_bone {
+            tick: 0; transform: "pulse";
+            tick: 20; transform: "rest";
+            tick: 40; transform: "pulse";
+        }
+    }
+    clip storm_attack {
+        track head {
+            tick: 0; transform: "charge";
+            tick: 8; transform: "release";
+            tick: 14; transform: "recover";
+            tick: 20; transform: "rest";
+        }
+        track torso {
+            tick: 0; transform: "brace";
+            tick: 8; transform: "thrust";
+            tick: 14; transform: "brace";
+            tick: 20; transform: "rest";
+        }
+        track tail {
+            tick: 0; transform: "charge_tail";
+            tick: 8; transform: "discharge";
+            tick: 14; transform: "rest";
+        }
+        track aura_bone {
+            tick: 0; transform: "flare";
+            tick: 8; transform: "burst";
+            tick: 14; transform: "fade";
+            tick: 20; transform: "rest";
+        }
+    }
+
+    // ── Animation States ──
+    state idle           { clip: "base_idle"; }
+    state locomotion     { clip: "base_locomotion"; }
+    state attack         { clip: "base_attack"; }
+    state hit            { clip: "base_hit"; }
+    state transformation { clip: "transform_ascend"; }
+    state storm_idle     { clip: "storm_idle"; }
+    state storm_attack   { clip: "storm_attack"; }
+
+    // ── State Transitions ──
+    transition idle          { to: "locomotion";     ability: "directional_lightning"; threshold: 0; }
+    transition locomotion    { to: "idle";           ability: "directional_lightning"; threshold: 0; }
+    transition idle          { to: "attack";         ability: "directional_lightning"; threshold: 1; }
+    transition attack        { to: "idle";           ability: "directional_lightning"; threshold: 0; }
+    transition attack        { to: "hit";            ability: "directional_lightning"; threshold: 0; }
+    transition hit           { to: "idle";           ability: "directional_lightning"; threshold: 0; }
+    transition idle          { to: "transformation"; ability: "directional_lightning"; threshold: 1; }
+    transition transformation { to: "storm_idle";    ability: "directional_lightning"; threshold: 0; }
+    transition storm_idle    { to: "storm_attack";   ability: "storm_lightning"; threshold: 1; }
+    transition storm_attack  { to: "storm_idle";     ability: "storm_lightning"; threshold: 0; }
+
+    // ── Collision Shapes ──
+    collision body_hurtbox {
+        type: "CIRCLE";
+        socket: "torso";
+        radius_mm: 12.0;
+        offset_x: 0.0; offset_y: 0.0;
+    }
+    collision head_hurtbox {
+        type: "CIRCLE";
+        socket: "head_top";
+        radius_mm: 6.0;
+        offset_x: 0.0; offset_y: 0.0;
+    }
+    collision lightning_hitbox {
+        type: "CIRCLE";
+        socket: "muzzle";
+        radius_mm: 4.0;
+        offset_x: 0.0; offset_y: -8.0;
+    }
+    collision storm_hitbox {
+        type: "CIRCLE";
+        socket: "muzzle";
+        radius_mm: 8.0;
+        offset_x: 0.0; offset_y: -12.0;
+    }
+
+    // ── Collision Windows ──
+    window directional_lightning {
+        shape: "lightning_hitbox";
+        start_tick: 2;
+        duration_ticks: 4;
+        active: true;
+    }
+    window storm_lightning {
+        shape: "storm_hitbox";
+        start_tick: 2;
+        duration_ticks: 6;
+        active: true;
+    }
+
+    // ── Runtime Traits ──
+    runtime {
+        aggression: 40;
+        curiosity: 70;
+        energy: 80;
+        loyalty: 90;
+    }
+}
