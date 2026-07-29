@@ -249,12 +249,63 @@ std::string IrSerializer::serialize(SpriteIr const& ir) {
     return ss.str();
 }
 
-// ── Node kind validation ───────────────────────────────────
+// ── Enum and kind validation ──────────────────────────────
 
 namespace {
+// Compile-time coverage: update these when enums change
+static_assert(static_cast<std::uint32_t>(GeneKind::provenance) == 34,
+              "GeneKind::provenance must be the terminal enumerator");
+static_assert(static_cast<std::uint32_t>(GeneValueTag::string_list_val) == 5,
+              "GeneValueTag::string_list_val must be the terminal enumerator");
+static_assert(static_cast<std::uint32_t>(IrNodeKind::target_requirement) == 16,
+              "IrNodeKind::target_requirement must be the terminal enumerator");
+
+bool is_valid_gene_kind(std::int64_t raw) noexcept {
+    return raw >= 0 &&
+           raw <= static_cast<std::int64_t>(GeneKind::provenance);
+}
+
+bool is_valid_gene_value_tag(std::int64_t raw) noexcept {
+    return raw >= 0 &&
+           raw <= static_cast<std::int64_t>(GeneValueTag::string_list_val);
+}
+
 bool is_valid_ir_node_kind(std::int64_t raw) noexcept {
     return raw >= 0 &&
            raw <= static_cast<std::int64_t>(IrNodeKind::target_requirement);
+}
+
+// Collection-specific kind rules
+bool is_allowed_in_representations(IrNodeKind kind) noexcept {
+    return kind == IrNodeKind::representation_plan;
+}
+
+bool is_allowed_in_runtime_plans(IrNodeKind kind) noexcept {
+    return kind == IrNodeKind::runtime_plan;
+}
+
+bool is_allowed_in_package_plans(IrNodeKind kind) noexcept {
+    return kind == IrNodeKind::package_plan;
+}
+
+bool is_allowed_as_entity_child(IrNodeKind kind) noexcept {
+    switch (kind) {
+    case IrNodeKind::gene:
+    case IrNodeKind::structure:
+    case IrNodeKind::form:
+    case IrNodeKind::transformation:
+    case IrNodeKind::material:
+    case IrNodeKind::animation:
+    case IrNodeKind::behavior:
+    case IrNodeKind::ability:
+    case IrNodeKind::projectile:
+    case IrNodeKind::effect:
+    case IrNodeKind::collision:
+    case IrNodeKind::resource:
+        return true;
+    default:
+        return false;
+    }
 }
 } // namespace
 
@@ -477,6 +528,10 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json) {
                     while (r.has_more() && !r.has_error()) {
                         auto child = std::make_unique<IrNode>();
                         if (!parse_ir_node(*child, "entity.children[]")) return result;
+                        if (!is_allowed_as_entity_child(child->kind)) {
+                            fail(("deserialize: node kind " + std::to_string(static_cast<std::uint32_t>(child->kind)) + " not allowed as entity child").c_str());
+                            return result;
+                        }
                         ir.entity->children.push_back(std::move(child));
                         r.record_array_element("entity.children");
                         if (!r.next_array_element("entity.children")) break;
@@ -508,6 +563,9 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json) {
                             if (gk == "kind") {
                                 auto kv_opt = read_i64("gene.kind");
                                 if (!kv_opt) return result;
+                                if (!is_valid_gene_kind(*kv_opt)) {
+                                    fail(("deserialize: unknown gene kind: " + std::to_string(*kv_opt)).c_str()); return result;
+                                }
                                 auto kind_val = static_cast<GeneKind>(*kv_opt);
                                 auto const* desc = registry.lookup(kind_val);
                                 if (desc) gi.descriptor = *desc;
@@ -537,47 +595,51 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json) {
                                     if (!vk_opt) return result;
                                     require(':', ("gene.values['" + *vk_opt + "']").c_str());
                                     if (r.has_error()) return result;
-                                    if (r.consume_if('{')) {
-                                        r.enter_object();
-                                        bool saw_tag = false, saw_value = false;
-                                        std::uint32_t tag_val = 0;
-                                        std::string raw_val;
-                                        bool in_tagged_value = true;
-                                        while (r.has_more() && !r.has_error() && in_tagged_value) {
-                                            auto tk_opt = read_str("gene.value tagged key");
-                                            if (!tk_opt) return result;
-                                            auto& tk = *tk_opt;
-                                            require(':', ("gene.value.'" + tk + "'").c_str());
-                                            if (r.has_error()) return result;
-                                            if (tk == "t") {
-                                                auto tv_opt = read_i64("gene.value.t");
-                                                if (!tv_opt) return result;
-                                                tag_val = static_cast<std::uint32_t>(*tv_opt);
-                                                saw_tag = true;
-                                            } else if (tk == "v") {
-                                                raw_val = r.read_typed_value();
-                                                saw_value = true;
-                                            } else {
-                                                r.skip_value();
-                                            }
-                                            in_tagged_value = r.next_object_member("gene.value");
+                                    // Gene values must be typed {t, v} wrappers in current schema
+                                    if (!r.begin_object("gene.value")) {
+                                        result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR,
+                                            (std::string("gene value '") + *vk_opt + "' must be a typed {t, v} object — " + r.error_message()).c_str(), {});
+                                        return result;
+                                    }
+                                    bool saw_tag = false, saw_value = false;
+                                    std::int64_t tv_opt_val = 0;
+                                    std::string raw_val;
+                                    while (r.has_more() && !r.has_error()) {
+                                        auto tk_opt = read_str("gene.value tagged key");
+                                        if (!tk_opt) return result;
+                                        auto& tk = *tk_opt;
+                                        require(':', ("gene.value.'" + tk + "'").c_str());
+                                        if (r.has_error()) return result;
+                                        if (tk == "t") {
+                                            auto tv_opt = read_i64("gene.value.t");
+                                            if (!tv_opt) return result;
+                                            tv_opt_val = *tv_opt;
+                                            saw_tag = true;
+                                        } else if (tk == "v") {
+                                            raw_val = r.read_typed_value();
+                                            saw_value = true;
+                                        } else {
+                                            r.skip_value();
                                         }
-                                        r.leave_object();
-                                        if (!r.require('}', "gene.value")) {
-                                            result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR, r.error_message(), {});
+                                        if (!r.next_object_member("gene.value")) break;
+                                    }
+                                    if (!r.end_object("gene.value")) {
+                                        result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR, r.error_message(), {});
+                                        return result;
+                                    }
+                                    if (!saw_tag) { fail("deserialize: gene value missing required 't' field"); return result; }
+                                    if (!saw_value) { fail("deserialize: gene value missing required 'v' field"); return result; }
+                                    if (!is_valid_gene_value_tag(tv_opt_val)) {
+                                        fail(("deserialize: unknown gene value tag: " + std::to_string(tv_opt_val)).c_str()); return result;
+                                    }
+                                    auto tag = static_cast<GeneValueTag>(tv_opt_val);
+                                    if (!raw_val.empty()) {
+                                        auto gv_result = json_to_gene_value_result(raw_val, tag);
+                                        if (!gv_result.ok()) {
+                                            result.diagnostics = gv_result.diagnostics;
                                             return result;
                                         }
-                                        if (!saw_tag) { fail("deserialize: gene value missing required 't' field"); return result; }
-                                        if (!saw_value) { fail("deserialize: gene value missing required 'v' field"); return result; }
-                                        if (!raw_val.empty()) {
-                                            auto tag = static_cast<GeneValueTag>(tag_val);
-                                            auto gv_result = json_to_gene_value_result(raw_val, tag);
-                                            if (!gv_result.ok()) {
-                                                result.diagnostics = gv_result.diagnostics;
-                                                return result;
-                                            }
-                                            gi.values[*vk_opt] = *gv_result.value;
-                                        }
+                                        gi.values[*vk_opt] = *gv_result.value;
                                     }
                                     r.record_object_member("gene.values");
                                     if (!r.next_object_member("gene.values")) break;
@@ -615,14 +677,17 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json) {
                                              r.error_message(), {});
                 return result;
             }
-        } else if (key == "representations") {
-            if (!r.begin_array("representations")) {
+        } else if (key == "representations") {                    if (!r.begin_array("representations")) {
                 result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR, r.error_message(), {});
                 return result;
             }
             while (r.has_more() && !r.has_error()) {
                 auto rep = std::make_unique<IrNode>();
                 if (!parse_ir_node(*rep, "representations[]")) return result;
+                if (!is_allowed_in_representations(rep->kind)) {
+                    fail(("deserialize: node kind " + std::to_string(static_cast<std::uint32_t>(rep->kind)) + " not allowed in representations (expected representation_plan)").c_str());
+                    return result;
+                }
                 ir.representations.push_back(std::move(rep));
                 r.record_array_element("representations");
                 if (!r.next_array_element("representations")) break;
@@ -631,14 +696,17 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json) {
                 result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR, r.error_message(), {});
                 return result;
             }
-        } else if (key == "runtime_plans") {
-            if (!r.begin_array("runtime_plans")) {
+        } else if (key == "runtime_plans") {                    if (!r.begin_array("runtime_plans")) {
                 result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR, r.error_message(), {});
                 return result;
             }
             while (r.has_more() && !r.has_error()) {
                 auto plan = std::make_unique<IrNode>();
                 if (!parse_ir_node(*plan, "runtime_plans[]")) return result;
+                if (!is_allowed_in_runtime_plans(plan->kind)) {
+                    fail(("deserialize: node kind " + std::to_string(static_cast<std::uint32_t>(plan->kind)) + " not allowed in runtime_plans (expected runtime_plan)").c_str());
+                    return result;
+                }
                 ir.runtime_plans.push_back(std::move(plan));
                 r.record_array_element("runtime_plans");
                 if (!r.next_array_element("runtime_plans")) break;
@@ -647,14 +715,17 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json) {
                 result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR, r.error_message(), {});
                 return result;
             }
-        } else if (key == "package_plans") {
-            if (!r.begin_array("package_plans")) {
+        } else if (key == "package_plans") {                    if (!r.begin_array("package_plans")) {
                 result.diagnostics.add_error(DiagnosticCode::GSPL_IR_VALIDATION_ERROR, r.error_message(), {});
                 return result;
             }
             while (r.has_more() && !r.has_error()) {
                 auto plan = std::make_unique<IrNode>();
                 if (!parse_ir_node(*plan, "package_plans[]")) return result;
+                if (!is_allowed_in_package_plans(plan->kind)) {
+                    fail(("deserialize: node kind " + std::to_string(static_cast<std::uint32_t>(plan->kind)) + " not allowed in package_plans (expected package_plan)").c_str());
+                    return result;
+                }
                 ir.package_plans.push_back(std::move(plan));
                 r.record_array_element("package_plans");
                 if (!r.next_array_element("package_plans")) break;
