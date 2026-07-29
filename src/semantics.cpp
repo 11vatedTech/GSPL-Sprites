@@ -431,38 +431,18 @@ static JsonReadResult<double> decode_double_field(
     return result;
 }
 
-// ── Thin adapters (old API on top of checked result helpers) ───
+// ── Reader failure helper ───────────────────────────────
 
-static bool decode_string_field(BoundedJsonReader& r, std::string& out,
-                                std::string const& path) {
-    auto res = decode_string_field(r, path);
-    if (!res.ok() || !res.value) return false;
-    out = std::move(*res.value);
-    return true;
-}
-
-static bool decode_bool_field(BoundedJsonReader& r, bool& out,
-                              std::string const& path = "") {
-    auto res = decode_bool_field(r, path);
-    if (!res.ok() || !res.value) return false;
-    out = *res.value;
-    return true;
-}
-
-static bool decode_uint32_field(BoundedJsonReader& r, std::uint32_t& out,
-                                std::string const& path = "") {
-    auto res = decode_uint32_field(r, path);
-    if (!res.ok() || !res.value) return false;
-    out = *res.value;
-    return true;
-}
-
-static bool decode_double_field(BoundedJsonReader& r, double& out,
-                                std::string const& path = "") {
-    auto res = decode_double_field(r, path);
-    if (!res.ok() || !res.value) return false;
-    out = *res.value;
-    return true;
+static void reader_failure(BoundedJsonReader const& r, std::string const& path,
+                           DiagnosticResult& diags, DiagnosticCode code) {
+    auto pos = r.source_position();
+    auto msg = r.error_message();
+    if (msg.empty()) msg = "parser error";
+    diags.add(Diagnostic{code, DiagnosticSeverity::error,
+        path + ": " + msg,
+        {pos.byte_offset,
+         static_cast<std::uint32_t>(pos.line),
+         static_cast<std::uint32_t>(pos.column), 0, 0}, {}, {}});
 }
 
 // ── Object entry reading helper ─────────────────────────
@@ -476,601 +456,479 @@ static bool read_object_entry(BoundedJsonReader& r, std::string& key,
     return !r.has_error();
 }
 
+// ── Generic object decoder ──────────────────────────────
+
+// Structural grammar for governed JSON objects:
+// - duplicate field detection via seen_keys
+// - trailing comma rejection
+// - required field enforcement
+// - T candidate pattern (value assigned only after success)
+// - error propagation from handler
+
+template <typename T, typename Handler>
+static JsonReadResult<T> decode_object(BoundedJsonReader& r,
+                                       std::string const& path,
+                                       std::set<std::string, std::less<>> required,
+                                       Handler&& handler) {
+    JsonReadResult<T> res;
+    T candidate;
+    std::set<std::string, std::less<>> seen;
+
+    r.require('{', path + ": expected '{'");
+    if (r.has_error()) { reader_failure(r, path, res.diagnostics, DiagnosticCode::GSPL_TYPE_MISMATCH); return res; }
+
+    while (r.has_more() && !r.has_error()) {
+        r.skip_ws();
+        if (r.position() < r.source().size() && r.source()[r.position()] == '}') break;
+
+        std::string key;
+        if (!read_object_entry(r, key, path)) break;
+
+        // Duplicate detection
+        if (!seen.insert(key).second) {
+            res.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
+                path + ".\"" + key + "\": duplicate field", {});
+            return res;
+        }
+
+        auto fp = json_path(path, key);
+        handler(key, fp, candidate, res.diagnostics, r);
+        if (!res.diagnostics.ok()) return res;
+
+        // After field value: expect ',' or '}'
+        r.skip_ws();
+        if (r.position() < r.source().size() && r.source()[r.position()] == '}') break;
+        r.require(',', fp + ": expected ',' or '}' after field");
+        if (r.has_error()) { reader_failure(r, fp, res.diagnostics, DiagnosticCode::GSPL_TYPE_MISMATCH); return res; }
+    }
+
+    r.require('}', path + ": expected '}'");
+    if (r.has_error()) { reader_failure(r, path, res.diagnostics, DiagnosticCode::GSPL_TYPE_MISMATCH); return res; }
+
+    // Required field check
+    for (auto const& req : required) {
+        if (!seen.contains(req)) {
+            res.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
+                path + ": missing required field '" + req + "'", {});
+            return res;
+        }
+    }
+
+    res.value = std::move(candidate);
+    return res;
+}
+
 // ── Type codecs ──────────────────────────────────────────
+
+// Helper: decode a field that must be a string, abort on failure
+#define DECODE_STRING_FIELD(r, key, fp, candidate, member, diags) \
+    do { \
+        if (key == #member) { \
+            auto _v = decode_string_field(r, fp); \
+            if (!_v.ok()) { diags.merge(_v.diagnostics); return; } \
+            candidate.member = std::move(*_v.value); \
+            return; \
+        } \
+    } while(0)
+
+#define DECODE_UINT32_FIELD(r, key, fp, candidate, member, diags) \
+    do { \
+        if (key == #member) { \
+            auto _v = decode_uint32_field(r, fp); \
+            if (!_v.ok()) { diags.merge(_v.diagnostics); return; } \
+            candidate.member = *_v.value; \
+            return; \
+        } \
+    } while(0)
+
+#define DECODE_DOUBLE_FIELD(r, key, fp, candidate, member, diags) \
+    do { \
+        if (key == #member) { \
+            auto _v = decode_double_field(r, fp); \
+            if (!_v.ok()) { diags.merge(_v.diagnostics); return; } \
+            candidate.member = *_v.value; \
+            return; \
+        } \
+    } while(0)
+
+#define DECODE_BOOL_FIELD(r, key, fp, candidate, member, diags) \
+    do { \
+        if (key == #member) { \
+            auto _v = decode_bool_field(r, fp); \
+            if (!_v.ok()) { diags.merge(_v.diagnostics); return; } \
+            candidate.member = *_v.value; \
+            return; \
+        } \
+    } while(0)
 
 static JsonReadResult<CanonicalPart> decode_canonical_part(
     BoundedJsonReader& r, std::string const& path) {
-    JsonReadResult<CanonicalPart> res;
-    res.value.emplace();
-    r.require('{', path + ": expected '{'");
-    if (r.has_error()) return res;
-
-    while (r.has_more() && !r.has_error()) {
-        std::string key;
-        if (!read_object_entry(r, key, path)) break;
-        auto fp = json_path(path, key);
-
-        if (key == "parent")      decode_string_field(r, res.value->parent, fp);
-        else if (key == "x")      decode_double_field(r, res.value->x);
-        else if (key == "y")      decode_double_field(r, res.value->y);
-        else if (key == "z")      decode_double_field(r, res.value->z);
-        else if (key == "size_x") decode_double_field(r, res.value->size_x);
-        else if (key == "size_y") decode_double_field(r, res.value->size_y);
-        else if (key == "size_z") decode_double_field(r, res.value->size_z);
-        else if (key == "color")  decode_string_field(r, res.value->color, fp);
-        else if (key == "rotation_degrees") decode_double_field(r, res.value->rotation_degrees);
-        else if (key == "emissive") decode_bool_field(r, res.value->emissive);
-        else if (key == "electrical_marking") decode_bool_field(r, res.value->electrical_marking);
-        else r.skip_value();
-
-        if (!r.consume_if(',')) break;
-    }
-    r.require('}', path + ": expected '}'");
-    return res;
+    return decode_object<CanonicalPart>(r, path, {},
+        [](std::string const& key, std::string const& fp,
+           CanonicalPart& c, DiagnosticResult& diags, BoundedJsonReader& rr) {
+            DECODE_STRING_FIELD(rr, key, fp, c, parent, diags);
+            DECODE_DOUBLE_FIELD(rr, key, fp, c, x, diags);
+            DECODE_DOUBLE_FIELD(rr, key, fp, c, y, diags);
+            DECODE_DOUBLE_FIELD(rr, key, fp, c, z, diags);
+            DECODE_DOUBLE_FIELD(rr, key, fp, c, size_x, diags);
+            DECODE_DOUBLE_FIELD(rr, key, fp, c, size_y, diags);
+            DECODE_DOUBLE_FIELD(rr, key, fp, c, size_z, diags);
+            DECODE_STRING_FIELD(rr, key, fp, c, color, diags);
+            DECODE_DOUBLE_FIELD(rr, key, fp, c, rotation_degrees, diags);
+            DECODE_BOOL_FIELD(rr, key, fp, c, emissive, diags);
+            DECODE_BOOL_FIELD(rr, key, fp, c, electrical_marking, diags);
+            rr.skip_value();
+        });
 }
 
 static JsonReadResult<CanonicalForm> decode_canonical_form(
     BoundedJsonReader& r, std::string const& path) {
-    JsonReadResult<CanonicalForm> res;
-    res.value.emplace();
-    r.require('{', path + ": expected '{'");
-    if (r.has_error()) return res;
-
-    while (r.has_more() && !r.has_error()) {
-        std::string key;
-        if (!read_object_entry(r, key, path)) break;
-        auto fp = json_path(path, key);
-
-        if (key == "id") decode_string_field(r, res.value->id, fp);
-        else if (key == "resource_capacity") decode_uint32_field(r, res.value->resource_capacity);
-        else if (key == "collision_scale") decode_double_field(r, res.value->collision_scale);
-        else if (key == "ability_envelope") decode_double_field(r, res.value->ability_envelope);
-        else if (key == "max_health") decode_uint32_field(r, res.value->max_health);
-        else if (key == "transformation_ids") {
-            auto arr = decode_string_array(r, fp);
-            if (arr.ok() && arr.value) res.value->transformation_ids = std::move(*arr.value);
-            else { res.diagnostics.merge(arr.diagnostics); return res; }
-        } else r.skip_value();
-
-        if (!r.consume_if(',')) break;
-    }
-    r.require('}', path + ": expected '}'");
-    return res;
+    return decode_object<CanonicalForm>(r, path, {"id"},
+        [](std::string const& key, std::string const& fp,
+           CanonicalForm& c, DiagnosticResult& diags, BoundedJsonReader& rr) {
+            DECODE_STRING_FIELD(rr, key, fp, c, id, diags);
+            DECODE_UINT32_FIELD(rr, key, fp, c, resource_capacity, diags);
+            DECODE_DOUBLE_FIELD(rr, key, fp, c, collision_scale, diags);
+            DECODE_DOUBLE_FIELD(rr, key, fp, c, ability_envelope, diags);
+            DECODE_UINT32_FIELD(rr, key, fp, c, max_health, diags);
+            if (key == "transformation_ids") {
+                auto arr = decode_string_array(rr, fp);
+                if (!arr.ok()) { diags.merge(arr.diagnostics); return; }
+                if (arr.value) c.transformation_ids = std::move(*arr.value);
+                return;
+            }
+            rr.skip_value();
+        });
 }
 
 static JsonReadResult<CanonicalTransformation> decode_transformation(
     BoundedJsonReader& r, std::string const& path) {
-    JsonReadResult<CanonicalTransformation> res;
-    res.value.emplace();
-    r.require('{', path + ": expected '{'");
-    if (r.has_error()) return res;
-
-    while (r.has_more() && !r.has_error()) {
-        std::string key;
-        if (!read_object_entry(r, key, path)) break;
-        auto fp = json_path(path, key);
-
-        if (key == "id")               decode_string_field(r, res.value->id, fp);
-        else if (key == "from_form")   decode_string_field(r, res.value->from_form, fp);
-        else if (key == "to_form")     decode_string_field(r, res.value->to_form, fp);
-        else if (key == "trigger_condition") decode_string_field(r, res.value->trigger_condition, fp);
-        else if (key == "duration_ticks") decode_uint32_field(r, res.value->duration_ticks);
-        else if (key == "resource_cost") decode_uint32_field(r, res.value->resource_cost);
-        else r.skip_value();
-
-        if (!r.consume_if(',')) break;
-    }
-    r.require('}', path + ": expected '}'");
-    return res;
+    return decode_object<CanonicalTransformation>(r, path, {"id", "from_form", "to_form"},
+        [](std::string const& key, std::string const& fp,
+           CanonicalTransformation& c, DiagnosticResult& diags, BoundedJsonReader& rr) {
+            DECODE_STRING_FIELD(rr, key, fp, c, id, diags);
+            DECODE_STRING_FIELD(rr, key, fp, c, from_form, diags);
+            DECODE_STRING_FIELD(rr, key, fp, c, to_form, diags);
+            DECODE_STRING_FIELD(rr, key, fp, c, trigger_condition, diags);
+            DECODE_UINT32_FIELD(rr, key, fp, c, duration_ticks, diags);
+            DECODE_UINT32_FIELD(rr, key, fp, c, resource_cost, diags);
+            rr.skip_value();
+        });
 }
 
 static JsonReadResult<CanonicalAbility> decode_ability(
     BoundedJsonReader& r, std::string const& path) {
-    JsonReadResult<CanonicalAbility> res;
-    res.value.emplace();
-    r.require('{', path + ": expected '{'");
-    if (r.has_error()) return res;
-
-    while (r.has_more() && !r.has_error()) {
-        std::string key;
-        if (!read_object_entry(r, key, path)) break;
-        auto fp = json_path(path, key);
-
-        if (key == "id")             decode_string_field(r, res.value->id, fp);
-        else if (key == "effect")    decode_string_field(r, res.value->effect, fp);
-        else if (key == "cost")      decode_uint32_field(r, res.value->cost);
-        else if (key == "cooldown_ticks") decode_uint32_field(r, res.value->cooldown_ticks);
-        else if (key == "active_ticks") decode_uint32_field(r, res.value->active_ticks);
-        else if (key == "origin_socket") decode_string_field(r, res.value->origin_socket, fp);
-        else if (key == "speed_mm_per_tick") decode_double_field(r, res.value->speed_mm_per_tick);
-        else if (key == "collision_radius_mm") decode_double_field(r, res.value->collision_radius_mm);
-        else if (key == "status_id") decode_string_field(r, res.value->status_id, fp);
-        else if (key == "status_duration_ticks") decode_uint32_field(r, res.value->status_duration_ticks);
-        else r.skip_value();
-
-        if (!r.consume_if(',')) break;
-    }
-    r.require('}', path + ": expected '}'");
-    return res;
+    return decode_object<CanonicalAbility>(r, path, {"id"},
+        [](std::string const& key, std::string const& fp,
+           CanonicalAbility& c, DiagnosticResult& diags, BoundedJsonReader& rr) {
+            DECODE_STRING_FIELD(rr, key, fp, c, id, diags);
+            DECODE_STRING_FIELD(rr, key, fp, c, effect, diags);
+            DECODE_UINT32_FIELD(rr, key, fp, c, cost, diags);
+            DECODE_UINT32_FIELD(rr, key, fp, c, cooldown_ticks, diags);
+            DECODE_UINT32_FIELD(rr, key, fp, c, active_ticks, diags);
+            DECODE_STRING_FIELD(rr, key, fp, c, origin_socket, diags);
+            DECODE_DOUBLE_FIELD(rr, key, fp, c, speed_mm_per_tick, diags);
+            DECODE_DOUBLE_FIELD(rr, key, fp, c, collision_radius_mm, diags);
+            DECODE_STRING_FIELD(rr, key, fp, c, status_id, diags);
+            DECODE_UINT32_FIELD(rr, key, fp, c, status_duration_ticks, diags);
+            rr.skip_value();
+        });
 }
 
 static JsonReadResult<CanonicalSkeletalBone> decode_bone(
     BoundedJsonReader& r, std::string const& path) {
-    JsonReadResult<CanonicalSkeletalBone> res;
-    res.value.emplace();
-    r.require('{', path + ": expected '{'");
-    if (r.has_error()) return res;
-
-    while (r.has_more() && !r.has_error()) {
-        std::string key;
-        if (!read_object_entry(r, key, path)) break;
-        auto fp = json_path(path, key);
-
-        if (key == "id")       decode_string_field(r, res.value->id, fp);
-        else if (key == "parent") decode_string_field(r, res.value->parent, fp);
-        else if (key == "x")    decode_double_field(r, res.value->x);
-        else if (key == "y")    decode_double_field(r, res.value->y);
-        else if (key == "z")    decode_double_field(r, res.value->z);
-        else if (key == "scale_x") decode_double_field(r, res.value->scale_x);
-        else if (key == "scale_y") decode_double_field(r, res.value->scale_y);
-        else if (key == "length_mm") decode_double_field(r, res.value->length_mm);
-        else if (key == "min_rotation") decode_double_field(r, res.value->min_rotation);
-        else if (key == "max_rotation") decode_double_field(r, res.value->max_rotation);
-        else r.skip_value();
-
-        if (!r.consume_if(',')) break;
-    }
-    r.require('}', path + ": expected '}'");
-    return res;
+    return decode_object<CanonicalSkeletalBone>(r, path, {"id"},
+        [](std::string const& key, std::string const& fp,
+           CanonicalSkeletalBone& c, DiagnosticResult& diags, BoundedJsonReader& rr) {
+            DECODE_STRING_FIELD(rr, key, fp, c, id, diags);
+            DECODE_STRING_FIELD(rr, key, fp, c, parent, diags);
+            DECODE_DOUBLE_FIELD(rr, key, fp, c, x, diags);
+            DECODE_DOUBLE_FIELD(rr, key, fp, c, y, diags);
+            DECODE_DOUBLE_FIELD(rr, key, fp, c, z, diags);
+            DECODE_DOUBLE_FIELD(rr, key, fp, c, scale_x, diags);
+            DECODE_DOUBLE_FIELD(rr, key, fp, c, scale_y, diags);
+            DECODE_DOUBLE_FIELD(rr, key, fp, c, length_mm, diags);
+            DECODE_DOUBLE_FIELD(rr, key, fp, c, min_rotation, diags);
+            DECODE_DOUBLE_FIELD(rr, key, fp, c, max_rotation, diags);
+            rr.skip_value();
+        });
 }
 
 static JsonReadResult<CanonicalSocket> decode_socket(
     BoundedJsonReader& r, std::string const& path) {
-    JsonReadResult<CanonicalSocket> res;
-    res.value.emplace();
-    r.require('{', path + ": expected '{'");
-    if (r.has_error()) return res;
-
-    while (r.has_more() && !r.has_error()) {
-        std::string key;
-        if (!read_object_entry(r, key, path)) break;
-        auto fp = json_path(path, key);
-
-        if (key == "id")   decode_string_field(r, res.value->id, fp);
-        else if (key == "bone") decode_string_field(r, res.value->bone, fp);
-        else if (key == "x") decode_double_field(r, res.value->x);
-        else if (key == "y") decode_double_field(r, res.value->y);
-        else if (key == "z") decode_double_field(r, res.value->z);
-        else if (key == "scale_x") decode_double_field(r, res.value->scale_x);
-        else if (key == "scale_y") decode_double_field(r, res.value->scale_y);
-        else r.skip_value();
-
-        if (!r.consume_if(',')) break;
-    }
-    r.require('}', path + ": expected '}'");
-    return res;
+    return decode_object<CanonicalSocket>(r, path, {"id", "bone"},
+        [](std::string const& key, std::string const& fp,
+           CanonicalSocket& c, DiagnosticResult& diags, BoundedJsonReader& rr) {
+            DECODE_STRING_FIELD(rr, key, fp, c, id, diags);
+            DECODE_STRING_FIELD(rr, key, fp, c, bone, diags);
+            DECODE_DOUBLE_FIELD(rr, key, fp, c, x, diags);
+            DECODE_DOUBLE_FIELD(rr, key, fp, c, y, diags);
+            DECODE_DOUBLE_FIELD(rr, key, fp, c, z, diags);
+            DECODE_DOUBLE_FIELD(rr, key, fp, c, scale_x, diags);
+            DECODE_DOUBLE_FIELD(rr, key, fp, c, scale_y, diags);
+            rr.skip_value();
+        });
 }
 
 static JsonReadResult<CanonicalAnimationClip> decode_animation_clip(
     BoundedJsonReader& r, std::string const& path) {
-    JsonReadResult<CanonicalAnimationClip> res;
-    res.value.emplace();
-    r.require('{', path + ": expected '{'");
-    if (r.has_error()) return res;
-
-    while (r.has_more() && !r.has_error()) {
-        std::string key;
-        if (!read_object_entry(r, key, path)) break;
-        auto fp = json_path(path, key);
-
-        if (key == "name") decode_string_field(r, res.value->name, fp);
-        else if (key == "loop") decode_bool_field(r, res.value->loop);
-        else if (key == "tracks") {
-            auto tracks = decode_array<CanonicalAnimationClip::Track>(r, fp,
-                [](BoundedJsonReader& rr, std::string const& tp) {
-                    JsonReadResult<CanonicalAnimationClip::Track> tr;
-                    tr.value.emplace();
-                    rr.require('{', tp + ": expected '{'");
-                    if (rr.has_error()) return tr;
-                    while (rr.has_more() && !rr.has_error()) {
-                        std::string tk;
-                        if (!read_object_entry(rr, tk, tp)) break;
-                        auto tfp = json_path(tp, tk);
-                        if (tk == "bone") decode_string_field(rr, tr.value->bone, tfp);
-                        else if (tk == "keys") {
-                            auto keys = decode_array<std::pair<std::uint32_t, std::string>>(rr, tfp,
-                                [](BoundedJsonReader& kr, std::string const& kp) {
-                                    JsonReadResult<std::pair<std::uint32_t, std::string>> kv;
-                                    kv.value.emplace();
-                                    kr.require('{', kp + ": expected '{'");
-                                    if (kr.has_error()) return kv;
-                                    while (kr.has_more() && !kr.has_error()) {
-                                        std::string kk;
-                                        if (!read_object_entry(kr, kk, kp)) break;
-                                        auto kfp = json_path(kp, kk);
-                                        if (kk == "tick") {
-                                            auto v = kr.read_uint64_result();
-                                            if (v.ok() && v.value) kv.value->first = static_cast<std::uint32_t>(*v.value);
-                                        } else if (kk == "value") {
-                                            auto v = kr.read_string_result();
-                                            if (v.ok() && v.value) kv.value->second = std::move(*v.value);
-                                        } else kr.skip_value();
-                                        if (!kr.consume_if(',')) break;
-                                    }
-                                    kr.require('}', kp + ": expected '}'");
-                                    return kv;
-                                });
-                            if (keys.ok() && keys.value) tr.value->keys = std::move(*keys.value);
-                            else { tr.diagnostics.merge(keys.diagnostics); return tr; }
-                        } else rr.skip_value();
-                        if (!rr.consume_if(',')) break;
-                    }
-                    rr.require('}', tp + ": expected '}'");
-                    return tr;
-                });
-            if (tracks.ok() && tracks.value) res.value->tracks = std::move(*tracks.value);
-            else { res.diagnostics.merge(tracks.diagnostics); return res; }
-        } else if (key == "events") {
-            auto events = decode_array<std::pair<std::uint32_t, std::string>>(r, fp,
-                [](BoundedJsonReader& er, std::string const& ep) {
-                    JsonReadResult<std::pair<std::uint32_t, std::string>> ev;
-                    ev.value.emplace();
-                    er.require('{', ep + ": expected '{'");
-                    if (er.has_error()) return ev;
-                    while (er.has_more() && !er.has_error()) {
-                        std::string ek;
-                        if (!read_object_entry(er, ek, ep)) break;
-                        auto efp = json_path(ep, ek);
-                        if (ek == "tick") {
-                            auto v = er.read_uint64_result();
-                            if (v.ok() && v.value) ev.value->first = static_cast<std::uint32_t>(*v.value);
-                        } else if (ek == "id") {
-                            auto v = er.read_string_result();
-                            if (v.ok() && v.value) ev.value->second = std::move(*v.value);
-                        } else er.skip_value();
-                        if (!er.consume_if(',')) break;
-                    }
-                    er.require('}', ep + ": expected '}'");
-                    return ev;
-                });
-            if (events.ok() && events.value) res.value->clip_events = std::move(*events.value);
-            else { res.diagnostics.merge(events.diagnostics); return res; }
-        } else r.skip_value();
-
-        if (!r.consume_if(',')) break;
-    }
-    r.require('}', path + ": expected '}'");
-    return res;
+    return decode_object<CanonicalAnimationClip>(r, path, {"name"},
+        [](std::string const& key, std::string const& fp,
+           CanonicalAnimationClip& c, DiagnosticResult& diags, BoundedJsonReader& rr) {
+            DECODE_STRING_FIELD(rr, key, fp, c, name, diags);
+            DECODE_BOOL_FIELD(rr, key, fp, c, loop, diags);
+            if (key == "tracks") {
+                auto arr = decode_array<CanonicalAnimationClip::Track>(rr, fp,
+                    [](BoundedJsonReader& tr, std::string const& tp) {
+                        return decode_object<CanonicalAnimationClip::Track>(tr, tp, {"bone", "keys"},
+                            [](std::string const& tk, std::string const& tfp,
+                               CanonicalAnimationClip::Track& t, DiagnosticResult& td, BoundedJsonReader& trr) {
+                                DECODE_STRING_FIELD(trr, tk, tfp, t, bone, td);
+                                if (tk == "keys") {
+                                    auto keys = decode_array<std::pair<std::uint32_t, std::string>>(trr, tfp,
+                                        [](BoundedJsonReader& kr, std::string const& kp) {
+                                            return decode_object<std::pair<std::uint32_t, std::string>>(kr, kp, {"tick", "value"},
+                                                [](std::string const& kk, std::string const& kfp,
+                                                   std::pair<std::uint32_t, std::string>& kv, DiagnosticResult& kd, BoundedJsonReader& krr) {
+                                                    if (kk == "tick") {
+                                                        auto v = krr.read_uint64_result();
+                                                        if (!v.ok() || !v.value) { kd.merge(v.diagnostics); return; }
+                                                        if (*v.value > 0xFFFFFFFFULL) { kd.add_error(DiagnosticCode::GSPL_CONSTRAINT_UNSATISFIED, kfp + ": tick overflow", {}); return; }
+                                                        kv.first = static_cast<std::uint32_t>(*v.value);
+                                                    } else if (kk == "value") {
+                                                        auto v = krr.read_string_result();
+                                                        if (!v.ok() || !v.value) { kd.merge(v.diagnostics); return; }
+                                                        kv.second = std::move(*v.value);
+                                                    } else krr.skip_value();
+                                                });
+                                        });
+                                    if (!keys.ok()) { td.merge(keys.diagnostics); return; }
+                                    if (keys.value) t.keys = std::move(*keys.value);
+                                    return;
+                                }
+                                trr.skip_value();
+                            });
+                    });
+                if (!arr.ok()) { diags.merge(arr.diagnostics); return; }
+                if (arr.value) c.tracks = std::move(*arr.value);
+                return;
+            }
+            if (key == "events") {
+                auto arr = decode_array<std::pair<std::uint32_t, std::string>>(rr, fp,
+                    [](BoundedJsonReader& er, std::string const& ep) {
+                        return decode_object<std::pair<std::uint32_t, std::string>>(er, ep, {"tick", "id"},
+                            [](std::string const& ek, std::string const& efp,
+                               std::pair<std::uint32_t, std::string>& ev, DiagnosticResult& ed, BoundedJsonReader& err) {
+                                if (ek == "tick") {
+                                    auto v = err.read_uint64_result();
+                                    if (!v.ok() || !v.value) { ed.merge(v.diagnostics); return; }
+                                    if (*v.value > 0xFFFFFFFFULL) { ed.add_error(DiagnosticCode::GSPL_CONSTRAINT_UNSATISFIED, efp + ": tick overflow", {}); return; }
+                                    ev.first = static_cast<std::uint32_t>(*v.value);
+                                } else if (ek == "id") {
+                                    auto v = err.read_string_result();
+                                    if (!v.ok() || !v.value) { ed.merge(v.diagnostics); return; }
+                                    ev.second = std::move(*v.value);
+                                } else err.skip_value();
+                            });
+                    });
+                if (!arr.ok()) { diags.merge(arr.diagnostics); return; }
+                if (arr.value) c.clip_events = std::move(*arr.value);
+                return;
+            }
+            rr.skip_value();
+        });
 }
 
 static JsonReadResult<CanonicalAnimationState> decode_animation_state(
     BoundedJsonReader& r, std::string const& path) {
-    JsonReadResult<CanonicalAnimationState> res;
-    res.value.emplace();
-    r.require('{', path + ": expected '{'");
-    if (r.has_error()) return res;
-
-    while (r.has_more() && !r.has_error()) {
-        std::string key;
-        if (!read_object_entry(r, key, path)) break;
-        auto fp = json_path(path, key);
-
-        if (key == "name")       decode_string_field(r, res.value->name, fp);
-        else if (key == "clip_name") decode_string_field(r, res.value->clip_name, fp);
-        else r.skip_value();
-
-        if (!r.consume_if(',')) break;
-    }
-    r.require('}', path + ": expected '}'");
-    return res;
+    return decode_object<CanonicalAnimationState>(r, path, {"name", "clip_name"},
+        [](std::string const& key, std::string const& fp,
+           CanonicalAnimationState& c, DiagnosticResult& diags, BoundedJsonReader& rr) {
+            DECODE_STRING_FIELD(rr, key, fp, c, name, diags);
+            DECODE_STRING_FIELD(rr, key, fp, c, clip_name, diags);
+            rr.skip_value();
+        });
 }
 
 static JsonReadResult<CanonicalTransition> decode_transition(
     BoundedJsonReader& r, std::string const& path) {
-    JsonReadResult<CanonicalTransition> res;
-    res.value.emplace();
-    r.require('{', path + ": expected '{'");
-    if (r.has_error()) return res;
-
-    while (r.has_more() && !r.has_error()) {
-        std::string key;
-        if (!read_object_entry(r, key, path)) break;
-        auto fp = json_path(path, key);
-
-        if (key == "from_state")    decode_string_field(r, res.value->from_state, fp);
-        else if (key == "to_state") decode_string_field(r, res.value->to_state, fp);
-        else if (key == "ability_id") decode_string_field(r, res.value->ability_id, fp);
-        else if (key == "comparison") decode_string_field(r, res.value->comparison, fp);
-        else if (key == "threshold") decode_uint32_field(r, res.value->threshold);
-        else if (key == "resource_cost") decode_uint32_field(r, res.value->resource_cost);
-        else if (key == "cooldown_ticks") decode_uint32_field(r, res.value->cooldown_ticks);
-        else r.skip_value();
-
-        if (!r.consume_if(',')) break;
-    }
-    r.require('}', path + ": expected '}'");
-    return res;
+    return decode_object<CanonicalTransition>(r, path, {"from_state", "to_state"},
+        [](std::string const& key, std::string const& fp,
+           CanonicalTransition& c, DiagnosticResult& diags, BoundedJsonReader& rr) {
+            DECODE_STRING_FIELD(rr, key, fp, c, from_state, diags);
+            DECODE_STRING_FIELD(rr, key, fp, c, to_state, diags);
+            DECODE_STRING_FIELD(rr, key, fp, c, ability_id, diags);
+            DECODE_STRING_FIELD(rr, key, fp, c, comparison, diags);
+            DECODE_UINT32_FIELD(rr, key, fp, c, threshold, diags);
+            DECODE_UINT32_FIELD(rr, key, fp, c, resource_cost, diags);
+            DECODE_UINT32_FIELD(rr, key, fp, c, cooldown_ticks, diags);
+            rr.skip_value();
+        });
 }
 
 static JsonReadResult<CanonicalCollisionShape> decode_collision_shape(
     BoundedJsonReader& r, std::string const& path) {
-    JsonReadResult<CanonicalCollisionShape> res;
-    res.value.emplace();
-    r.require('{', path + ": expected '{'");
-    if (r.has_error()) return res;
-
-    while (r.has_more() && !r.has_error()) {
-        std::string key;
-        if (!read_object_entry(r, key, path)) break;
-        auto fp = json_path(path, key);
-
-        if (key == "id")         decode_string_field(r, res.value->id, fp);
-        else if (key == "shape_type") decode_string_field(r, res.value->shape_type, fp);
-        else if (key == "socket") decode_string_field(r, res.value->socket, fp);
-        else if (key == "radius_mm") decode_double_field(r, res.value->radius_mm);
-        else if (key == "offset_x") decode_double_field(r, res.value->offset_x);
-        else if (key == "offset_y") decode_double_field(r, res.value->offset_y);
-        else if (key == "scale_x") decode_double_field(r, res.value->scale_x);
-        else if (key == "scale_y") decode_double_field(r, res.value->scale_y);
-        else r.skip_value();
-
-        if (!r.consume_if(',')) break;
-    }
-    r.require('}', path + ": expected '}'");
-    return res;
+    return decode_object<CanonicalCollisionShape>(r, path, {"id", "shape_type"},
+        [](std::string const& key, std::string const& fp,
+           CanonicalCollisionShape& c, DiagnosticResult& diags, BoundedJsonReader& rr) {
+            DECODE_STRING_FIELD(rr, key, fp, c, id, diags);
+            DECODE_STRING_FIELD(rr, key, fp, c, shape_type, diags);
+            DECODE_STRING_FIELD(rr, key, fp, c, socket, diags);
+            DECODE_DOUBLE_FIELD(rr, key, fp, c, radius_mm, diags);
+            DECODE_DOUBLE_FIELD(rr, key, fp, c, offset_x, diags);
+            DECODE_DOUBLE_FIELD(rr, key, fp, c, offset_y, diags);
+            DECODE_DOUBLE_FIELD(rr, key, fp, c, scale_x, diags);
+            DECODE_DOUBLE_FIELD(rr, key, fp, c, scale_y, diags);
+            rr.skip_value();
+        });
 }
 
 static JsonReadResult<CanonicalCollisionWindow> decode_collision_window(
     BoundedJsonReader& r, std::string const& path) {
-    JsonReadResult<CanonicalCollisionWindow> res;
-    res.value.emplace();
-    r.require('{', path + ": expected '{'");
-    if (r.has_error()) return res;
-
-    while (r.has_more() && !r.has_error()) {
-        std::string key;
-        if (!read_object_entry(r, key, path)) break;
-        auto fp = json_path(path, key);
-
-        if (key == "ability_id")   decode_string_field(r, res.value->ability_id, fp);
-        else if (key == "shape_id") decode_string_field(r, res.value->shape_id, fp);
-        else if (key == "start_tick") decode_uint32_field(r, res.value->start_tick);
-        else if (key == "duration_ticks") decode_uint32_field(r, res.value->duration_ticks);
-        else if (key == "active") decode_bool_field(r, res.value->active);
-        else r.skip_value();
-
-        if (!r.consume_if(',')) break;
-    }
-    r.require('}', path + ": expected '}'");
-    return res;
+    return decode_object<CanonicalCollisionWindow>(r, path, {"ability_id", "shape_id"},
+        [](std::string const& key, std::string const& fp,
+           CanonicalCollisionWindow& c, DiagnosticResult& diags, BoundedJsonReader& rr) {
+            DECODE_STRING_FIELD(rr, key, fp, c, ability_id, diags);
+            DECODE_STRING_FIELD(rr, key, fp, c, shape_id, diags);
+            DECODE_UINT32_FIELD(rr, key, fp, c, start_tick, diags);
+            DECODE_UINT32_FIELD(rr, key, fp, c, duration_ticks, diags);
+            DECODE_BOOL_FIELD(rr, key, fp, c, active, diags);
+            rr.skip_value();
+        });
 }
 
 static JsonReadResult<CanonicalResource> decode_resource(
     BoundedJsonReader& r, std::string const& path) {
-    JsonReadResult<CanonicalResource> res;
-    res.value.emplace();
-    r.require('{', path + ": expected '{'");
-    if (r.has_error()) return res;
-
-    while (r.has_more() && !r.has_error()) {
-        std::string key;
-        if (!read_object_entry(r, key, path)) break;
-        auto fp = json_path(path, key);
-
-        if (key == "id")            decode_string_field(r, res.value->id, fp);
-        else if (key == "resource_type") decode_string_field(r, res.value->resource_type, fp);
-        else if (key == "min")      decode_uint32_field(r, res.value->min);
-        else if (key == "max")      decode_uint32_field(r, res.value->max);
-        else if (key == "initial")  decode_uint32_field(r, res.value->initial);
-        else r.skip_value();
-
-        if (!r.consume_if(',')) break;
-    }
-    r.require('}', path + ": expected '}'");
-    return res;
+    return decode_object<CanonicalResource>(r, path, {"id", "resource_type"},
+        [](std::string const& key, std::string const& fp,
+           CanonicalResource& c, DiagnosticResult& diags, BoundedJsonReader& rr) {
+            DECODE_STRING_FIELD(rr, key, fp, c, id, diags);
+            DECODE_STRING_FIELD(rr, key, fp, c, resource_type, diags);
+            DECODE_UINT32_FIELD(rr, key, fp, c, min, diags);
+            DECODE_UINT32_FIELD(rr, key, fp, c, max, diags);
+            DECODE_UINT32_FIELD(rr, key, fp, c, initial, diags);
+            rr.skip_value();
+        });
 }
 
 static JsonReadResult<CanonicalAnimationIntent> decode_animation_intent(
     BoundedJsonReader& r, std::string const& path) {
-    JsonReadResult<CanonicalAnimationIntent> res;
-    res.value.emplace();
-    r.require('{', path + ": expected '{'");
-    if (r.has_error()) return res;
-
-    while (r.has_more() && !r.has_error()) {
-        std::string key;
-        if (!read_object_entry(r, key, path)) break;
-        auto fp = json_path(path, key);
-
-        if (key == "behavior_state") decode_string_field(r, res.value->behavior_state, fp);
-        else if (key == "clip_name") decode_string_field(r, res.value->clip_name, fp);
-        else r.skip_value();
-
-        if (!r.consume_if(',')) break;
-    }
-    r.require('}', path + ": expected '}'");
-    return res;
+    return decode_object<CanonicalAnimationIntent>(r, path, {"behavior_state", "clip_name"},
+        [](std::string const& key, std::string const& fp,
+           CanonicalAnimationIntent& c, DiagnosticResult& diags, BoundedJsonReader& rr) {
+            DECODE_STRING_FIELD(rr, key, fp, c, behavior_state, diags);
+            DECODE_STRING_FIELD(rr, key, fp, c, clip_name, diags);
+            rr.skip_value();
+        });
 }
 
 static JsonReadResult<CanonicalRuntime> decode_runtime(
     BoundedJsonReader& r, std::string const& path) {
-    JsonReadResult<CanonicalRuntime> res;
-    res.value.emplace();
-    r.require('{', path + ": expected '{'");
-    if (r.has_error()) return res;
-
-    while (r.has_more() && !r.has_error()) {
-        std::string key;
-        if (!read_object_entry(r, key, path)) break;
-        auto fp = json_path(path, key);
-
-        if (key == "aggression")       decode_uint32_field(r, res.value->aggression);
-        else if (key == "curiosity")   decode_uint32_field(r, res.value->curiosity);
-        else if (key == "energy")      decode_uint32_field(r, res.value->energy);
-        else if (key == "loyalty")     decode_uint32_field(r, res.value->loyalty);
-        else if (key == "animation_intents") {
-            auto arr = decode_array<CanonicalAnimationIntent>(r, fp, decode_animation_intent);
-            if (arr.ok() && arr.value) res.value->animation_intents = std::move(*arr.value);
-            else { res.diagnostics.merge(arr.diagnostics); return res; }
-        } else r.skip_value();
-
-        if (!r.consume_if(',')) break;
-    }
-    r.require('}', path + ": expected '}'");
-    return res;
+    return decode_object<CanonicalRuntime>(r, path, {},
+        [](std::string const& key, std::string const& fp,
+           CanonicalRuntime& c, DiagnosticResult& diags, BoundedJsonReader& rr) {
+            DECODE_UINT32_FIELD(rr, key, fp, c, aggression, diags);
+            DECODE_UINT32_FIELD(rr, key, fp, c, curiosity, diags);
+            DECODE_UINT32_FIELD(rr, key, fp, c, energy, diags);
+            DECODE_UINT32_FIELD(rr, key, fp, c, loyalty, diags);
+            if (key == "animation_intents") {
+                auto arr = decode_array<CanonicalAnimationIntent>(rr, fp, decode_animation_intent);
+                if (!arr.ok()) { diags.merge(arr.diagnostics); return; }
+                if (arr.value) c.animation_intents = std::move(*arr.value);
+                return;
+            }
+            rr.skip_value();
+        });
 }
 
 static JsonReadResult<GeneInstance> decode_gene_instance(
     BoundedJsonReader& r, std::string const& path) {
-    JsonReadResult<GeneInstance> res;
-    res.value.emplace();
-    GeneRegistry registry;
-    r.require('{', path + ": expected '{'");
-    if (r.has_error()) return res;
-
-    bool saw_kind = false, saw_schema = false, saw_type = false, saw_source = false;
-
-    while (r.has_more() && !r.has_error()) {
-        std::string key;
-        if (!read_object_entry(r, key, path)) break;
-        auto fp = json_path(path, key);
-
-        if (key == "kind") {
-            if (saw_kind) {
-                res.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
-                    fp + ": duplicate field 'kind'", {}); return res;
-            }
-            saw_kind = true;
-            auto v = r.read_int64_result();
-            if (!v.ok() || !v.value) {
-                res.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
-                    fp + ": expected GeneKind integer", {}); return res;
-            }
-            auto raw_kind = *v.value;
-            if (raw_kind < 0 || raw_kind > 34) {
-                res.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
-                    fp + ": invalid GeneKind value " + std::to_string(raw_kind), {});
-                return res;
-            }
-            auto kind_val = static_cast<GeneKind>(raw_kind);
-            auto const* desc = registry.lookup(kind_val);
-            if (desc) res.value->descriptor = *desc;
-            else res.value->descriptor.kind = kind_val;
-        } else if (key == "schema") {
-            if (saw_schema) {
-                res.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
-                    fp + ": duplicate field 'schema'", {}); return res;
-            }
-            saw_schema = true;
-            auto v = r.read_uint64_result();
-            if (v.ok() && v.value) {
-                if (*v.value > std::numeric_limits<std::uint32_t>::max()) {
-                    res.diagnostics.add_error(DiagnosticCode::GSPL_CONSTRAINT_UNSATISFIED,
-                        fp + ": schema version uint32 overflow", {}); return res;
+    return decode_object<GeneInstance>(r, path, {"kind", "schema", "type", "values"},
+        [](std::string const& key, std::string const& fp,
+           GeneInstance& gi, DiagnosticResult& diags, BoundedJsonReader& rr) {
+            GeneRegistry registry;
+            if (key == "kind") {
+                auto v = rr.read_int64_result();
+                if (!v.ok() || !v.value) { diags.merge(v.diagnostics); return; }
+                auto raw_kind = *v.value;
+                if (raw_kind < 0 || raw_kind > static_cast<std::int64_t>(GeneKind::provenance)) {
+                    diags.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
+                        fp + ": invalid GeneKind " + std::to_string(raw_kind), {}); return;
                 }
-                res.value->descriptor.schema_version = static_cast<std::uint32_t>(*v.value);
+                auto kind_val = static_cast<GeneKind>(raw_kind);
+                auto const* desc = registry.lookup(kind_val);
+                if (desc) gi.descriptor = *desc;
+                else gi.descriptor.kind = kind_val;
+                return;
             }
-        } else if (key == "type") {
-            if (saw_type) {
-                res.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
-                    fp + ": duplicate field 'type'", {}); return res;
+            if (key == "schema") {
+                auto v = rr.read_uint64_result();
+                if (!v.ok() || !v.value) { diags.merge(v.diagnostics); return; }
+                if (*v.value > 0xFFFFFFFFULL) { diags.add_error(DiagnosticCode::GSPL_CONSTRAINT_UNSATISFIED, fp + ": schema uint32 overflow", {}); return; }
+                gi.descriptor.schema_version = static_cast<std::uint32_t>(*v.value);
+                return;
             }
-            saw_type = true;
-            auto v = r.read_string_result();
-            if (v.ok() && v.value) res.value->descriptor.type_id = std::move(*v.value);
-        } else if (key == "source") {
-            if (saw_source) {
-                res.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
-                    fp + ": duplicate field 'source'", {}); return res;
+            if (key == "type") {
+                auto v = rr.read_string_result();
+                if (!v.ok() || !v.value) { diags.merge(v.diagnostics); return; }
+                gi.descriptor.type_id = std::move(*v.value);
+                return;
             }
-            saw_source = true;
-            auto v = r.read_string_result();
-            if (v.ok() && v.value) res.value->source_module = std::move(*v.value);
-        } else if (key == "values") {
-            r.require('{', fp + ": expected '{'");
-            if (r.has_error()) break;
-            while (r.has_more() && !r.has_error()) {
-                auto vk_res = r.read_string_result();
-                if (!vk_res.ok() || !vk_res.value) break;
-                std::string vk = std::move(*vk_res.value);
-                auto vfp = json_path(fp, vk);
-                if (!r.require(':', vfp + ": expected ':'")) break;
-                // Type-tagged format: { t: <tag>, v: <value> }
-                if (r.require('{', vfp + ": expected '{'")) {
-                    bool saw_tag = false, saw_value = false;
-                    std::uint32_t tag_val = 0;
-                    std::string raw_val;
-                    while (r.has_more() && !r.has_error()) {
-                        auto tk_res = r.read_string_result();
-                        if (!tk_res.ok() || !tk_res.value) break;
-                        auto tkfp = json_path(vfp, *tk_res.value);
-                        if (!r.require(':', tkfp + ": expected ':'")) break;
-                        if (*tk_res.value == "t") {
-                            if (saw_tag) {
-                                res.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
-                                    tkfp + ": duplicate 't' in gene value wrapper", {});
-                                return res;
-                            }
-                            saw_tag = true;
-                            auto tv = r.read_int64_result();
-                            if (!tv.ok() || !tv.value) {
-                                res.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
-                                    tkfp + ": expected GeneValueTag integer", {});
-                                return res;
-                            }
-                            auto raw_tag = *tv.value;
-                            if (raw_tag < 0 || raw_tag > 5) {
-                                res.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
-                                    tkfp + ": invalid GeneValueTag " + std::to_string(raw_tag), {});
-                                return res;
-                            }
-                            tag_val = static_cast<std::uint32_t>(raw_tag);
-                        } else if (*tk_res.value == "v") {
-                            if (saw_value) {
-                                res.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
-                                    tkfp + ": duplicate 'v' in gene value wrapper", {});
-                                return res;
-                            }
-                            saw_value = true;
-                            raw_val = r.read_typed_value();
-                        } else r.skip_value();
-                        if (!r.consume_if(',')) break;
-                    }
-                    r.require('}', vfp + ": expected '}'");
-                    if (!saw_tag) {
-                        res.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
-                            vfp + ": missing required 't' (GeneValueTag) in value wrapper", {});
-                        return res;
-                    }
-                    if (!saw_value) {
-                        res.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
-                            vfp + ": missing required 'v' (raw value) in value wrapper", {});
-                        return res;
-                    }
-                    if (raw_val.empty()) {
-                        res.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
-                            vfp + ": empty raw gene value", {});
-                        return res;
-                    }
-                    auto gv = json_to_gene_value_result(raw_val, static_cast<GeneValueTag>(tag_val));
-                    if (!gv.ok()) {
-                        res.diagnostics.merge(gv.diagnostics);
-                        return res;
-                    }
-                    res.value->values[vk] = std::move(*gv.value);
-                } else {
-                    // Current schema: reject bare-string values (no legacy fallback)
-                    r.skip_value();
+            if (key == "source") {
+                auto v = rr.read_string_result();
+                if (!v.ok() || !v.value) { diags.merge(v.diagnostics); return; }
+                gi.source_module = std::move(*v.value);
+                return;
+            }
+            if (key == "values") {
+                rr.require('{', fp + ": expected '{'");
+                if (rr.has_error()) { reader_failure(rr, fp, diags, DiagnosticCode::GSPL_TYPE_MISMATCH); return; }
+                while (rr.has_more() && !rr.has_error()) {
+                    auto vk = rr.read_string_result();
+                    if (!vk.ok() || !vk.value) break;
+                    std::string vk_str = std::move(*vk.value);
+                    auto vfp = json_path(fp, vk_str);
+                    if (!rr.require(':', vfp + ": expected ':'")) break;
+                    if (rr.peek() == '{') {
+                        bool saw_tag = false, saw_value = false;
+                        std::uint32_t tag_val = 0;
+                        std::string raw_val;
+                        rr.require('{', vfp + ": expected '{'");
+                        while (rr.has_more() && !rr.has_error()) {
+                            auto tk = rr.read_string_result();
+                            if (!tk.ok() || !tk.value) break;
+                            auto tkfp = json_path(vfp, *tk.value);
+                            if (!rr.require(':', tkfp + ": expected ':'")) break;
+                            if (*tk.value == "t") {
+                                if (saw_tag) { diags.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH, tkfp + ": duplicate 't'", {}); return; }
+                                saw_tag = true;
+                                auto tv = rr.read_int64_result();
+                                if (!tv.ok() || !tv.value) { diags.merge(tv.diagnostics); return; }
+                                if (*tv.value < 0 || *tv.value > static_cast<std::int64_t>(GeneValueTag::string_list_val)) {
+                                    diags.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE, tkfp + ": invalid GeneValueTag", {}); return;
+                                }
+                                tag_val = static_cast<std::uint32_t>(*tv.value);
+                            } else if (*tk.value == "v") {
+                                if (saw_value) { diags.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH, tkfp + ": duplicate 'v'", {}); return; }
+                                saw_value = true;
+                                raw_val = rr.read_typed_value();
+                            } else rr.skip_value();
+                            if (!rr.consume_if(',')) break;
+                        }
+                        rr.require('}', vfp + ": expected '}'");
+                        if (!saw_tag) { diags.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE, vfp + ": missing 't'", {}); return; }
+                        if (!saw_value || raw_val.empty()) { diags.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE, vfp + ": missing/empty 'v'", {}); return; }
+                        auto gv = json_to_gene_value_result(raw_val, static_cast<GeneValueTag>(tag_val));
+                        if (!gv.ok()) { diags.merge(gv.diagnostics); return; }
+                        gi.values[vk_str] = std::move(*gv.value);
+                    } else rr.skip_value();
+                    if (!rr.consume_if(',')) break;
                 }
-                if (!r.consume_if(',')) break;
+                rr.require('}', fp + ": expected '}'");
+                return;
             }
-            r.require('}', fp + ": expected '}'");
-        } else r.skip_value();
-
-        if (!r.consume_if(',')) break;
-    }
-    r.require('}', path + ": expected '}'");
-    return res;
+            rr.skip_value();
+        });
 }
 
 } // namespace
@@ -1171,6 +1029,14 @@ CanonicalSerializationResult CanonicalEntitySerializer::encode_canonical_entity(
         validate_double(cs.scale_y, prefix + ".scale_y", result);
     }
     if (!result.diagnostics.ok()) return result;
+
+    // Semantic validation before serialization
+    CanonicalEntityValidator validator;
+    auto validation_diags = validator.validate(entity);
+    if (!validation_diags.ok()) {
+        result.diagnostics.merge(validation_diags);
+        return result;
+    }
 
     try {
     std::ostringstream os;
