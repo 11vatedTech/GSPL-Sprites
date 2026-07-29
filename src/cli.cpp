@@ -226,11 +226,11 @@ DiagnosticResult Cli::compile_source(SourceBuffer source, CliOptions const& opts
                     // Synthesize morphology-driven 2D frames for base and storm forms
                     auto base_pal = ::gspl::sprites::make_palette(seed.primary_color, seed.accent_color);
                     auto storm_pal = ::gspl::sprites::make_palette(seed.accent_color, seed.primary_color);
-                    auto rig = ::gspl::sprites::make_biped_rig(seed.stable_id);
+                    auto rig = seed.rig.has_value() ? *seed.rig : ::gspl::sprites::make_biped_rig(seed.stable_id);
                     auto proj_base = ::gspl::sprites::synthesize_morphology_projection2d(
-                        seed.stable_id, "base", base_pal, seed.morphology, rig);
+                        seed.stable_id, "base", base_pal, seed.morphology, rig, seed.clips);
                     auto proj_storm = ::gspl::sprites::synthesize_morphology_projection2d(
-                        seed.stable_id, "storm", storm_pal, seed.morphology, rig);
+                        seed.stable_id, "storm", storm_pal, seed.morphology, rig, seed.clips);
                     // Build AuthoredVisualSet and pass to build_package
                     ::gspl::sprites::AuthoredVisualSet visual;
                     visual.schema = "gspl.visual-set/0.1";

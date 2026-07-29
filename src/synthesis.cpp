@@ -300,7 +300,8 @@ Projection2dDefinition synthesize_morphology_projection2d(
     std::string_view entity_id, std::string_view form_id,
     const SynthesisPalette& palette,
     const std::map<std::string, MorphologyPart, std::less<>>& morphology,
-    const RigDefinition& rig) {
+    const RigDefinition& rig,
+    std::span<const SkeletalClip> clips) {
   std::string pf = std::string(entity_id) + "." + std::string(form_id);
   // Canvas size: 128x128 for legacy compatibility scaling to match expected package dimensions
   constexpr std::int32_t canvas_w = 128, canvas_h = 128;
@@ -329,6 +330,39 @@ Projection2dDefinition synthesize_morphology_projection2d(
     return palette.primary;
   };
 
+  // Find a clip by name prefix match
+  auto find_clip = [&](std::string_view name) -> const SkeletalClip* {
+    for (const auto& c : clips) {
+      if (c.id.find(name) != std::string::npos) return &c;
+    }
+    return nullptr;
+  };
+
+  // Evaluate bone track at a given tick, returning x/y offset
+  auto eval_bone_offset = [&](std::string_view bone_id, std::uint32_t tick) -> std::pair<double, double> {
+    for (const auto& clip : clips) {
+      for (const auto& track : clip.tracks) {
+        if (track.bone_id == bone_id && !track.keys.empty()) {
+          // Find the surrounding keyframes and interpolate
+          const BoneKeyframe* prev = nullptr;
+          const BoneKeyframe* next = nullptr;
+          for (const auto& kf : track.keys) {
+            if (kf.tick <= tick) prev = &kf;
+            if (kf.tick >= tick && !next) next = &kf;
+          }
+          if (prev && next && prev != next) {
+            double t = static_cast<double>(tick - prev->tick) / static_cast<double>(next->tick - prev->tick);
+            return {prev->transform.x + (next->transform.x - prev->transform.x) * t,
+                    prev->transform.y + (next->transform.y - prev->transform.y) * t};
+          }
+          if (prev) return {prev->transform.x, prev->transform.y};
+          if (next) return {next->transform.x, next->transform.y};
+        }
+      }
+    }
+    return {0.0, 0.0};
+  };
+
   // Build sorted part list: sort by z-depth (back-to-front: lower z drawn first)
   std::vector<std::pair<std::string, MorphologyPart>> sorted_parts;
   for (const auto& [name, part] : morphology)
@@ -337,18 +371,18 @@ Projection2dDefinition synthesize_morphology_projection2d(
     return a.second.z < b.second.z;
   });
 
-  // Generate frames from canonical animation clips when available, otherwise fallback to static variants
-  std::vector<FrameSource> frames;
-  // Build a static base frame plus animation-driven frame sequence
-  auto render_frame = [&](std::int32_t tick_offset_x, std::int32_t tick_offset_y) -> ImageRgba8 {
+  // Render a single frame with optional bone-driven offsets at a given tick
+  auto render_frame = [&](std::int32_t tick, double global_offset_x, double global_offset_y) -> ImageRgba8 {
     ImageRgba8 canvas(canvas_w, canvas_h, ColorSpace::srgb, AlphaMode::straight,
                       std::vector<std::uint8_t>(static_cast<std::size_t>(canvas_w) * canvas_h * 4, 0));
     for (const auto& [name, part] : sorted_parts) {
       const bool is_eye_or_ear = (name.find("eye") != std::string::npos ||
                                    name.find("ear") != std::string::npos);
       std::uint32_t color = resolve_color(part, is_eye_or_ear);
-      const int pcx = canvas_w / 2 + static_cast<int>((part.x + tick_offset_x * 0.5) * 3);
-      const int pcy = canvas_h / 2 - static_cast<int>((part.y + tick_offset_y * 0.5) * 3);
+      // Evaluate bone offset for this part's associated bone at current tick
+      auto [bx, by] = eval_bone_offset(name, static_cast<std::uint32_t>(tick));
+      const int pcx = canvas_w / 2 + static_cast<int>((part.x + bx + global_offset_x * 0.5) * 3);
+      const int pcy = canvas_h / 2 - static_cast<int>((part.y + by + global_offset_y * 0.5) * 3);
       const int prx = (std::max)(static_cast<int>(part.size_x * 1.5), 2);
       const int pry = (std::max)(static_cast<int>(part.size_y * 1.5), 2);
       draw_ellipse(canvas, pcx, pcy, prx, pry, color);
@@ -356,39 +390,31 @@ Projection2dDefinition synthesize_morphology_projection2d(
     return canvas;
   };
 
-  // Idle frames (gentle breathing offset)
-  frames.push_back({pf + ".idle.0", render_frame(0, 0), canvas_w / 2, canvas_h / 2, 4});
-  frames.push_back({pf + ".idle.1", render_frame(0, 1), canvas_w / 2, canvas_h / 2, 4});
-  frames.push_back({pf + ".idle.2", render_frame(0, 2), canvas_w / 2, canvas_h / 2, 4});
-  frames.push_back({pf + ".idle.3", render_frame(0, 1), canvas_w / 2, canvas_h / 2, 4});
+  // Use new tick-based render_frame (defined above) for all frame generation
+  std::vector<FrameSource> frames;
+  // Find canonical clips for animation-driven frame generation
+  auto idle_clip = find_clip("idle");
+  auto walk_clip = find_clip("locomotion");
+  auto attack_clip = find_clip("attack");
+  auto hit_clip = find_clip("hit");
+  auto transform_clip = find_clip("transform");
 
-  // Locomotion frames (forward-leaning with leg offset simulation)
-  frames.push_back({pf + ".walk.0", render_frame(1, 0), canvas_w / 2, canvas_h / 2, 3});
-  frames.push_back({pf + ".walk.1", render_frame(2, 1), canvas_w / 2, canvas_h / 2, 3});
-  frames.push_back({pf + ".walk.2", render_frame(3, 0), canvas_w / 2, canvas_h / 2, 3});
-  frames.push_back({pf + ".walk.3", render_frame(2, -1), canvas_w / 2, canvas_h / 2, 3});
-  frames.push_back({pf + ".walk.4", render_frame(1, 0), canvas_w / 2, canvas_h / 2, 3});
-  frames.push_back({pf + ".walk.5", render_frame(0, 1), canvas_w / 2, canvas_h / 2, 3});
+  // Helper: generate N frames evenly spaced across a clip's duration
+  auto gen_frames = [&](std::uint32_t count, std::uint32_t duration, std::string_view name, std::uint32_t frame_dur) {
+    for (std::uint32_t i = 0; i < count; ++i) {
+      std::uint32_t tick = duration > 0 ? (i * duration / count) : i;
+      frames.push_back({pf + "." + std::string(name) + "." + std::to_string(i),
+                        render_frame(static_cast<std::int32_t>(tick), 0, 0),
+                        canvas_w / 2, canvas_h / 2, frame_dur});
+    }
+  };
 
-  // Attack frames (anticipate → release → recover)
-  frames.push_back({pf + ".attack.0", render_frame(0, 0), canvas_w / 2, canvas_h / 2, 2});
-  frames.push_back({pf + ".attack.1", render_frame(-2, 0), canvas_w / 2, canvas_h / 2, 2});
-  frames.push_back({pf + ".attack.2", render_frame(4, 2), canvas_w / 2, canvas_h / 2, 1});
-  frames.push_back({pf + ".attack.3", render_frame(3, 1), canvas_w / 2, canvas_h / 2, 2});
-  frames.push_back({pf + ".attack.4", render_frame(1, 0), canvas_w / 2, canvas_h / 2, 2});
-  frames.push_back({pf + ".attack.5", render_frame(0, 0), canvas_w / 2, canvas_h / 2, 2});
-
-  // Hit reaction frames
-  frames.push_back({pf + ".hit.0", render_frame(0, 0), canvas_w / 2, canvas_h / 2, 1});
-  frames.push_back({pf + ".hit.1", render_frame(-3, 0), canvas_w / 2, canvas_h / 2, 2});
-  frames.push_back({pf + ".hit.2", render_frame(-1, 0), canvas_w / 2, canvas_h / 2, 2});
-
-  // Transformation frames (progressive interpolation to storm form)
-  frames.push_back({pf + ".transform.0", render_frame(0, 0), canvas_w / 2, canvas_h / 2, 2});
-  frames.push_back({pf + ".transform.1", render_frame(1, 2), canvas_w / 2, canvas_h / 2, 2});
-  frames.push_back({pf + ".transform.2", render_frame(2, 4), canvas_w / 2, canvas_h / 2, 2});
-  frames.push_back({pf + ".transform.3", render_frame(1, 6), canvas_w / 2, canvas_h / 2, 2});
-  frames.push_back({pf + ".transform.4", render_frame(0, 8), canvas_w / 2, canvas_h / 2, 2});
+  // Generate frames: 4 idle, 6 walk, 6 attack, 3 hit, 5 transform
+  gen_frames(4, idle_clip ? idle_clip->duration_ticks : 120, "idle", 4);
+  gen_frames(6, walk_clip ? walk_clip->duration_ticks : 48, "walk", 3);
+  gen_frames(6, attack_clip ? attack_clip->duration_ticks : 24, "attack", 2);
+  gen_frames(3, hit_clip ? hit_clip->duration_ticks : 12, "hit", 2);
+  gen_frames(5, transform_clip ? transform_clip->duration_ticks : 40, "transform", 2);
 
   for (auto& f : frames) f.frame_hash = compute_frame_hash(f.image);
 
