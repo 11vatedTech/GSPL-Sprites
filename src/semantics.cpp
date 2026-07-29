@@ -936,7 +936,7 @@ static JsonReadResult<GeneInstance> decode_gene_instance(
 std::string CanonicalEntitySerializer::to_json(CanonicalEntity const& entity) {
     auto result = encode_canonical_entity(entity);
     if (!result.ok()) {
-        throw std::invalid_argument("to_json: non-finite double value in entity — use to_json_result() for safe access");
+        throw std::invalid_argument("to_json: entity failed validation or contains non-finite values — use to_json_result() for safe access");
     }
     return std::move(*result.value);
 }
@@ -949,7 +949,7 @@ CanonicalSerializationResult CanonicalEntitySerializer::to_json_result(
 // Pre-scan all doubles for nonfinite values before serialization
 static void validate_double(double val, std::string const& json_path,
                             CanonicalSerializationResult& result) {
-    if (!std::isfinite(val) && result.ok()) {
+    if (!std::isfinite(val)) {
         result.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
             json_path + ": non-finite double value not allowed", {});
     }
@@ -1341,7 +1341,7 @@ CanonicalEntityDeserializeResult CanonicalEntitySerializer::from_json(
     }
 
     CanonicalEntity ce;
-    bool parsed_any = false;
+    std::set<std::string, std::less<>> seen_root;
 
     while (r.has_more() && !r.has_error()) {
         auto key_res = r.read_string_result();
@@ -1349,47 +1349,70 @@ CanonicalEntityDeserializeResult CanonicalEntitySerializer::from_json(
         std::string key = std::move(*key_res.value);
         r.require(':', "$." + key + ": expected ':'");
         if (r.has_error()) break;
-        parsed_any = true;
 
+        // Duplicate field detection
+        if (!seen_root.insert(key).second) {
+            result.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
+                "$.\"" + key + "\": duplicate field in root object", {});
+            return result;
+        }
+
+        // Scalar fields with fail-closed propagation
         if (key == "schema_version") {
             auto v = r.read_string_result();
-            if (v.ok() && v.value) ce.schema_version = std::move(*v.value);
+            if (!v.ok() || !v.value) { result.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH, "$.schema_version: expected string", {}); return result; }
+            ce.schema_version = std::move(*v.value);
         } else if (key == "stable_id") {
             auto v = r.read_string_result();
-            if (v.ok() && v.value) ce.stable_id = std::move(*v.value);
+            if (!v.ok() || !v.value) { result.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH, "$.stable_id: expected string", {}); return result; }
+            ce.stable_id = std::move(*v.value);
         } else if (key == "name") {
             auto v = r.read_string_result();
-            if (v.ok() && v.value) ce.name = std::move(*v.value);
+            if (!v.ok() || !v.value) { result.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH, "$.name: expected string", {}); return result; }
+            ce.name = std::move(*v.value);
         } else if (key == "classification") {
             auto v = r.read_string_result();
-            if (v.ok() && v.value) ce.classification = std::move(*v.value);
+            if (!v.ok() || !v.value) { result.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH, "$.classification: expected string", {}); return result; }
+            ce.classification = std::move(*v.value);
         } else if (key == "rights") {
             auto v = r.read_string_result();
-            if (v.ok() && v.value) ce.rights = std::move(*v.value);
+            if (!v.ok() || !v.value) { result.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH, "$.rights: expected string", {}); return result; }
+            ce.rights = std::move(*v.value);
         } else if (key == "rights_allow_export") {
             auto v = r.read_bool_result();
-            if (v.ok() && v.value) ce.rights_allow_export = *v.value;
+            if (!v.ok() || !v.value) { result.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH, "$.rights_allow_export: expected boolean", {}); return result; }
+            ce.rights_allow_export = *v.value;
         } else if (key == "entropy_root") {
             auto v = r.read_uint64_result();
-            if (v.ok() && v.value) ce.entropy_root = *v.value;
+            if (!v.ok() || !v.value) { result.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH, "$.entropy_root: expected unsigned integer", {}); return result; }
+            ce.entropy_root = *v.value;
         } else if (key == "primary_color") {
-            auto v = r.read_string_result(); if (v.ok() && v.value) ce.primary_color = std::move(*v.value);
+            auto v = r.read_string_result(); if (!v.ok() || !v.value) { result.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH, "$.primary_color: expected string", {}); return result; }
+            ce.primary_color = std::move(*v.value);
         } else if (key == "accent_color") {
-            auto v = r.read_string_result(); if (v.ok() && v.value) ce.accent_color = std::move(*v.value);
+            auto v = r.read_string_result(); if (!v.ok() || !v.value) { result.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH, "$.accent_color: expected string", {}); return result; }
+            ce.accent_color = std::move(*v.value);
         } else if (key == "storm_primary_color") {
-            auto v = r.read_string_result(); if (v.ok() && v.value) ce.storm_primary_color = std::move(*v.value);
+            auto v = r.read_string_result(); if (!v.ok() || !v.value) { result.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH, "$.storm_primary_color: expected string", {}); return result; }
+            ce.storm_primary_color = std::move(*v.value);
         } else if (key == "storm_accent_color") {
-            auto v = r.read_string_result(); if (v.ok() && v.value) ce.storm_accent_color = std::move(*v.value);
+            auto v = r.read_string_result(); if (!v.ok() || !v.value) { result.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH, "$.storm_accent_color: expected string", {}); return result; }
+            ce.storm_accent_color = std::move(*v.value);
         } else if (key == "emissive_color") {
-            auto v = r.read_string_result(); if (v.ok() && v.value) ce.emissive_color = std::move(*v.value);
+            auto v = r.read_string_result(); if (!v.ok() || !v.value) { result.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH, "$.emissive_color: expected string", {}); return result; }
+            ce.emissive_color = std::move(*v.value);
         } else if (key == "aura_color") {
-            auto v = r.read_string_result(); if (v.ok() && v.value) ce.aura_color = std::move(*v.value);
+            auto v = r.read_string_result(); if (!v.ok() || !v.value) { result.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH, "$.aura_color: expected string", {}); return result; }
+            ce.aura_color = std::move(*v.value);
         } else if (key == "provenance_hash") {
-            auto v = r.read_string_result(); if (v.ok() && v.value) ce.provenance_hash = std::move(*v.value);
+            auto v = r.read_string_result(); if (!v.ok() || !v.value) { result.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH, "$.provenance_hash: expected string", {}); return result; }
+            ce.provenance_hash = std::move(*v.value);
         } else if (key == "provenance_source") {
-            auto v = r.read_string_result(); if (v.ok() && v.value) ce.provenance_source = std::move(*v.value);
+            auto v = r.read_string_result(); if (!v.ok() || !v.value) { result.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH, "$.provenance_source: expected string", {}); return result; }
+            ce.provenance_source = std::move(*v.value);
         } else if (key == "initial_state") {
-            auto v = r.read_string_result(); if (v.ok() && v.value) ce.initial_state = std::move(*v.value);
+            auto v = r.read_string_result(); if (!v.ok() || !v.value) { result.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH, "$.initial_state: expected string", {}); return result; }
+            ce.initial_state = std::move(*v.value);
         } else if (key == "forms") {
             auto arr = decode_array<CanonicalForm>(r, "$.forms", decode_canonical_form);
             if (!arr.ok()) { result.diagnostics.merge(arr.diagnostics); return result; }
@@ -1520,11 +1543,6 @@ CanonicalEntityDeserializeResult CanonicalEntitySerializer::from_json(
                                      r.error_message(), {});
         return result;
     }
-    if (!parsed_any) {
-        result.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
-                       "from_json: no fields parsed from input", {});
-        return result;
-    }
 
     // Required fields
     if (ce.stable_id.empty()) {
@@ -1589,9 +1607,175 @@ DiagnosticResult CanonicalEntityValidator::validate(CanonicalEntity const& entit
     auto add = [&](DiagnosticCode code, std::string const& msg) {
         result.add({code, DiagnosticSeverity::error, msg, {}, {}, {}});
     };
+
+    // Identity
     if (entity.stable_id.empty()) add(DiagnosticCode::GSPL_NAME_UNKNOWN, "stable_id is required");
     if (entity.name.empty()) add(DiagnosticCode::GSPL_NAME_UNKNOWN, "name is required");
     if (entity.rights.empty()) add(DiagnosticCode::GSPL_RIGHTS_VIOLATION, "rights classification is required");
+
+    // Schema version
+    if (entity.schema_version != "gspl.canonical-entity/1.0") {
+        add(DiagnosticCode::GSPL_IR_UNSUPPORTED_VERSION,
+            "unsupported schema_version: " + entity.schema_version);
+    }
+
+    // Forms — unique IDs, collision_scale nonfinite
+    {
+        std::set<std::string, std::less<>> ids;
+        for (auto const& f : entity.forms) {
+            if (f.id.empty()) { add(DiagnosticCode::GSPL_NAME_UNKNOWN, "form missing required 'id'"); continue; }
+            if (!ids.insert(f.id).second) add(DiagnosticCode::GSPL_NAME_DUPLICATE, "duplicate form id: " + f.id);
+            if (!std::isfinite(f.collision_scale)) add(DiagnosticCode::GSPL_GENE_INVALID_VALUE, "form " + f.id + ": non-finite collision_scale");
+            if (!std::isfinite(f.ability_envelope)) add(DiagnosticCode::GSPL_GENE_INVALID_VALUE, "form " + f.id + ": non-finite ability_envelope");
+        }
+    }
+
+    // Transformations — unique IDs, valid from/to references
+    {
+        std::set<std::string, std::less<>> ids, form_ids;
+        for (auto const& f : entity.forms) form_ids.insert(f.id);
+        for (auto const& t : entity.transformations) {
+            if (t.id.empty()) { add(DiagnosticCode::GSPL_NAME_UNKNOWN, "transformation missing required 'id'"); continue; }
+            if (!ids.insert(t.id).second) add(DiagnosticCode::GSPL_NAME_DUPLICATE, "duplicate transformation id: " + t.id);
+            if (!t.from_form.empty() && !form_ids.contains(t.from_form))
+                add(DiagnosticCode::GSPL_NAME_UNKNOWN, "transformation " + t.id + " references unknown from_form: " + t.from_form);
+            if (!t.to_form.empty() && !form_ids.contains(t.to_form))
+                add(DiagnosticCode::GSPL_NAME_UNKNOWN, "transformation " + t.id + " references unknown to_form: " + t.to_form);
+        }
+        // Form transformation_ids validity
+        for (auto const& f : entity.forms) {
+            for (auto const& tid : f.transformation_ids) {
+                if (!ids.contains(tid))
+                    add(DiagnosticCode::GSPL_NAME_UNKNOWN, "form " + f.id + " references unknown transformation: " + tid);
+            }
+        }
+    }
+
+    // Bones — unique IDs, valid parent references, no cycles
+    {
+        std::set<std::string, std::less<>> ids;
+        for (auto const& b : entity.bones) {
+            if (b.id.empty()) { add(DiagnosticCode::GSPL_NAME_UNKNOWN, "bone missing required 'id'"); continue; }
+            if (!ids.insert(b.id).second) add(DiagnosticCode::GSPL_NAME_DUPLICATE, "duplicate bone id: " + b.id);
+            if (!b.parent.empty() && !ids.contains(b.parent))
+                add(DiagnosticCode::GSPL_NAME_UNKNOWN, "bone " + b.id + " references unknown parent: " + b.parent);
+            if (b.id == b.parent) add(DiagnosticCode::GSPL_GENE_DEPENDENCY_CYCLE, "bone " + b.id + " references itself as parent");
+        }
+    }
+
+    // Sockets — unique IDs, valid bone references
+    {
+        std::set<std::string, std::less<>> ids, bone_ids;
+        for (auto const& b : entity.bones) bone_ids.insert(b.id);
+        for (auto const& s : entity.sockets) {
+            if (s.id.empty()) { add(DiagnosticCode::GSPL_NAME_UNKNOWN, "socket missing required 'id'"); continue; }
+            if (!ids.insert(s.id).second) add(DiagnosticCode::GSPL_NAME_DUPLICATE, "duplicate socket id: " + s.id);
+            if (!s.bone.empty() && !bone_ids.contains(s.bone))
+                add(DiagnosticCode::GSPL_NAME_UNKNOWN, "socket " + s.id + " references unknown bone: " + s.bone);
+        }
+    }
+
+    // Clips — unique names, track bone references
+    {
+        std::set<std::string, std::less<>> names;
+        std::set<std::string, std::less<>> bone_ids;
+        for (auto const& b : entity.bones) bone_ids.insert(b.id);
+        for (auto const& c : entity.clips) {
+            if (c.name.empty()) { add(DiagnosticCode::GSPL_NAME_UNKNOWN, "clip missing required 'name'"); continue; }
+            if (!names.insert(c.name).second) add(DiagnosticCode::GSPL_NAME_DUPLICATE, "duplicate clip name: " + c.name);
+            for (auto const& t : c.tracks) {
+                if (!t.bone.empty() && !bone_ids.contains(t.bone))
+                    add(DiagnosticCode::GSPL_NAME_UNKNOWN, "clip " + c.name + " track references unknown bone: " + t.bone);
+            }
+        }
+    }
+
+    // States — unique names, initial_state existence, clip references
+    {
+        std::set<std::string, std::less<>> names, clip_names;
+        for (auto const& c : entity.clips) clip_names.insert(c.name);
+        for (auto const& s : entity.states) {
+            if (s.name.empty()) { add(DiagnosticCode::GSPL_NAME_UNKNOWN, "state missing required 'name'"); continue; }
+            if (!names.insert(s.name).second) add(DiagnosticCode::GSPL_NAME_DUPLICATE, "duplicate state name: " + s.name);
+            if (!s.clip_name.empty() && !clip_names.contains(s.clip_name))
+                add(DiagnosticCode::GSPL_NAME_UNKNOWN, "state " + s.name + " references unknown clip: " + s.clip_name);
+        }
+        if (!entity.initial_state.empty() && !names.contains(entity.initial_state))
+            add(DiagnosticCode::GSPL_NAME_UNKNOWN, "initial_state references unknown state: " + entity.initial_state);
+    }
+
+    // Transitions — valid state/ability references
+    {
+        std::set<std::string, std::less<>> state_names, ability_ids;
+        for (auto const& s : entity.states) state_names.insert(s.name);
+        for (auto const& a : entity.abilities) ability_ids.insert(a.id);
+        for (auto const& t : entity.transitions) {
+            if (!t.from_state.empty() && !state_names.contains(t.from_state))
+                add(DiagnosticCode::GSPL_NAME_UNKNOWN, "transition references unknown from_state: " + t.from_state);
+            if (!t.to_state.empty() && !state_names.contains(t.to_state))
+                add(DiagnosticCode::GSPL_NAME_UNKNOWN, "transition references unknown to_state: " + t.to_state);
+            if (!t.ability_id.empty() && !ability_ids.contains(t.ability_id))
+                add(DiagnosticCode::GSPL_NAME_UNKNOWN, "transition references unknown ability: " + t.ability_id);
+        }
+    }
+
+    // Collision shapes — unique IDs
+    {
+        std::set<std::string, std::less<>> ids;
+        for (auto const& cs : entity.collision_shapes) {
+            if (cs.id.empty()) { add(DiagnosticCode::GSPL_NAME_UNKNOWN, "collision_shape missing required 'id'"); continue; }
+            if (!ids.insert(cs.id).second) add(DiagnosticCode::GSPL_NAME_DUPLICATE, "duplicate collision_shape id: " + cs.id);
+        }
+    }
+
+    // Collision windows — valid shape/ability references
+    {
+        std::set<std::string, std::less<>> shape_ids, ability_ids;
+        for (auto const& cs : entity.collision_shapes) shape_ids.insert(cs.id);
+        for (auto const& a : entity.abilities) ability_ids.insert(a.id);
+        for (auto const& cw : entity.collision_windows) {
+            if (!cw.shape_id.empty() && !shape_ids.contains(cw.shape_id))
+                add(DiagnosticCode::GSPL_NAME_UNKNOWN, "collision_window references unknown shape: " + cw.shape_id);
+            if (!cw.ability_id.empty() && !ability_ids.contains(cw.ability_id))
+                add(DiagnosticCode::GSPL_NAME_UNKNOWN, "collision_window references unknown ability: " + cw.ability_id);
+        }
+    }
+
+    // Resources — unique IDs, min/max/initial invariants
+    {
+        std::set<std::string, std::less<>> ids;
+        for (auto const& r : entity.resources) {
+            if (r.id.empty()) { add(DiagnosticCode::GSPL_NAME_UNKNOWN, "resource missing required 'id'"); continue; }
+            if (!ids.insert(r.id).second) add(DiagnosticCode::GSPL_NAME_DUPLICATE, "duplicate resource id: " + r.id);
+            if (r.min > r.max) add(DiagnosticCode::GSPL_CONSTRAINT_UNSATISFIED, "resource " + r.id + ": min > max");
+            if (r.initial < r.min || r.initial > r.max)
+                add(DiagnosticCode::GSPL_CONSTRAINT_UNSATISFIED, "resource " + r.id + ": initial out of [min,max] range");
+        }
+    }
+
+    // Runtime — animation intent state/clip references
+    if (entity.runtime) {
+        std::set<std::string, std::less<>> state_names, clip_names;
+        for (auto const& s : entity.states) state_names.insert(s.name);
+        for (auto const& c : entity.clips) clip_names.insert(c.name);
+        for (auto const& ai : entity.runtime->animation_intents) {
+            if (!ai.behavior_state.empty() && !state_names.contains(ai.behavior_state))
+                add(DiagnosticCode::GSPL_NAME_UNKNOWN, "runtime animation_intent references unknown state: " + ai.behavior_state);
+            if (!ai.clip_name.empty() && !clip_names.contains(ai.clip_name))
+                add(DiagnosticCode::GSPL_NAME_UNKNOWN, "runtime animation_intent references unknown clip: " + ai.clip_name);
+        }
+    }
+
+    // Genes — unique kind+type combination, valid kind
+    {
+        std::set<std::string, std::less<>> gene_keys;
+        for (auto const& g : entity.genes) {
+            auto key = std::to_string(static_cast<std::uint32_t>(g.descriptor.kind)) + ":" + g.descriptor.type_id;
+            if (!gene_keys.insert(key).second)
+                add(DiagnosticCode::GSPL_GENE_DUPLICATE, "duplicate gene: kind=" + std::to_string(static_cast<std::uint32_t>(g.descriptor.kind)) + " type=" + g.descriptor.type_id);
+        }
+    }
+
     return result;
 }
 

@@ -787,6 +787,24 @@ int main() {
             t1.resource_cost = 50;
             ce.transformations.push_back(t1);
 
+            gspl::CanonicalTransformation t2;
+            t2.id = "descend";
+            t2.from_form = "storm";
+            t2.to_form = "base";
+            t2.trigger_condition = "resource <= 20";
+            t2.duration_ticks = 200;
+            t2.resource_cost = 25;
+            ce.transformations.push_back(t2);
+
+            gspl::CanonicalTransformation t3;
+            t3.id = "rage";
+            t3.from_form = "base";
+            t3.to_form = "base";
+            t3.trigger_condition = "health <= 30";
+            t3.duration_ticks = 500;
+            t3.resource_cost = 80;
+            ce.transformations.push_back(t3);
+
             // Morphology
             gspl::CanonicalPart head;
             head.name = "head";
@@ -847,6 +865,11 @@ int main() {
             ce.storm_abilities.push_back(sa1);
 
             // Bones
+            gspl::CanonicalSkeletalBone root_bone;
+            root_bone.id = "root";
+            root_bone.x = 0; root_bone.y = 0; root_bone.z = 0;
+            ce.bones.push_back(root_bone);
+
             gspl::CanonicalSkeletalBone b1;
             b1.id = "spine";
             b1.parent = "root";
@@ -876,11 +899,26 @@ int main() {
             clip.clip_events = {{0, "event:loop_start"}, {60, "event:loop_end"}};
             ce.clips.push_back(clip);
 
+            gspl::CanonicalAnimationClip atk_clip;
+            atk_clip.name = "attack";
+            atk_clip.loop = false;
+            gspl::CanonicalAnimationClip::Track atk_track;
+            atk_track.bone = "spine";
+            atk_track.keys = {{0, "pose:atk_0"}, {15, "pose:atk_15"}};
+            atk_clip.tracks.push_back(atk_track);
+            atk_clip.clip_events = {{10, "event:hit"}};
+            ce.clips.push_back(atk_clip);
+
             // States
             gspl::CanonicalAnimationState state;
             state.name = "idle";
             state.clip_name = "idle";
             ce.states.push_back(state);
+
+            gspl::CanonicalAnimationState attack_state;
+            attack_state.name = "attacking";
+            attack_state.clip_name = "attack";
+            ce.states.push_back(attack_state);
 
             // Transitions
             gspl::CanonicalTransition trans;
