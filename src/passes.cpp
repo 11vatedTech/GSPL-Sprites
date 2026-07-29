@@ -443,6 +443,7 @@ DiagnosticResult IrGenPhase::execute(CompilationContext& ctx) {
     ctx.ir.seed_identity = "gspl-deterministic";
     ctx.ir.entity = std::make_unique<EntityIr>();
     ctx.ir.entity->entity_id = ctx.ir.entity_id;
+    ctx.ir.entity->identity = ctx.ir.entity_id;
     return {};
 }
 

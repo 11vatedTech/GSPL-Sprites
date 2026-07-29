@@ -1,5 +1,6 @@
 #pragma once
 #include "gspl/genes.hpp"
+#include "gspl/json.hpp"
 #include "gspl/types.hpp"
 #include <cstdint>
 #include <string>
@@ -49,7 +50,7 @@ struct SpriteIrDeserializeResult {
 class IrSerializer {
 public:
     static std::string serialize(SpriteIr const& ir);
-    static SpriteIrDeserializeResult deserialize(std::string_view json);
+    static SpriteIrDeserializeResult deserialize(std::string_view json, BoundedJsonConfig config = {});
     static DiagnosticResult validate(SpriteIr const& ir);
     static std::string diff(SpriteIr const& before, SpriteIr const& after);
     static std::string explain(SpriteIr const& ir, std::string node_id);
