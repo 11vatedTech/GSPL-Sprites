@@ -3,6 +3,7 @@
 #include "gspl/genes.hpp"
 #include "gspl/types.hpp"
 #include "gspl/diagnostics.hpp"
+#include "gspl/json.hpp"
 #include <cstdint>
 #include <map>
 #include <optional>
@@ -177,11 +178,33 @@ struct CanonicalEntityDeserializeResult {
     [[nodiscard]] bool ok() const noexcept { return value.has_value() && diagnostics.ok(); }
 };
 
+struct CanonicalSerializationResult {
+    std::optional<std::string> value;
+    DiagnosticResult diagnostics;
+    [[nodiscard]] bool ok() const noexcept { return value.has_value() && diagnostics.ok(); }
+};
+
+
 class CanonicalEntitySerializer {
 public:
+    // Legacy convenience — may throw std::invalid_argument on nonfinite doubles.
+    // Prefer to_json_result() for production code.
+    [[deprecated("use to_json_result() for safe error handling")]]
     static std::string to_json(CanonicalEntity const& entity);
-    static CanonicalEntityDeserializeResult from_json(std::string_view json);
+
+    // Production serializer: returns diagnostics on nonfinite values instead of throwing.
+    static CanonicalSerializationResult to_json_result(CanonicalEntity const& entity);
+
+    // Production deserializer with optional bounds configuration.
+    static CanonicalEntityDeserializeResult from_json(
+        std::string_view json,
+        BoundedJsonConfig config = {});
+
     static std::string to_yaml(CanonicalEntity const& entity);
+
+private:
+    static CanonicalSerializationResult encode_canonical_entity(
+        CanonicalEntity const& entity);
 };
 
 class CanonicalEntityValidator {

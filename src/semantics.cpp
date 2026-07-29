@@ -326,6 +326,16 @@ static JsonReadResult<std::vector<T>> decode_array(
 
     std::size_t idx = 0;
     while (r.has_more() && !r.has_error()) {
+        // Reject trailing comma: after consuming comma, next non-ws char != ]
+        r.skip_ws();
+        if (r.position() < r.source().size() && r.source()[r.position()] == ']') {
+            if (idx > 0) {
+                res.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
+                    path + ": trailing comma in array", {});
+                return res;
+            }
+            break;  // empty array, not a trailing comma
+        }
         auto item_path = json_index_path(path, idx);
         auto item_res = codec(r, item_path);
         if (!item_res.ok()) {
@@ -353,32 +363,106 @@ static JsonReadResult<std::vector<std::string>> decode_string_array(
         });
 }
 
-// ── Scalar helpers ──────────────────────────────────────
+// ── Scalar helpers (result-returning, checked) ──────────
+
+static JsonReadResult<std::string> decode_string_field(
+    BoundedJsonReader& r, std::string const& path) {
+    JsonReadResult<std::string> result;
+    auto res = r.read_string_result();
+    if (!res.ok()) {
+        result.diagnostics = std::move(res.diagnostics);
+        result.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
+            path + ": expected string", {});
+        return result;
+    }
+    result.value = std::move(*res.value);
+    return result;
+}
+
+static JsonReadResult<bool> decode_bool_field(
+    BoundedJsonReader& r, std::string const& path) {
+    JsonReadResult<bool> result;
+    auto res = r.read_bool_result();
+    if (!res.ok() || !res.value) {
+        result.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
+            path + ": expected boolean", {});
+        return result;
+    }
+    result.value = *res.value;
+    return result;
+}
+
+static JsonReadResult<std::uint32_t> decode_uint32_field(
+    BoundedJsonReader& r, std::string const& path) {
+    JsonReadResult<std::uint32_t> result;
+    auto res = r.read_uint64_result();
+    if (!res.ok() || !res.value) {
+        result.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
+            path + ": expected unsigned integer", {});
+        return result;
+    }
+    if (*res.value > static_cast<std::uint64_t>(
+            std::numeric_limits<std::uint32_t>::max())) {
+        result.diagnostics.add_error(DiagnosticCode::GSPL_CONSTRAINT_UNSATISFIED,
+            path + ": uint32 overflow (" + std::to_string(*res.value) + " > "
+            + std::to_string(std::numeric_limits<std::uint32_t>::max()) + ")", {});
+        return result;
+    }
+    result.value = static_cast<std::uint32_t>(*res.value);
+    return result;
+}
+
+static JsonReadResult<double> decode_double_field(
+    BoundedJsonReader& r, std::string const& path) {
+    JsonReadResult<double> result;
+    auto res = r.read_double_result();
+    if (!res.ok() || !res.value) {
+        result.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
+            path + ": expected number", {});
+        return result;
+    }
+    double val = *res.value;
+    if (!std::isfinite(val)) {
+        result.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
+            path + ": non-finite double value not allowed", {});
+        return result;
+    }
+    result.value = val;
+    return result;
+}
+
+// ── Thin adapters (old API on top of checked result helpers) ───
 
 static bool decode_string_field(BoundedJsonReader& r, std::string& out,
-                                std::string const& /*path*/) {
-    auto res = r.read_string_result();
-    if (!res.ok()) return false;
+                                std::string const& path) {
+    auto res = decode_string_field(r, path);
+    if (!res.ok() || !res.value) return false;
     out = std::move(*res.value);
     return true;
 }
 
-static bool decode_bool_field(BoundedJsonReader& r, bool& out) {
-    auto res = r.read_bool_result();
-    if (res.ok() && res.value) { out = *res.value; return true; }
-    return false;
+static bool decode_bool_field(BoundedJsonReader& r, bool& out,
+                              std::string const& path = "") {
+    auto res = decode_bool_field(r, path);
+    if (!res.ok() || !res.value) return false;
+    out = *res.value;
+    return true;
 }
 
-static bool decode_uint32_field(BoundedJsonReader& r, std::uint32_t& out) {
-    auto res = r.read_uint64_result();
-    if (res.ok() && res.value) { out = static_cast<std::uint32_t>(*res.value); return true; }
-    return false;
+static bool decode_uint32_field(BoundedJsonReader& r, std::uint32_t& out,
+                                std::string const& path = "") {
+    auto res = decode_uint32_field(r, path);
+    if (!res.ok() || !res.value) return false;
+    out = *res.value;
+    return true;
 }
 
-static bool decode_double_field(BoundedJsonReader& r, double& out) {
-    auto res = r.read_double_result();
-    if (res.ok() && res.value) { out = *res.value; return true; }
-    return false;
+static bool decode_double_field(BoundedJsonReader& r, double& out,
+                                std::string const& path = "") {
+    auto res = decode_double_field(r, path);
+    if (!res.ok() || !res.value) return false;
+    out = *res.value;
+    return true;
 }
 
 // ── Object entry reading helper ─────────────────────────
@@ -844,26 +928,62 @@ static JsonReadResult<GeneInstance> decode_gene_instance(
     r.require('{', path + ": expected '{'");
     if (r.has_error()) return res;
 
+    bool saw_kind = false, saw_schema = false, saw_type = false, saw_source = false;
+
     while (r.has_more() && !r.has_error()) {
         std::string key;
         if (!read_object_entry(r, key, path)) break;
         auto fp = json_path(path, key);
 
         if (key == "kind") {
-            auto v = r.read_int64_result();
-            if (v.ok() && v.value) {
-                auto kind_val = static_cast<GeneKind>(*v.value);
-                auto const* desc = registry.lookup(kind_val);
-                if (desc) res.value->descriptor = *desc;
-                else res.value->descriptor.kind = kind_val;
+            if (saw_kind) {
+                res.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
+                    fp + ": duplicate field 'kind'", {}); return res;
             }
+            saw_kind = true;
+            auto v = r.read_int64_result();
+            if (!v.ok() || !v.value) {
+                res.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
+                    fp + ": expected GeneKind integer", {}); return res;
+            }
+            auto raw_kind = *v.value;
+            if (raw_kind < 0 || raw_kind > 34) {
+                res.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
+                    fp + ": invalid GeneKind value " + std::to_string(raw_kind), {});
+                return res;
+            }
+            auto kind_val = static_cast<GeneKind>(raw_kind);
+            auto const* desc = registry.lookup(kind_val);
+            if (desc) res.value->descriptor = *desc;
+            else res.value->descriptor.kind = kind_val;
         } else if (key == "schema") {
+            if (saw_schema) {
+                res.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
+                    fp + ": duplicate field 'schema'", {}); return res;
+            }
+            saw_schema = true;
             auto v = r.read_uint64_result();
-            if (v.ok() && v.value) res.value->descriptor.schema_version = static_cast<std::uint32_t>(*v.value);
+            if (v.ok() && v.value) {
+                if (*v.value > std::numeric_limits<std::uint32_t>::max()) {
+                    res.diagnostics.add_error(DiagnosticCode::GSPL_CONSTRAINT_UNSATISFIED,
+                        fp + ": schema version uint32 overflow", {}); return res;
+                }
+                res.value->descriptor.schema_version = static_cast<std::uint32_t>(*v.value);
+            }
         } else if (key == "type") {
+            if (saw_type) {
+                res.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
+                    fp + ": duplicate field 'type'", {}); return res;
+            }
+            saw_type = true;
             auto v = r.read_string_result();
             if (v.ok() && v.value) res.value->descriptor.type_id = std::move(*v.value);
         } else if (key == "source") {
+            if (saw_source) {
+                res.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
+                    fp + ": duplicate field 'source'", {}); return res;
+            }
+            saw_source = true;
             auto v = r.read_string_result();
             if (v.ok() && v.value) res.value->source_module = std::move(*v.value);
         } else if (key == "values") {
@@ -877,29 +997,67 @@ static JsonReadResult<GeneInstance> decode_gene_instance(
                 if (!r.require(':', vfp + ": expected ':'")) break;
                 // Type-tagged format: { t: <tag>, v: <value> }
                 if (r.require('{', vfp + ": expected '{'")) {
+                    bool saw_tag = false, saw_value = false;
                     std::uint32_t tag_val = 0;
                     std::string raw_val;
                     while (r.has_more() && !r.has_error()) {
                         auto tk_res = r.read_string_result();
                         if (!tk_res.ok() || !tk_res.value) break;
-                        if (!r.require(':', json_path(vfp, *tk_res.value) + ": expected ':'")) break;
+                        auto tkfp = json_path(vfp, *tk_res.value);
+                        if (!r.require(':', tkfp + ": expected ':'")) break;
                         if (*tk_res.value == "t") {
+                            if (saw_tag) {
+                                res.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
+                                    tkfp + ": duplicate 't' in gene value wrapper", {});
+                                return res;
+                            }
+                            saw_tag = true;
                             auto tv = r.read_int64_result();
-                            if (tv.ok() && tv.value) tag_val = static_cast<std::uint32_t>(*tv.value);
+                            if (!tv.ok() || !tv.value) {
+                                res.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
+                                    tkfp + ": expected GeneValueTag integer", {});
+                                return res;
+                            }
+                            auto raw_tag = *tv.value;
+                            if (raw_tag < 0 || raw_tag > 5) {
+                                res.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
+                                    tkfp + ": invalid GeneValueTag " + std::to_string(raw_tag), {});
+                                return res;
+                            }
+                            tag_val = static_cast<std::uint32_t>(raw_tag);
                         } else if (*tk_res.value == "v") {
+                            if (saw_value) {
+                                res.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
+                                    tkfp + ": duplicate 'v' in gene value wrapper", {});
+                                return res;
+                            }
+                            saw_value = true;
                             raw_val = r.read_typed_value();
                         } else r.skip_value();
                         if (!r.consume_if(',')) break;
                     }
                     r.require('}', vfp + ": expected '}'");
-                    if (!raw_val.empty()) {
-                        auto gv = json_to_gene_value_result(raw_val, static_cast<GeneValueTag>(tag_val));
-                        if (!gv.ok()) {
-                            res.diagnostics.merge(gv.diagnostics);
-                            return res;
-                        }
-                        res.value->values[vk] = std::move(*gv.value);
+                    if (!saw_tag) {
+                        res.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
+                            vfp + ": missing required 't' (GeneValueTag) in value wrapper", {});
+                        return res;
                     }
+                    if (!saw_value) {
+                        res.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
+                            vfp + ": missing required 'v' (raw value) in value wrapper", {});
+                        return res;
+                    }
+                    if (raw_val.empty()) {
+                        res.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
+                            vfp + ": empty raw gene value", {});
+                        return res;
+                    }
+                    auto gv = json_to_gene_value_result(raw_val, static_cast<GeneValueTag>(tag_val));
+                    if (!gv.ok()) {
+                        res.diagnostics.merge(gv.diagnostics);
+                        return res;
+                    }
+                    res.value->values[vk] = std::move(*gv.value);
                 } else {
                     // Current schema: reject bare-string values (no legacy fallback)
                     r.skip_value();
@@ -917,16 +1075,103 @@ static JsonReadResult<GeneInstance> decode_gene_instance(
 
 } // namespace
 
-// ── Serialization result type ────────────────────────────
-
-struct CanonicalSerializationResult {
-    std::optional<std::string> value;
-    DiagnosticResult diagnostics;
-    [[nodiscard]] bool ok() const noexcept { return value.has_value() && diagnostics.ok(); }
-};
-
-CanonicalSerializationResult to_json_result(CanonicalEntity const& entity);
 std::string CanonicalEntitySerializer::to_json(CanonicalEntity const& entity) {
+    auto result = encode_canonical_entity(entity);
+    if (!result.ok()) {
+        throw std::invalid_argument("to_json: non-finite double value in entity — use to_json_result() for safe access");
+    }
+    return std::move(*result.value);
+}
+
+CanonicalSerializationResult CanonicalEntitySerializer::to_json_result(
+    CanonicalEntity const& entity) {
+    return encode_canonical_entity(entity);
+}
+
+// Pre-scan all doubles for nonfinite values before serialization
+static void validate_double(double val, std::string const& json_path,
+                            CanonicalSerializationResult& result) {
+    if (!std::isfinite(val) && result.ok()) {
+        result.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
+            json_path + ": non-finite double value not allowed", {});
+    }
+}
+
+CanonicalSerializationResult CanonicalEntitySerializer::encode_canonical_entity(
+    CanonicalEntity const& entity) {
+    CanonicalSerializationResult result;
+
+    // Pre-validate all doubles — fail before writing any output
+    for (std::size_t i = 0; i < entity.forms.size(); ++i) {
+        auto const& f = entity.forms[i];
+        auto prefix = "$.forms[" + std::to_string(i) + "]";
+        validate_double(f.collision_scale, prefix + ".collision_scale", result);
+        validate_double(f.ability_envelope, prefix + ".ability_envelope", result);
+    }
+    for (auto const& [name, part] : entity.morphology) {
+        auto prefix = "$.morphology." + name;
+        validate_double(part.x, prefix + ".x", result);
+        validate_double(part.y, prefix + ".y", result);
+        validate_double(part.z, prefix + ".z", result);
+        validate_double(part.size_x, prefix + ".size_x", result);
+        validate_double(part.size_y, prefix + ".size_y", result);
+        validate_double(part.size_z, prefix + ".size_z", result);
+        validate_double(part.rotation_degrees, prefix + ".rotation_degrees", result);
+    }
+    for (auto const& [form_name, parts] : entity.form_morphology_overrides) {
+        for (auto const& [part_name, part] : parts) {
+            auto prefix = "$.form_morphology_overrides." + form_name + "." + part_name;
+            validate_double(part.x, prefix + ".x", result);
+            validate_double(part.y, prefix + ".y", result);
+            validate_double(part.z, prefix + ".z", result);
+            validate_double(part.size_x, prefix + ".size_x", result);
+            validate_double(part.size_y, prefix + ".size_y", result);
+            validate_double(part.size_z, prefix + ".size_z", result);
+            validate_double(part.rotation_degrees, prefix + ".rotation_degrees", result);
+        }
+    }
+    for (std::size_t i = 0; i < entity.abilities.size(); ++i) {
+        auto prefix = "$.abilities[" + std::to_string(i) + "]";
+        validate_double(entity.abilities[i].speed_mm_per_tick, prefix + ".speed_mm_per_tick", result);
+        validate_double(entity.abilities[i].collision_radius_mm, prefix + ".collision_radius_mm", result);
+    }
+    for (std::size_t i = 0; i < entity.storm_abilities.size(); ++i) {
+        auto prefix = "$.storm_abilities[" + std::to_string(i) + "]";
+        validate_double(entity.storm_abilities[i].speed_mm_per_tick, prefix + ".speed_mm_per_tick", result);
+        validate_double(entity.storm_abilities[i].collision_radius_mm, prefix + ".collision_radius_mm", result);
+    }
+    for (std::size_t i = 0; i < entity.bones.size(); ++i) {
+        auto prefix = "$.bones[" + std::to_string(i) + "]";
+        auto const& b = entity.bones[i];
+        validate_double(b.x, prefix + ".x", result);
+        validate_double(b.y, prefix + ".y", result);
+        validate_double(b.z, prefix + ".z", result);
+        validate_double(b.scale_x, prefix + ".scale_x", result);
+        validate_double(b.scale_y, prefix + ".scale_y", result);
+        validate_double(b.length_mm, prefix + ".length_mm", result);
+        validate_double(b.min_rotation, prefix + ".min_rotation", result);
+        validate_double(b.max_rotation, prefix + ".max_rotation", result);
+    }
+    for (std::size_t i = 0; i < entity.sockets.size(); ++i) {
+        auto prefix = "$.sockets[" + std::to_string(i) + "]";
+        auto const& s = entity.sockets[i];
+        validate_double(s.x, prefix + ".x", result);
+        validate_double(s.y, prefix + ".y", result);
+        validate_double(s.z, prefix + ".z", result);
+        validate_double(s.scale_x, prefix + ".scale_x", result);
+        validate_double(s.scale_y, prefix + ".scale_y", result);
+    }
+    for (std::size_t i = 0; i < entity.collision_shapes.size(); ++i) {
+        auto prefix = "$.collision_shapes[" + std::to_string(i) + "]";
+        auto const& cs = entity.collision_shapes[i];
+        validate_double(cs.radius_mm, prefix + ".radius_mm", result);
+        validate_double(cs.offset_x, prefix + ".offset_x", result);
+        validate_double(cs.offset_y, prefix + ".offset_y", result);
+        validate_double(cs.scale_x, prefix + ".scale_x", result);
+        validate_double(cs.scale_y, prefix + ".scale_y", result);
+    }
+    if (!result.diagnostics.ok()) return result;
+
     try {
     std::ostringstream os;
     os << "{\n";
@@ -1194,28 +1439,19 @@ std::string CanonicalEntitySerializer::to_json(CanonicalEntity const& entity) {
     }
     os << "  \"gene_count\": " << entity.genes.size() << "\n";
     os << "}";
-    return os.str();
-    } catch (std::invalid_argument const&) {
-        // Nonfinite double detected — fail with empty string (caller should validate first)
-        return std::string{};
-    }
-}
-
-CanonicalSerializationResult to_json_result(CanonicalEntity const& entity) {
-    CanonicalSerializationResult result;
-    try {
-        // Delegate to existing to_json for now
-        // (will be refactored to return diagnostics directly in a future phase)
-        result.value = CanonicalEntitySerializer::to_json(entity);
+    result.value = os.str();
+    return result;
     } catch (std::invalid_argument const& e) {
+        // Nonfinite double detected — record diagnostic, return nullopt
         result.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
                                      e.what(), {});
+        return result;
     }
-    return result;
 }
 
 CanonicalEntityDeserializeResult CanonicalEntitySerializer::from_json(
-    std::string_view json) {
+    std::string_view json,
+    BoundedJsonConfig config) {
     CanonicalEntityDeserializeResult result;
 
     if (json.empty()) {
@@ -1224,7 +1460,7 @@ CanonicalEntityDeserializeResult CanonicalEntitySerializer::from_json(
         return result;
     }
 
-    BoundedJsonReader r(json);
+    BoundedJsonReader r(json, config);
     if (r.has_error()) {
         result.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
                                      r.error_message(), {});
@@ -1436,6 +1672,27 @@ CanonicalEntityDeserializeResult CanonicalEntitySerializer::from_json(
         return result;
     }
 
+    // Enforce current schema version
+    if (ce.schema_version != "gspl.canonical-entity/1.0") {
+        if (ce.schema_version.empty()) {
+            result.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
+                           "from_json: missing required field 'schema_version'", {});
+        } else {
+            result.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
+                "from_json: unsupported schema version '" + ce.schema_version + "' (expected 'gspl.canonical-entity/1.0')",
+                {});
+        }
+        return result;
+    }
+
+    // Post-deserialization structural validation
+    CanonicalEntityValidator validator;
+    auto validation_diags = validator.validate(ce);
+    if (!validation_diags.ok()) {
+        result.diagnostics.merge(validation_diags);
+        return result;
+    }
+
     result.value = std::move(ce);
     return result;
 }
@@ -1479,7 +1736,8 @@ CanonicalEntityIdentity::CanonicalEntityIdentity(CanonicalEntity const& entity) 
 }
 
 std::string CanonicalEntityIdentity::compute(CanonicalEntity const& entity) const {
-    return CanonicalEntitySerializer::to_json(entity);
+    auto result = CanonicalEntitySerializer::to_json_result(entity);
+    return result.ok() ? *result.value : std::string{};
 }
 
 // ── CanonicalEntityDiff ────────────────────────────────────────────
