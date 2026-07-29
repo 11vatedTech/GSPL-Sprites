@@ -3,6 +3,7 @@
 #include "gspl_sprites/common.hpp"
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <span>
 #include <string>
@@ -49,6 +50,14 @@ struct SkeletalClip {
 [[nodiscard]] ValidationResult validate_skeletal_clip(const SkeletalClip& clip,
                                                       const RigDefinition& rig);
 [[nodiscard]] Transform2d sample_track(const BoneTrack& track, std::uint32_t tick);
+
+struct EvaluatedPose {
+  std::map<std::string, Transform2d, std::less<>> local;
+  std::map<std::string, Transform2d, std::less<>> world;
+};
+[[nodiscard]] EvaluatedPose evaluate_pose(const SkeletalClip& clip,
+                                           const RigDefinition& rig,
+                                           std::uint32_t tick);
 
 enum class Comparison { equal, not_equal, less, less_equal, greater, greater_equal };
 struct AnimationTransition {

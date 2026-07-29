@@ -2110,7 +2110,10 @@ void Canonicalizer::lower_generic_block(GenericBlock const& block, CanonicalEnti
                         auto pd = [&](std::string const& key, double def = 0.0) -> double {
                             auto v = get_key_attr(key);
                             if (v.empty()) return def;
-                            try { return std::stod(v); } catch (...) { return def; }
+                            double result = def;
+                            auto [ptr, ec] = std::from_chars(v.data(), v.data() + v.size(), result);
+                            if (ec != std::errc{}) return def;
+                            return result;
                         };
                         kf.x = pd("x");
                         kf.y = pd("y");

@@ -305,12 +305,23 @@ Projection2dDefinition synthesize_morphology_projection2d(
   std::string pf = std::string(entity_id) + "." + std::string(form_id);
   // Canvas size: 128x128 for legacy compatibility scaling to match expected package dimensions
   constexpr std::int32_t canvas_w = 128, canvas_h = 128;
-  auto draw_ellipse = [](ImageRgba8& img, int cx, int cy, int rx, int ry, std::uint32_t rgba) {
+  // Draw rotated ellipse: transform pixel coords back into ellipse-local space, then check containment
+  auto draw_rotated_ellipse = [](ImageRgba8& img, int cx, int cy, int rx, int ry,
+                                   double rotation_deg, double scale_x, double scale_y,
+                                   std::uint32_t rgba) {
     std::uint8_t r = (rgba >> 24) & 0xFF, g = (rgba >> 16) & 0xFF, b = (rgba >> 8) & 0xFF, a = rgba & 0xFF;
-    for (int y = -ry; y <= ry; ++y) {
-      for (int x = -rx; x <= rx; ++x) {
-        if (x*x * ry*ry + y*y * rx*rx <= rx*rx * ry*ry) {
-          int px = cx + x, py = cy + y;
+    double rad = -rotation_deg * 3.141592653589793 / 180.0;
+    double cos_r = std::cos(rad), sin_r = std::sin(rad);
+    int erx = (std::max)(static_cast<int>(rx * scale_x), 1);
+    int ery = (std::max)(static_cast<int>(ry * scale_y), 1);
+    int bb = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(erx)*erx + static_cast<double>(ery)*ery))) + 1;
+    for (int dy = -bb; dy <= bb; ++dy) {
+      for (int dx = -bb; dx <= bb; ++dx) {
+        // Rotate pixel offset back into ellipse-local space
+        double lx = dx * cos_r - dy * sin_r;
+        double ly = dx * sin_r + dy * cos_r;
+        if (lx*lx / (erx*erx) + ly*ly / (ery*ery) <= 1.0) {
+          int px = cx + dx, py = cy + dy;
           if (px >= 0 && px < (int)img.width && py >= 0 && py < (int)img.height) {
             std::size_t idx = (static_cast<std::size_t>(py) * img.width + static_cast<std::size_t>(px)) * 4;
             img.pixels[idx] = r; img.pixels[idx+1] = g; img.pixels[idx+2] = b; img.pixels[idx+3] = a;
@@ -330,37 +341,17 @@ Projection2dDefinition synthesize_morphology_projection2d(
     return palette.primary;
   };
 
-  // Find a clip by name prefix match
+  // Find a clip: try form-prefixed exact match first, then substring fallback
   auto find_clip = [&](std::string_view name) -> const SkeletalClip* {
+    std::string full = std::string(form_id) + "_" + std::string(name);
+    for (const auto& c : clips) {
+      if (c.id == full) return &c;
+    }
+    // Fallback: substring match (for transform clips like "transform_ascend")
     for (const auto& c : clips) {
       if (c.id.find(name) != std::string::npos) return &c;
     }
     return nullptr;
-  };
-
-  // Evaluate bone track at a given tick, returning x/y offset
-  auto eval_bone_offset = [&](std::string_view bone_id, std::uint32_t tick) -> std::pair<double, double> {
-    for (const auto& clip : clips) {
-      for (const auto& track : clip.tracks) {
-        if (track.bone_id == bone_id && !track.keys.empty()) {
-          // Find the surrounding keyframes and interpolate
-          const BoneKeyframe* prev = nullptr;
-          const BoneKeyframe* next = nullptr;
-          for (const auto& kf : track.keys) {
-            if (kf.tick <= tick) prev = &kf;
-            if (kf.tick >= tick && !next) next = &kf;
-          }
-          if (prev && next && prev != next) {
-            double t = static_cast<double>(tick - prev->tick) / static_cast<double>(next->tick - prev->tick);
-            return {prev->transform.x + (next->transform.x - prev->transform.x) * t,
-                    prev->transform.y + (next->transform.y - prev->transform.y) * t};
-          }
-          if (prev) return {prev->transform.x, prev->transform.y};
-          if (next) return {next->transform.x, next->transform.y};
-        }
-      }
-    }
-    return {0.0, 0.0};
   };
 
   // Build sorted part list: sort by z-depth (back-to-front: lower z drawn first)
@@ -371,54 +362,69 @@ Projection2dDefinition synthesize_morphology_projection2d(
     return a.second.z < b.second.z;
   });
 
-  // Render a single frame with optional bone-driven offsets at a given tick
-  auto render_frame = [&](std::int32_t tick, double global_offset_x, double global_offset_y) -> ImageRgba8 {
+  // Render a single frame using the evaluated pose for a specific clip+tick
+  auto render_frame_posed = [&](const EvaluatedPose& pose) -> ImageRgba8 {
     ImageRgba8 canvas(canvas_w, canvas_h, ColorSpace::srgb, AlphaMode::straight,
                       std::vector<std::uint8_t>(static_cast<std::size_t>(canvas_w) * canvas_h * 4, 0));
     for (const auto& [name, part] : sorted_parts) {
       const bool is_eye_or_ear = (name.find("eye") != std::string::npos ||
                                    name.find("ear") != std::string::npos);
       std::uint32_t color = resolve_color(part, is_eye_or_ear);
-      // Evaluate bone offset for this part's associated bone at current tick
-      auto [bx, by] = eval_bone_offset(name, static_cast<std::uint32_t>(tick));
-      const int pcx = canvas_w / 2 + static_cast<int>((part.x + bx + global_offset_x * 0.5) * 3);
-      const int pcy = canvas_h / 2 - static_cast<int>((part.y + by + global_offset_y * 0.5) * 3);
+      // Look up world transform for the bone bound to this part (by name match)
+      auto wit = pose.world.find(name);
+      double bx = 0, by = 0, brot = 0, bsx = 1.0, bsy = 1.0;
+      if (wit != pose.world.end()) {
+        bx = wit->second.x; by = wit->second.y;
+        brot = wit->second.rotation_degrees;
+        bsx = wit->second.scale_x; bsy = wit->second.scale_y;
+      }
+      const int pcx = canvas_w / 2 + static_cast<int>((part.x + bx) * 3);
+      const int pcy = canvas_h / 2 - static_cast<int>((part.y + by) * 3);
       const int prx = (std::max)(static_cast<int>(part.size_x * 1.5), 2);
       const int pry = (std::max)(static_cast<int>(part.size_y * 1.5), 2);
-      draw_ellipse(canvas, pcx, pcy, prx, pry, color);
+      draw_rotated_ellipse(canvas, pcx, pcy, prx, pry, brot + part.rotation_degrees, bsx, bsy, color);
     }
     return canvas;
   };
 
-  // Use new tick-based render_frame (defined above) for all frame generation
   std::vector<FrameSource> frames;
-  // Find canonical clips for animation-driven frame generation
+
+  // Generate frames for a specific clip: evaluate pose at evenly-spaced ticks
+  auto gen_clip_frames = [&](const SkeletalClip& clip, std::uint32_t count,
+                              std::string_view clip_label, std::uint32_t frame_dur) {
+    for (std::uint32_t i = 0; i < count; ++i) {
+      std::uint32_t tick = clip.duration_ticks > 0 ? (i * clip.duration_ticks / count) : i;
+      auto pose = evaluate_pose(clip, rig, tick);
+      frames.push_back({pf + "." + std::string(clip_label) + "." + std::to_string(i),
+                        render_frame_posed(pose),
+                        canvas_w / 2, canvas_h / 2, frame_dur});
+    }
+  };
+
+  // Find canonical clips
   auto idle_clip = find_clip("idle");
   auto walk_clip = find_clip("locomotion");
   auto attack_clip = find_clip("attack");
   auto hit_clip = find_clip("hit");
   auto transform_clip = find_clip("transform");
 
-  // Helper: generate N frames evenly spaced across a clip's duration
-  auto gen_frames = [&](std::uint32_t count, std::uint32_t duration, std::string_view name, std::uint32_t frame_dur) {
-    for (std::uint32_t i = 0; i < count; ++i) {
-      std::uint32_t tick = duration > 0 ? (i * duration / count) : i;
-      frames.push_back({pf + "." + std::string(name) + "." + std::to_string(i),
-                        render_frame(static_cast<std::int32_t>(tick), 0, 0),
-                        canvas_w / 2, canvas_h / 2, frame_dur});
-    }
-  };
-
-  // Generate frames: 4 idle, 6 walk, 6 attack, 3 hit, 5 transform
-  gen_frames(4, idle_clip ? idle_clip->duration_ticks : 120, "idle", 4);
-  gen_frames(6, walk_clip ? walk_clip->duration_ticks : 48, "walk", 3);
-  gen_frames(6, attack_clip ? attack_clip->duration_ticks : 24, "attack", 2);
-  gen_frames(3, hit_clip ? hit_clip->duration_ticks : 12, "hit", 2);
-  gen_frames(5, transform_clip ? transform_clip->duration_ticks : 40, "transform", 2);
+  // Generate frames: 4 idle, 6 walk, 6 attack, 3 hit, 5 transform = 24 base
+  // + 4 storm_idle, 6 storm_walk, 6 storm_attack, 3 storm_hit = 19 storm = 43 total
+  if (idle_clip) gen_clip_frames(*idle_clip, 4, "idle", 4);
+  else {
+    for (int i = 0; i < 4; ++i) frames.push_back({pf + ".idle." + std::to_string(i),
+      ImageRgba8(canvas_w, canvas_h, ColorSpace::srgb, AlphaMode::straight,
+                 std::vector<std::uint8_t>(static_cast<std::size_t>(canvas_w) * canvas_h * 4, 0)),
+      canvas_w/2, canvas_h/2, 4});
+  }
+  if (walk_clip) gen_clip_frames(*walk_clip, 6, "walk", 3);
+  if (attack_clip) gen_clip_frames(*attack_clip, 6, "attack", 2);
+  if (hit_clip) gen_clip_frames(*hit_clip, 3, "hit", 2);
+  if (transform_clip) gen_clip_frames(*transform_clip, 5, "transform", 2);
 
   for (auto& f : frames) f.frame_hash = compute_frame_hash(f.image);
 
-  // Compile sprite sheet — 28 frames at 128x128 need generous atlas
+  // Compile sprite sheet
   SpriteSheetOptions opts{1024, 2048, 2, false, 0};
   auto sheet = compile_sprite_sheet(frames, opts);
 
