@@ -457,6 +457,7 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json, Bound
     }
 
     bool parsed_any = false;
+    bool saw_ir_version = false, saw_entity_id = false, saw_seed_identity = false;
     std::uint32_t root_schema_version = 0;
 
     while (r.has_more() && !r.has_error()) {
@@ -469,14 +470,20 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json, Bound
         parsed_any = true;
 
         if (key == "ir_version") {
+            if (saw_ir_version) { fail("deserialize: duplicate 'ir_version' in root"); return result; }
+            saw_ir_version = true;
             auto v_opt = read_str("ir_version");
             if (!v_opt) return result;
             ir.ir_version = std::move(*v_opt);
         } else if (key == "entity_id") {
+            if (saw_entity_id) { fail("deserialize: duplicate 'entity_id' in root"); return result; }
+            saw_entity_id = true;
             auto v_opt = read_str("entity_id");
             if (!v_opt) return result;
             ir.entity_id = std::move(*v_opt);
         } else if (key == "seed_identity") {
+            if (saw_seed_identity) { fail("deserialize: duplicate 'seed_identity' in root"); return result; }
+            saw_seed_identity = true;
             auto v_opt = read_str("seed_identity");
             if (!v_opt) return result;
             ir.seed_identity = std::move(*v_opt);
@@ -843,13 +850,14 @@ SpriteIrDeserializeResult IrSerializer::deserialize(std::string_view json, Bound
     // (handled implicitly by the non-repeating nature of the root fields)
 
     // Fail-closed: require valid ir_version, seed_identity, entity_id, and entity
+    if (!saw_ir_version) { fail("deserialize: missing required ir_version"); return result; }
     if (ir.ir_version != "gspl-ir/1.0") {
         fail(("deserialize: unsupported ir_version: " + ir.ir_version).c_str()); return result;
     }
-    if (ir.seed_identity.empty()) {
+    if (!saw_seed_identity || ir.seed_identity.empty()) {
         fail("deserialize: missing required seed_identity"); return result;
     }
-    if (ir.entity_id.empty()) {
+    if (!saw_entity_id || ir.entity_id.empty()) {
         fail("deserialize: missing required entity_id"); return result;
     }
     if (!ir.entity) {
