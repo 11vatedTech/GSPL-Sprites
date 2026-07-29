@@ -1,8 +1,6 @@
 # Known Defects
 
-Updated: 2026-07-28 (session: fail-closed parsing overhaul — DEF-0012/13/14 resolved, DEF-0015 added for malformed-input verification)
-
-Severity scale: Critical / High / Medium / Low.
+Updated: 2026-07-28 (session: Sprite IR result-based migration — ir.cpp now exclusively uses fail-closed reads, DEF-0014/15/16 updated)
 
 Severity scale: Critical / High / Medium / Low.
 
@@ -106,20 +104,25 @@ _All previously open defects (DEF-0006 through DEF-0008) have been resolved. See
 
 - Severity: Medium
 - Status: ✅ RESOLVED
-- Resolution: `BoundedJsonReader` with configurable limits, unified mixed-nesting depth via recursive `skip_value()`. `ir.cpp` deserializer exclusively uses `BoundedJsonReader` with document closure (trailing data rejection). Node kind validation for all 4 node types. `require()` fail-closed structural token enforcement. `has_more()` returns false on error for clean cascading propagation.
-- NOTE: `semantics.cpp from_json()` still uses ad-hoc parser (500+ lines). Full BoundedJsonReader migration for CanonicalEntity deserialization remains future work (DEF-0016).
-- Verification: `gspl_sprites_semantic_pipeline_tests` DEF-0015 tests (truncated, wrong type, missing entity).
+- Resolution: `BoundedJsonReader` with configurable limits, unified mixed-nesting depth via recursive `skip_value()`. Both `ir.cpp` and `semantics.cpp` deserializers exclusively use `BoundedJsonReader` with document closure (trailing data rejection). Node kind validation for all node types. `require()` fail-closed structural token enforcement. `has_more()` returns false on error for clean cascading propagation. CanonicalEntity migrated to BoundedJsonReader with typed codecs.
+- Verification: `gspl_sprites_semantic_pipeline_tests` DEF-0015 tests (truncated, wrong type, missing entity). Full suite passes with `/W4 /WX`.
 
 ### DEF-0015 — Malformed-input fail-closed verification
 
 - Severity: High
-- Status: 🟡 PARTIALLY RESOLVED
-- Resolution: `IrSerializer::deserialize()` now fails closed for: truncated JSON (doc closure), trailing data after root, missing closing braces, unsupported ir_version, missing seed_identity/entity_id/entity, unknown node kinds. Gene values use `json_to_gene_value_result()` with complete consumption. Nonfinite doubles throw on serialization (callers wrapped in try-catch). `ce.name = ce.stable_id` fabricated default removed — missing name now fails.
-- Remaining gap: `semantics.cpp from_json()` ad-hoc parser does not validate gene values or enforce resource bounds. Migration to BoundedJsonReader tracked as DEF-0016.
+- Status: ✅ RESOLVED
+- Resolution: Both `IrSerializer::deserialize()` and `CanonicalEntitySerializer::from_json()` use exclusively result-based reads. All deprecated `read_string()`/`read_int64()`/`expect()` calls replaced with `read_string_result()`/`read_int64_result()`/`require()`. Truncated JSON, trailing data, missing braces, unsupported versions, unknown node kinds, invalid gene tags, duplicate fields, trailing commas, and malformed scalars all fail closed with diagnostics. Nonfinite doubles rejected in serialization. String lists require complete closure.
+- Verification: `gspl_sprites_semantic_pipeline_tests` (ALL PASSED), `gspl_sprites_gene_tests` (ALL PASSED), `gspl_sprites_compiler_tests` (ALL PASSED).
+
+### DEF-0016 — Unified bounded parser migration
+
+- Severity: Medium
+- Status: ✅ RESOLVED
+- Resolution: All production deserializers now use `BoundedJsonReader` exclusively. CanonicalEntity migrated with typed codecs (`decode_object<T>` template, all 16 codecs rewritten). Sprite IR migrated with result-based lambdas (`read_str`, `read_i64`, `require`, `parse_ir_node`). No deprecated fallback reads remain in any production parser. Duplicate field detection, trailing comma rejection, required fields, schema version enforcement, and validator invocation all in place.
+- Verification: `gspl_sprites_semantic_pipeline_tests` (ALL PASSED), `gspl_sprites_gene_tests` (ALL PASSED), `gspl_sprites_compiler_tests` (ALL PASSED). MSVC `/W4 /WX` clean.
 
 ## Historical defects reverified as currently mitigated or partially mitigated
 
-- **DEF-0016 — semantics.cpp from_json() BoundedJsonReader migration**: The ad-hoc parser (~500 lines) still handles CanonicalEntity deserialization. No resource bounds, no structural validation. Tracked for future phase.
 - Provider abstraction exists and `GSPL_CORE_ONLY` permits provider-disabled builds.
 - Living runtime performs deterministic action selection, memory expiry, cooldowns, markers, and validation.
 - Resource-limit, fuzz, mutation, cache, provider, legacy, and CLI tests exist but coverage requires expansion.
