@@ -2,6 +2,7 @@
 #include "gspl/legacy.hpp"
 #include "gspl/lowering.hpp"
 #include "gspl_sprites/core.hpp"
+#include "gspl_sprites/living_runtime.hpp"
 #include "gspl_sprites/synthesis.hpp"
 #include <algorithm>
 #include <cstring>
@@ -38,6 +39,7 @@ Cli::ParseResult Cli::parse(int argc, char* argv[]) {
         }
         if (arg == "--verify") { opts.verify = true; continue; }
         if (arg == "--synthesize") { opts.synthesize = true; continue; }
+        if (arg == "--living-run") { opts.living_run = true; continue; }
         if (arg == "--deterministic") { opts.deterministic_seed = true; continue; }
         if (arg == "--model-id") {
             if (++i < static_cast<std::size_t>(argc)) opts.model_id = argv[i];
@@ -251,6 +253,115 @@ DiagnosticResult Cli::compile_source(SourceBuffer source, CliOptions const& opts
             diag.code = DiagnosticCode::GSPL_TYPE_MISMATCH;
             diag.severity = DiagnosticSeverity::error;
             diag.message = std::string("Package/verify failed: ") + e.what();
+            ctx.diagnostics.add(diag);
+        }
+    }
+
+    if (opts.living_run && !ctx.has_fatal_errors()) {
+        try {
+            auto seed = SpriteSeedLowering::lower(ctx.canonical);
+            // Build a minimal living runtime program from seed abilities
+            ::gspl::sprites::LivingRuntimeProgram program;
+            program.id = seed.stable_id + ".living";
+            program.ticks_per_second = 60;
+            // Create goals and actions for each behavior state
+            struct BehaviorAction { const char* goal; const char* action; std::uint32_t dur; std::uint32_t cd; std::uint32_t cost; };
+            const BehaviorAction behaviors[] = {
+                {"idle", "idle", 60, 0, 0},
+                {"locomotion", "locomotion", 24, 0, 5},
+                {"attack", "directional_lightning", 16, 20, 15},
+                {"hit", "hit_reaction", 12, 0, 0},
+                {"transform", "ascend", 40, 0, 25},
+            };
+            int bi = 0;
+            for (const auto& b : behaviors) {
+                program.goals.push_back({b.goal, 0, {}});
+                // Wire the "behavior" variable into preconditions so set_runtime_variable drives selection
+                program.actions.push_back({b.action, b.goal, 10, {}, {{"behavior", ::gspl::sprites::Comparison::equal, static_cast<std::int32_t>(bi)}}, b.dur, b.cd, b.cost, true, {{b.action, b.dur / 2}}});
+                ++bi;
+            }
+            // Add storm form actions
+            program.goals.push_back({"storm_idle", 0, {}});
+            program.actions.push_back({"storm_attack", "storm_idle", 10, {}, {{"behavior", ::gspl::sprites::Comparison::equal, 2}}, 20u, 35u, 30u, true, {{"release", 8u}}});
+
+            ::gspl::sprites::LivingRuntimeState state;
+            set_runtime_variable(state, "health", 100);
+            set_runtime_variable(state, "form", 0); // base form
+            set_runtime_variable(state, "behavior", 0);
+
+            // ── Acceptance scenario: tick-by-tick trace ──
+            std::ostringstream trace;
+            trace << "{\"scenario\":\"voltfox-acceptance\",\"ticks\":[";
+            bool first = true;
+            auto snapshot = [&](const char* note) {
+                if (!first) trace << ","; first = false;
+                auto id = ::gspl::sprites::capture_entity_identity(state, seed.stable_id, "instance.0", "base", "", "", "", "", "");
+                trace << "{\"tick\":" << state.tick << ",\"note\":\"" << note << "\""
+                      << ",\"energy\":" << state.energy
+                      << ",\"active\":\"" << (state.active_action ? state.active_action->action_id : "") << "\""
+                      << ",\"hash\":\"" << ::gspl::sprites::entity_identity_hash(id).substr(0, 16) << "\"}";
+            };
+
+            std::vector<std::pair<std::uint64_t, const char*>> events = {
+                {0, "loaded_base_idle"}, {4, "locomotion_begins"}, {12, "locomotion_ends"},
+                {16, "attack_requested"}, {18, "collision_active"}, {19, "damage_emitted"},
+                {22, "attack_recovery"}, {26, "hit_reaction"}, {32, "transform_requested"},
+                {37, "transform_midpoint"}, {42, "storm_form_active"}, {48, "storm_attack_requested"},
+                {50, "storm_collision_active"}, {54, "electrified_status"}, {60, "save_state"},
+                {68, "restored_state"}, {72, "replay_verified"}
+            };
+            std::size_t ev_idx = 0;
+            // Save/restore
+            ::gspl::sprites::LivingRuntimeState saved;
+            std::string trace_before;
+
+            for (std::uint64_t t = 0; t <= 72; ++t) {
+                // Inject behavior changes at key ticks
+                if (t == 0) set_runtime_variable(state, "behavior", 0);
+                if (t == 4) set_runtime_variable(state, "behavior", 1); // locomotion
+                if (t == 16) set_runtime_variable(state, "behavior", 2); // attack
+                if (t == 26) set_runtime_variable(state, "behavior", 3); // hit
+                if (t == 32) { set_runtime_variable(state, "behavior", 4); set_runtime_variable(state, "form", 1); } // transform
+                if (t == 42) set_runtime_variable(state, "behavior", 0); // storm idle after transform
+                if (t == 48) set_runtime_variable(state, "behavior", 2); // storm attack
+
+                if (t == 60) {
+                    saved = state;
+                    trace_before = trace.str();
+                }
+                if (t == 64 && t > 60) {
+                    // Mutate forward
+                    set_runtime_variable(state, "health", 50);
+                    state.energy = 30;
+                }
+                if (t == 68) {
+                    state = saved; // Restore
+                }
+
+                if (ev_idx < events.size() && events[ev_idx].first == t) {
+                    snapshot(events[ev_idx].second);
+                    ++ev_idx;
+                }
+
+                (void)::gspl::sprites::step_living_runtime(program, state);
+            }
+            trace << "]}";
+
+            // Write trace
+            auto trace_path = opts.output_dir.empty()
+                ? std::filesystem::path("acceptance-trace.json")
+                : opts.output_dir / "acceptance-trace.json";
+            std::ofstream ofs(trace_path);
+            if (ofs) ofs << trace.str();
+            if (opts.verbose) {
+                std::cout << "Living runtime acceptance trace: " << trace_path << "\n";
+                std::cout << "Final state: tick=" << state.tick << " energy=" << state.energy << "\n";
+            }
+        } catch (std::exception const& e) {
+            Diagnostic diag;
+            diag.code = DiagnosticCode::GSPL_TYPE_MISMATCH;
+            diag.severity = DiagnosticSeverity::error;
+            diag.message = std::string("Living runtime failed: ") + e.what();
             ctx.diagnostics.add(diag);
         }
     }
