@@ -14,7 +14,9 @@
 namespace fs = std::filesystem;
 
 static int failures = 0;
+static int assertions = 0;
 static void check(bool v, const char* msg) {
+  ++assertions;
   if (!v) { std::cerr << "FAIL: " << msg << "\n"; ++failures; }
   else { std::cout << "PASS: " << msg << "\n"; }
 }
@@ -104,15 +106,51 @@ int main() try {
       check(!pkg.seed_identity.empty(), "reconstructed seed_identity");
       check(!pkg.package_identity.empty(), "reconstructed package_identity");
       check(!pkg.seed.stable_id.empty(), "reconstructed seed.stable_id");
+
+      // Verify seed identity matches expected (recorded before object destruction)
+      check(pkg.seed_identity == expected_seed_id, "seed identity matches expected");
+      check(!pkg.seed.abilities.empty(), "seed has abilities");
+      check(!pkg.seed.forms.empty(), "seed has forms");
+      check(!pkg.seed.morphology.empty(), "seed has morphology");
+      check(!pkg.seed.transformations.empty(), "seed has transformations");
+      check(!pkg.seed.collision_shapes.empty(), "seed has collision_shapes");
     }
+  }
+
+  // ── Mutation tests ──
+  {
+    // Mutation 1: corrupt a frame PNG byte
+    auto mut_dir = pkg_dir;
+    mut_dir += "_mut"; fs::remove_all(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
+    // Find first frame PNG and flip a byte
+    for (auto const& e : fs::directory_iterator(mut_dir/"frames")) {
+      if (e.is_regular_file() && e.path().extension() == ".png") {
+        std::fstream f(e.path(), std::ios::binary | std::ios::in | std::ios::out);
+        if (f) { f.seekp(12); f.put(static_cast<char>(0xFF)); f.close(); break; }
+      }
+    }
+    auto mut_verify = gspl::sprites::verify_living_visual_package(mut_dir);
+    check(!mut_verify.ok(), "mutation: corrupted frame PNG fails verification");
+    fs::remove_all(mut_dir);
+
+    // Mutation 2: corrupt seed-identity.txt
+    mut_dir = pkg_dir; mut_dir += "_mut2"; fs::remove_all(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
+    std::ofstream(mut_dir/"seed-identity.txt", std::ios::trunc) << "0000000000000000000000000000000000000000000000000000000000000000";
+    auto mut2_verify = gspl::sprites::verify_living_visual_package(mut_dir);
+    check(!mut2_verify.ok(), "mutation: wrong seed identity fails verification");
+    fs::remove_all(mut_dir);
+
+    // Mutation 3: missing required artifact
+    mut_dir = pkg_dir; mut_dir += "_mut3"; fs::remove_all(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
+    fs::remove(mut_dir/"animations-2d.json");
+    auto mut3_verify = gspl::sprites::verify_living_visual_package(mut_dir);
+    check(!mut3_verify.ok(), "mutation: missing animations-2d fails verification");
+    fs::remove_all(mut_dir);
   }
 
   fs::remove_all(pkg_dir);
 
-  if (failures == 0)
-    std::cout << "\nALL LIVING PACKAGE TESTS PASSED (" << (23+5) << " assertions)\n";
-  else
-    std::cerr << failures << " FAILURES\n";
+  std::cout << "\n=== LIVING PACKAGE TESTS: " << assertions << " assertions, " << failures << " failures ===\n";
   return failures ? 1 : 0;
 
 } catch (std::exception const& e) {

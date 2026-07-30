@@ -1,5 +1,6 @@
 #include "gspl_sprites/package.hpp"
 
+#include "gspl/json.hpp"
 #include "gspl_sprites/core.hpp"
 #include "gspl_sprites/image.hpp"
 #include "gspl_sprites/sprite2d.hpp"
@@ -235,35 +236,368 @@ void lv_validate_input(const LivingVisualPackageInput& in) {
   }
 }
 
-std::string lv_json_str(std::string_view data, std::string_view key) {
-  auto kp = data.find(std::string("\"") + std::string(key) + "\"");
-  if (kp == std::string_view::npos) return {};
-  auto start = data.find('"', kp + key.size() + 2);
-  if (start == std::string_view::npos) return {};
-  auto end = data.find('"', start+1);
-  if (end == std::string_view::npos) return {};
-  return std::string(data.substr(start+1, end-start-1));
+// BoundedJsonReader helpers for manifest/manifest-like parsing
+static std::string lv_rd_str(gspl::BoundedJsonReader& r, std::string_view /*path*/) {
+  auto res = r.read_string_result();
+  if (!res.ok()) throw std::runtime_error("expected string");
+  return std::move(*res.value);
 }
-std::uint32_t lv_json_int(std::string_view data, std::string_view key) {
-  auto kp = data.find(std::string("\"") + std::string(key) + "\"");
-  if (kp == std::string_view::npos) return 0;
-  auto start = kp + key.size() + 2;
-  while (start < data.size() && (data[start] == ':' || data[start] == ' ' || data[start] == '\t')) ++start;
-  std::uint32_t v=0;
-  while (start < data.size() && data[start] >= '0' && data[start] <= '9') { v = v*10 + (data[start]-'0'); ++start; }
-  return v;
+static std::uint32_t lv_rd_u32(gspl::BoundedJsonReader& r, std::string_view /*path*/) {
+  auto res = r.read_uint32_result();
+  if (!res.ok()) return 0;
+  return *res.value;
 }
-SpriteSeed lv_parse_seed_json(std::string_view json) {
-  SpriteSeed s;
-  s.stable_id = lv_json_str(json, "id");
-  s.name = lv_json_str(json, "name");
-  s.schema = lv_json_str(json, "schema");
-  s.classification = lv_json_str(json, "classification");
-  auto colors_pos = json.find("\"colors\"");
-  if (colors_pos != std::string_view::npos) {
-    s.primary_color = lv_json_str(json.substr(colors_pos), "primary");
-    s.accent_color = lv_json_str(json.substr(colors_pos), "accent");
+static std::uint64_t lv_rd_u64(gspl::BoundedJsonReader& r, std::string_view /*path*/) {
+  auto res = r.read_uint64_result();
+  if (!res.ok()) return 0;
+  return *res.value;
+}
+static double lv_rd_dbl(gspl::BoundedJsonReader& r, std::string_view /*path*/) {
+  auto res = r.read_double_result();
+  if (!res.ok()) return 0.0;
+  return *res.value;
+}
+static bool lv_rd_bool(gspl::BoundedJsonReader& r, std::string_view /*path*/) {
+  auto res = r.read_bool_result();
+  return res.ok() && *res.value;
+}
+
+// Fast key reader: read string into key buffer, match against expected value.
+// Used for manifest-level introspection (not deep seed parsing).
+static std::string lv_manifest_str(std::string_view json, std::string_view key) {
+  gspl::BoundedJsonConfig cfg{};
+  gspl::BoundedJsonReader r(json, cfg);
+  if (!r.begin_object("manifest")) return {};
+  while (r.has_more() && !r.has_error()) {
+    auto k = r.read_string_result();
+    if (!k.ok()) break;
+    if (!r.require(':', "manifest")) break;
+    if (*k.value == key) {
+      auto v = r.read_string_result();
+      return v.ok() ? std::move(*v.value) : std::string{};
+    }
+    r.skip_value();
+    r.record_object_member("manifest");
+    if (!r.next_object_member("manifest")) break;
   }
+  return {};
+}
+static std::uint32_t lv_manifest_int(std::string_view json, std::string_view key) {
+  gspl::BoundedJsonConfig cfg{};
+  gspl::BoundedJsonReader r(json, cfg);
+  if (!r.begin_object("manifest")) return 0;
+  while (r.has_more() && !r.has_error()) {
+    auto k = r.read_string_result();
+    if (!k.ok()) break;
+    if (!r.require(':', "manifest")) break;
+    if (*k.value == key) {
+      auto v = r.read_uint32_result();
+      return v.ok() ? *v.value : 0;
+    }
+    r.skip_value();
+    r.record_object_member("manifest");
+    if (!r.next_object_member("manifest")) break;
+  }
+  return 0;
+}
+// Full SpriteSeed deserialization from canonical JSON using BoundedJsonReader
+static SpriteSeed lv_parse_seed_json(std::string_view json) {
+  SpriteSeed s;
+  gspl::BoundedJsonConfig cfg{}; cfg.max_object_members = 8192; cfg.max_array_length = 8192;
+  gspl::BoundedJsonReader r(json, cfg);
+  if (!r.begin_object("seed")) return s;
+  while (r.has_more() && !r.has_error()) {
+    auto key = r.read_string_result();
+    if (!key.ok()) break;
+    if (!r.require(':', "seed")) break;
+    auto const& k = *key.value;
+    if (k == "id")              { s.stable_id = lv_rd_str(r, "seed.id"); }
+    else if (k == "name")       { s.name = lv_rd_str(r, "seed.name"); }
+    else if (k == "schema")     { s.schema = lv_rd_str(r, "seed.schema"); }
+    else if (k == "classification") { s.classification = lv_rd_str(r, "seed.classification"); }
+    else if (k == "rights")     { auto v = lv_rd_str(r, "seed.rights"); if (v == "ORIGINAL_USER_CREATION") s.rights = RightsClass::original_user_creation; else if (v == "USER_OWNED_REFERENCE") s.rights = RightsClass::user_owned; else if (v == "LICENSED_REFERENCE") s.rights = RightsClass::licensed; else if (v == "PUBLIC_DOMAIN") s.rights = RightsClass::public_domain; else if (v == "PERMISSIVELY_LICENSED") s.rights = RightsClass::permissive; }
+    else if (k == "entropyRoot") { s.entropy_root = lv_rd_u64(r, "seed.entropyRoot"); }
+    else if (k == "colors") {
+      if (!r.begin_object("seed.colors")) break;
+      while (r.has_more() && !r.has_error()) {
+        auto ck = r.read_string_result(); if (!ck.ok()) break;
+        if (!r.require(':', "seed.colors")) break;
+        if (*ck.value == "primary")     s.primary_color = lv_rd_str(r, "seed.colors.primary");
+        else if (*ck.value == "accent") s.accent_color = lv_rd_str(r, "seed.colors.accent");
+        else if (*ck.value == "stormPrimary") s.storm_primary_color = lv_rd_str(r, "seed.colors.stormPrimary");
+        else if (*ck.value == "stormAccent")  s.storm_accent_color = lv_rd_str(r, "seed.colors.stormAccent");
+        else if (*ck.value == "emissive")     s.emissive_color = lv_rd_str(r, "seed.colors.emissive");
+        else if (*ck.value == "aura")         s.aura_color = lv_rd_str(r, "seed.colors.aura");
+        else r.skip_value();
+        r.record_object_member("seed.colors");
+        if (!r.next_object_member("seed.colors")) break;
+      }
+      r.end_object("seed.colors");
+    }
+    else if (k == "abilities") {
+      if (!r.begin_array("seed.abilities")) break;
+      while (r.has_more() && !r.has_error()) {
+        if (!r.begin_object("ability")) break;
+        AbilitySeed a;
+        while (r.has_more() && !r.has_error()) {
+          auto ak = r.read_string_result(); if (!ak.ok()) break;
+          if (!r.require(':', "ability")) break;
+          if (*ak.value == "id") a.id = lv_rd_str(r, "ability.id");
+          else if (*ak.value == "effect") a.effect = lv_rd_str(r, "ability.effect");
+          else if (*ak.value == "cost") a.cost = lv_rd_u32(r, "ability.cost");
+          else if (*ak.value == "cooldownTicks") a.cooldown_ticks = lv_rd_u32(r, "ability.cooldownTicks");
+          else if (*ak.value == "activeTicks") a.active_ticks = lv_rd_u32(r, "ability.activeTicks");
+          else r.skip_value();
+          r.record_object_member("ability");
+          if (!r.next_object_member("ability")) break;
+        }
+        r.end_object("ability");
+        if (!a.id.empty()) s.abilities.push_back(std::move(a));
+        r.record_array_element("seed.abilities");
+        if (!r.next_array_element("seed.abilities")) break;
+      }
+      r.end_array("seed.abilities");
+    }
+    else if (k == "stormAbilities") {
+      if (!r.begin_array("seed.stormAbilities")) break;
+      while (r.has_more() && !r.has_error()) {
+        if (!r.begin_object("stormAbility")) break;
+        AbilitySeed a;
+        while (r.has_more() && !r.has_error()) {
+          auto ak = r.read_string_result(); if (!ak.ok()) break;
+          if (!r.require(':', "stormAbility")) break;
+          if (*ak.value == "id") a.id = lv_rd_str(r, "stormAbility.id");
+          else if (*ak.value == "effect") a.effect = lv_rd_str(r, "stormAbility.effect");
+          else if (*ak.value == "cost") a.cost = lv_rd_u32(r, "stormAbility.cost");
+          else if (*ak.value == "cooldownTicks") a.cooldown_ticks = lv_rd_u32(r, "stormAbility.cooldownTicks");
+          else if (*ak.value == "activeTicks") a.active_ticks = lv_rd_u32(r, "stormAbility.activeTicks");
+          else r.skip_value();
+          r.record_object_member("stormAbility");
+          if (!r.next_object_member("stormAbility")) break;
+        }
+        r.end_object("stormAbility");
+        if (!a.id.empty()) s.storm_abilities.push_back(std::move(a));
+        r.record_array_element("seed.stormAbilities");
+        if (!r.next_array_element("seed.stormAbilities")) break;
+      }
+      r.end_array("seed.stormAbilities");
+    }
+    else if (k == "forms") {
+      if (!r.begin_array("seed.forms")) break;
+      while (r.has_more() && !r.has_error()) {
+        if (!r.begin_object("form")) break;
+        FormSeed fs;
+        while (r.has_more() && !r.has_error()) {
+          auto fk = r.read_string_result(); if (!fk.ok()) break;
+          if (!r.require(':', "form")) break;
+          if (*fk.value == "id") fs.id = lv_rd_str(r, "form.id");
+          else if (*fk.value == "transformationIds") {
+            if (!r.begin_array("form.transformationIds")) break;
+            while (r.has_more() && !r.has_error()) {
+              fs.transformation_ids.push_back(lv_rd_str(r, "form.transformationId"));
+              r.record_array_element("form.transformationIds");
+              if (!r.next_array_element("form.transformationIds")) break;
+            }
+            r.end_array("form.transformationIds");
+          } else r.skip_value();
+          r.record_object_member("form");
+          if (!r.next_object_member("form")) break;
+        }
+        r.end_object("form");
+        if (!fs.id.empty()) s.forms.push_back(std::move(fs));
+        r.record_array_element("seed.forms");
+        if (!r.next_array_element("seed.forms")) break;
+      }
+      r.end_array("seed.forms");
+    }
+    else if (k == "formAttributes") {
+      if (!r.begin_object("seed.formAttributes")) break;
+      while (r.has_more() && !r.has_error()) {
+        auto fid = r.read_string_result(); if (!fid.ok()) break;
+        if (!r.require(':', "seed.formAttributes")) break;
+        if (!r.begin_object("formAttr")) break;
+        FormAttributes fa;
+        while (r.has_more() && !r.has_error()) {
+          auto fk = r.read_string_result(); if (!fk.ok()) break;
+          if (!r.require(':', "formAttr")) break;
+          if (*fk.value == "maxHealth") fa.max_health = lv_rd_u32(r, "formAttr.maxHealth");
+          else if (*fk.value == "resourceCapacity") fa.resource_capacity = lv_rd_u32(r, "formAttr.resourceCapacity");
+          else if (*fk.value == "collisionScale") fa.collision_scale = lv_rd_dbl(r, "formAttr.collisionScale");
+          else if (*fk.value == "abilityEnvelope") fa.ability_envelope = lv_rd_dbl(r, "formAttr.abilityEnvelope");
+          else r.skip_value();
+          r.record_object_member("formAttr");
+          if (!r.next_object_member("formAttr")) break;
+        }
+        r.end_object("formAttr");
+        s.form_attributes[std::move(*fid.value)] = fa;
+        r.record_object_member("seed.formAttributes");
+        if (!r.next_object_member("seed.formAttributes")) break;
+      }
+      r.end_object("seed.formAttributes");
+    }
+    else if (k == "transformations") {
+      if (!r.begin_array("seed.transformations")) break;
+      while (r.has_more() && !r.has_error()) {
+        if (!r.begin_object("transformation")) break;
+        TransformationSeed ts;
+        while (r.has_more() && !r.has_error()) {
+          auto tk = r.read_string_result(); if (!tk.ok()) break;
+          if (!r.require(':', "transformation")) break;
+          if (*tk.value == "id") ts.id = lv_rd_str(r, "transformation.id");
+          else if (*tk.value == "fromForm") ts.from_form = lv_rd_str(r, "transformation.fromForm");
+          else if (*tk.value == "toForm") ts.to_form = lv_rd_str(r, "transformation.toForm");
+          else if (*tk.value == "triggerCondition") ts.trigger_condition = lv_rd_str(r, "transformation.triggerCondition");
+          else if (*tk.value == "durationTicks") ts.duration_ticks = lv_rd_u32(r, "transformation.durationTicks");
+          else if (*tk.value == "resourceCost") ts.resource_cost = lv_rd_u32(r, "transformation.resourceCost");
+          else r.skip_value();
+          r.record_object_member("transformation");
+          if (!r.next_object_member("transformation")) break;
+        }
+        r.end_object("transformation");
+        if (!ts.id.empty()) s.transformations.push_back(std::move(ts));
+        r.record_array_element("seed.transformations");
+        if (!r.next_array_element("seed.transformations")) break;
+      }
+      r.end_array("seed.transformations");
+    }
+    else if (k == "collisions") {
+      if (!r.begin_object("seed.collisions")) break;
+      while (r.has_more() && !r.has_error()) {
+        auto ck = r.read_string_result(); if (!ck.ok()) break;
+        if (!r.require(':', "seed.collisions")) break;
+        if (*ck.value == "shapes") {
+          if (!r.begin_array("seed.collisions.shapes")) break;
+          while (r.has_more() && !r.has_error()) {
+            if (!r.begin_object("collisionShape")) break;
+            CollisionShape cs;
+            while (r.has_more() && !r.has_error()) {
+              auto sk = r.read_string_result(); if (!sk.ok()) break;
+              if (!r.require(':', "collisionShape")) break;
+              if (*sk.value == "id") cs.id = lv_rd_str(r, "cs.id");
+              else if (*sk.value == "attachmentId") cs.bone_id = lv_rd_str(r, "cs.attachmentId");
+              else if (*sk.value == "kind") { auto v = lv_rd_str(r, "cs.kind"); cs.kind = (v == "CIRCLE") ? CollisionKind::circle : CollisionKind::axis_aligned_box; }
+              else if (*sk.value == "offsetX") cs.offset_x = lv_rd_dbl(r, "cs.offsetX");
+              else if (*sk.value == "offsetY") cs.offset_y = lv_rd_dbl(r, "cs.offsetY");
+              else if (*sk.value == "extentX") cs.extent_x = lv_rd_dbl(r, "cs.extentX");
+              else if (*sk.value == "extentY") cs.extent_y = lv_rd_dbl(r, "cs.extentY");
+              else r.skip_value();
+              r.record_object_member("collisionShape");
+              if (!r.next_object_member("collisionShape")) break;
+            }
+            r.end_object("collisionShape");
+            if (!cs.id.empty()) s.collision_shapes.push_back(std::move(cs));
+            r.record_array_element("seed.collisions.shapes");
+            if (!r.next_array_element("seed.collisions.shapes")) break;
+          }
+          r.end_array("seed.collisions.shapes");
+        } else if (*ck.value == "windows") {
+          if (!r.begin_array("seed.collisions.windows")) break;
+          while (r.has_more() && !r.has_error()) {
+            if (!r.begin_object("collisionWindow")) break;
+            CollisionWindow cw;
+            while (r.has_more() && !r.has_error()) {
+              auto wk = r.read_string_result(); if (!wk.ok()) break;
+              if (!r.require(':', "collisionWindow")) break;
+              if (*wk.value == "shapeId") cw.shape_id = lv_rd_str(r, "cw.shapeId");
+              else if (*wk.value == "abilityId") cw.ability_id = lv_rd_str(r, "cw.abilityId");
+              else if (*wk.value == "startTick") cw.start_tick = lv_rd_u32(r, "cw.startTick");
+              else if (*wk.value == "endTick") cw.end_tick = lv_rd_u32(r, "cw.endTick");
+              else if (*wk.value == "dealsDamage") cw.deals_damage = lv_rd_bool(r, "cw.dealsDamage");
+              else r.skip_value();
+              r.record_object_member("collisionWindow");
+              if (!r.next_object_member("collisionWindow")) break;
+            }
+            r.end_object("collisionWindow");
+            if (!cw.shape_id.empty()) s.collision_windows.push_back(std::move(cw));
+            r.record_array_element("seed.collisions.windows");
+            if (!r.next_array_element("seed.collisions.windows")) break;
+          }
+          r.end_array("seed.collisions.windows");
+        } else r.skip_value();
+        r.record_object_member("seed.collisions");
+        if (!r.next_object_member("seed.collisions")) break;
+      }
+      r.end_object("seed.collisions");
+    }
+    else if (k == "morphology") {
+      if (!r.begin_object("seed.morphology")) break;
+      while (r.has_more() && !r.has_error()) {
+        auto part_id = r.read_string_result(); if (!part_id.ok()) break;
+        if (!r.require(':', "seed.morphology")) break;
+        if (!r.begin_object("morphPart")) break;
+        MorphologyPart mp;
+        while (r.has_more() && !r.has_error()) {
+          auto mk = r.read_string_result(); if (!mk.ok()) break;
+          if (!r.require(':', "morphPart")) break;
+          if (*mk.value == "boneId") mp.bone_id = lv_rd_str(r, "mp.boneId");
+          else if (*mk.value == "color") mp.color = lv_rd_str(r, "mp.color");
+          else if (*mk.value == "parent") mp.parent = lv_rd_str(r, "mp.parent");
+          else if (*mk.value == "primitive") mp.primitive = lv_rd_str(r, "mp.primitive");
+          else if (*mk.value == "semanticRole") mp.semantic_role = lv_rd_str(r, "mp.semanticRole");
+          else if (*mk.value == "x") mp.x = lv_rd_dbl(r, "mp.x");
+          else if (*mk.value == "y") mp.y = lv_rd_dbl(r, "mp.y");
+          else if (*mk.value == "z") mp.z = lv_rd_dbl(r, "mp.z");
+          else if (*mk.value == "sizeX") mp.size_x = lv_rd_dbl(r, "mp.sizeX");
+          else if (*mk.value == "sizeY") mp.size_y = lv_rd_dbl(r, "mp.sizeY");
+          else if (*mk.value == "sizeZ") mp.size_z = lv_rd_dbl(r, "mp.sizeZ");
+          else if (*mk.value == "rotationDegrees") mp.rotation_degrees = lv_rd_dbl(r, "mp.rotationDegrees");
+          else if (*mk.value == "zOrder") mp.z_order = static_cast<std::int32_t>(lv_rd_u32(r, "mp.zOrder"));
+          else if (*mk.value == "emissive") mp.emissive = lv_rd_bool(r, "mp.emissive");
+          else if (*mk.value == "electricalMarking") mp.electrical_marking = lv_rd_bool(r, "mp.electricalMarking");
+          else r.skip_value();
+          r.record_object_member("morphPart");
+          if (!r.next_object_member("morphPart")) break;
+        }
+        r.end_object("morphPart");
+        if (part_id.ok() && !part_id.value->empty()) s.morphology[std::move(*part_id.value)] = mp;
+        r.record_object_member("seed.morphology");
+        if (!r.next_object_member("seed.morphology")) break;
+      }
+      r.end_object("seed.morphology");
+    }
+    else if (k == "runtime") {
+      if (!r.begin_object("seed.runtime")) break;
+      if (!s.runtime) s.runtime = RuntimeAttributes{};  // preserve intents parsed earlier
+      while (r.has_more() && !r.has_error()) {
+        auto rk = r.read_string_result(); if (!rk.ok()) break;
+        if (!r.require(':', "seed.runtime")) break;
+        if (*rk.value == "aggression") s.runtime->aggression = lv_rd_u32(r, "rt.aggression");
+        else if (*rk.value == "curiosity") s.runtime->curiosity = lv_rd_u32(r, "rt.curiosity");
+        else if (*rk.value == "energy") s.runtime->energy = lv_rd_u32(r, "rt.energy");
+        else if (*rk.value == "loyalty") s.runtime->loyalty = lv_rd_u32(r, "rt.loyalty");
+        else r.skip_value();
+        r.record_object_member("seed.runtime");
+        if (!r.next_object_member("seed.runtime")) break;
+      }
+      r.end_object("seed.runtime");
+    }
+    else if (k == "animationIntents") {
+      if (!r.begin_array("seed.animationIntents")) break;
+      if (!s.runtime) s.runtime = RuntimeAttributes{};
+      while (r.has_more() && !r.has_error()) {
+        if (!r.begin_object("animIntent")) break;
+        std::string behavior, clip;
+        while (r.has_more() && !r.has_error()) {
+          auto ak2 = r.read_string_result(); if (!ak2.ok()) break;
+          if (!r.require(':', "animIntent")) break;
+          if (*ak2.value == "behavior") behavior = lv_rd_str(r, "ai.behavior");
+          else if (*ak2.value == "clip") clip = lv_rd_str(r, "ai.clip");
+          else r.skip_value();
+          r.record_object_member("animIntent");
+          if (!r.next_object_member("animIntent")) break;
+        }
+        r.end_object("animIntent");
+        if (!behavior.empty()) s.runtime->animation_intents.emplace_back(std::move(behavior), std::move(clip));
+        r.record_array_element("seed.animationIntents");
+        if (!r.next_array_element("seed.animationIntents")) break;
+      }
+      r.end_array("seed.animationIntents");
+    }
+    else { r.skip_value(); }
+    r.record_object_member("seed");
+    if (!r.next_object_member("seed")) break;
+  }
+  r.end_object("seed");
   return s;
 }
 
@@ -472,26 +806,47 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     if (!std::filesystem::exists(package_path) || !std::filesystem::is_directory(package_path))
       { add("LV_READ_NO_DIR", "package path not a directory"); return result; }
     auto manifest_bytes = lv_read(package_path/"manifest.json", limits.max_manifest_bytes);
-    auto entity_id = lv_json_str(manifest_bytes, "entityId");
-    auto stored_pkg_id = lv_json_str(manifest_bytes, "packageIdentity");
+    auto entity_id = lv_manifest_str(manifest_bytes, "entityId");
+    auto stored_pkg_id = lv_manifest_str(manifest_bytes, "packageIdentity");
     if (entity_id.empty()) { add("LV_READ_NO_ENTITY", "manifest missing entityId"); return result; }
 
+    // Load and parse seed using proper JSON parsing of the wrapper
     auto seed_wrapper = lv_read(package_path/"seed.json", limits.max_artifact_bytes);
-    auto seed_data_pos = seed_wrapper.find("\"data\":");
-    std::string_view seed_json = seed_wrapper;
-    if (seed_data_pos != std::string_view::npos) {
-      seed_json = seed_wrapper.substr(seed_data_pos + 7);
-      if (!seed_json.empty() && seed_json.back() == '}') seed_json.remove_suffix(1);
+    std::string seed_json;
+    {
+      gspl::BoundedJsonConfig cfg{};
+      gspl::BoundedJsonReader wr(seed_wrapper, cfg);
+      if (wr.begin_object("seed-wrapper")) {
+        while (wr.has_more() && !wr.has_error()) {
+          auto wk = wr.read_string_result(); if (!wk.ok()) break;
+          if (!wr.require(':', "seed-wrapper")) break;
+          if (*wk.value == "data") {
+            seed_json = wr.read_typed_value();
+          } else if (*wk.value == "schema") { wr.skip_value(); }
+          else { wr.skip_value(); }
+          wr.record_object_member("seed-wrapper");
+          if (!wr.next_object_member("seed-wrapper")) break;
+        }
+        wr.end_object("seed-wrapper");
+      }
     }
+    if (seed_json.empty()) { add("LV_READ_NO_DATA", "seed wrapper missing data field"); return result; }
     auto seed = lv_parse_seed_json(seed_json);
     if (seed.stable_id.empty()) seed.stable_id = entity_id;
+    auto computed_seed_id = sha256(seed_json);
+    auto manifest_seed_id = lv_manifest_str(manifest_bytes, "seedIdentity");
 
     LoadedLivingVisualPackage pkg;
     pkg.schema = std::string(kSchemaLivingVisualPackage);
     pkg.entity_id = entity_id;
-    pkg.seed_identity = sha256(std::string(seed_json));
+    pkg.seed_identity = computed_seed_id;
     pkg.package_identity = stored_pkg_id;
     pkg.seed = std::move(seed);
+
+    // Verify seed identity matches
+    if (!manifest_seed_id.empty() && manifest_seed_id != computed_seed_id)
+      add("LV_READ_SEED_MISMATCH", "seed identity mismatch: manifest vs computed");
+
     result.value = std::move(pkg);
   } catch (std::exception const& e) { add("LV_READ_ERROR", e.what()); }
   return result;
@@ -510,18 +865,16 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
     auto manifest_bytes = lv_read(package_path/"manifest.json", 4ULL*1024*1024);
 
     // Verify identity version
-    auto ident_ver = lv_json_str(manifest_bytes, "identityVersion");
+    auto ident_ver = lv_manifest_str(manifest_bytes, "identityVersion");
     if (ident_ver.empty()) add("LV_VERIFY_NO_IDENT_VER", "manifest missing identityVersion");
     else if (ident_ver != kIdentityPreimageVersion) add("LV_VERIFY_BAD_IDENT_VER", "unsupported identityVersion: "+ident_ver);
 
     // Verify package identity: recompute from preimage
-    // Manifest = {"packageIdentity":"...","format":...}
-    // Preimage = kIdentityPreimageVersion + "\n" + {"format":...}
     auto pkg_id_start = manifest_bytes.find("\"packageIdentity\"");
     if (pkg_id_start == std::string_view::npos) {
       add("LV_VERIFY_NO_PKG_ID", "manifest missing packageIdentity");
     } else {
-      auto stored_pkg_id = lv_json_str(manifest_bytes, "packageIdentity");
+      auto stored_pkg_id = lv_manifest_str(manifest_bytes, "packageIdentity");
       if (stored_pkg_id.size() != 64) add("LV_VERIFY_BAD_PKG_ID_LEN", "packageIdentity not 64 hex chars");
       else if (!lowercase_sha256(stored_pkg_id)) add("LV_VERIFY_BAD_PKG_ID_FMT", "packageIdentity not lowercase hex");
       auto colon_pos = manifest_bytes.find(':', pkg_id_start);
@@ -536,8 +889,85 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
         add("LV_VERIFY_PKG_ID", "package identity mismatch");
     }
 
+    // Verify per-artifact file existence and SHA-256 from manifest
+    result.frame_count = lv_manifest_int(manifest_bytes, "frameCount");
+    result.clip_count = lv_manifest_int(manifest_bytes, "clipCount");
+    result.sample_count = lv_manifest_int(manifest_bytes, "sampleCount");
+    result.event_count = lv_manifest_int(manifest_bytes, "eventCount");
+
+    if (result.frame_count != 48) add("LV_VERIFY_FRAME_COUNT", "expected 48 frames");
+    if (result.clip_count != 9) add("LV_VERIFY_CLIP_COUNT", "expected 9 clips");
+    if (result.sample_count != 48) add("LV_VERIFY_SAMPLE_COUNT", "expected 48 samples");
+
+    // Verify manifest artifacts: parse artifacts array, check each file exists and SHA-256 matches
+    {
+      auto art_start = manifest_bytes.find("\"artifacts\"");
+      if (art_start != std::string_view::npos) {
+        gspl::BoundedJsonConfig cfg{};
+        gspl::BoundedJsonReader mr(manifest_bytes, cfg);
+        if (mr.begin_object("manifest")) {
+          while (mr.has_more() && !mr.has_error()) {
+            auto mk = mr.read_string_result(); if (!mk.ok()) break;
+            if (!mr.require(':', "manifest")) break;
+            if (*mk.value == "artifacts") {
+              if (!mr.begin_array("manifest.artifacts")) break;
+              std::set<std::string> declared;
+              while (mr.has_more() && !mr.has_error()) {
+                if (!mr.begin_object("artifact")) break;
+                std::string path, hash;
+                while (mr.has_more() && !mr.has_error()) {
+                  auto ak = mr.read_string_result(); if (!ak.ok()) break;
+                  if (!mr.require(':', "artifact")) break;
+                  if (*ak.value == "path") path = lv_rd_str(mr, "artifact.path");
+                  else if (*ak.value == "sha256") hash = lv_rd_str(mr, "artifact.sha256");
+                  else mr.skip_value();
+                  mr.record_object_member("artifact");
+                  if (!mr.next_object_member("artifact")) break;
+                }
+                mr.end_object("artifact");
+                if (!path.empty()) {
+                  if (!declared.insert(path).second) add("LV_VERIFY_DUP_PATH", "duplicate artifact path: "+path);
+                  else {
+                    auto artifact_path = package_path/path;
+                    if (!std::filesystem::is_regular_file(artifact_path))
+                      add("LV_VERIFY_MISSING_FILE", "declared artifact missing: "+path);
+                    else if (!hash.empty()) {
+                      try {
+                        auto file_bytes = lv_read(artifact_path, 512ULL*1024*1024);
+                        auto file_hash = sha256(file_bytes);
+                        if (file_hash != hash)
+                          add("LV_VERIFY_HASH_MISMATCH", "artifact hash mismatch: "+path);
+                      } catch (...) { add("LV_VERIFY_READ_ERR", "cannot read artifact: "+path); }
+                    }
+                  }
+                }
+                mr.record_array_element("manifest.artifacts");
+                if (!mr.next_array_element("manifest.artifacts")) break;
+              }
+              mr.end_array("manifest.artifacts");
+
+              // Check for undeclared files
+              if (options.require_no_undeclared_files && std::filesystem::exists(package_path/"frames")) {
+                for (auto const& e : std::filesystem::recursive_directory_iterator(package_path)) {
+                  if (e.is_regular_file() && !e.is_symlink()) {
+                    auto rel = e.path().lexically_relative(package_path).generic_string();
+                    if (rel != "manifest.json" && !declared.contains(rel))
+                      add("LV_VERIFY_UNDECLARED", "undeclared file: "+rel);
+                  }
+                }
+              }
+            } else mr.skip_value();
+            mr.record_object_member("manifest");
+            if (!mr.next_object_member("manifest")) break;
+          }
+          mr.end_object("manifest");
+        }
+      }
+    }
+
+    // Required artifact presence check
     static constexpr std::array required = {
-      "seed.json", "seed-identity.txt", "manifest.json",
+      "seed.json", "seed-identity.txt",
       "source-skeletal-animations.json", "animations-2d.json",
       "frame-samples.json", "animation-events.json",
       "pose-hashes.json", "frame-hashes.json",
@@ -549,26 +979,23 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
     for (auto r : required)
       if (!std::filesystem::exists(package_path/r)) add("LV_VERIFY_MISSING", "missing: "+std::string(r));
 
-    result.frame_count = lv_json_int(manifest_bytes, "frameCount");
-    result.clip_count = lv_json_int(manifest_bytes, "clipCount");
-    result.sample_count = lv_json_int(manifest_bytes, "sampleCount");
-    result.event_count = lv_json_int(manifest_bytes, "eventCount");
+    // Seed identity verification
+    if (std::filesystem::exists(package_path/"seed-identity.txt")) {
+      auto seed_id_bytes = lv_read(package_path/"seed-identity.txt", 256);
+      seed_id_bytes = seed_id_bytes.substr(0, seed_id_bytes.find_last_not_of(" \t\n\r")+1);
+      auto manifest_seed_id = lv_manifest_str(manifest_bytes, "seedIdentity");
+      if (!manifest_seed_id.empty() && manifest_seed_id != seed_id_bytes)
+        add("LV_VERIFY_SEED_ID", "seed identity mismatch: manifest vs seed-identity.txt");
+      result.seed_identity = std::string(seed_id_bytes);
+    }
 
-    if (result.frame_count != 48) add("LV_VERIFY_FRAME_COUNT", "expected 48 frames");
-    if (result.clip_count != 9) add("LV_VERIFY_CLIP_COUNT", "expected 9 clips");
-    if (result.sample_count != 48) add("LV_VERIFY_SAMPLE_COUNT", "expected 48 samples");
-
-    auto seed_id_bytes = lv_read(package_path/"seed-identity.txt", 256);
-    seed_id_bytes = seed_id_bytes.substr(0, seed_id_bytes.find_last_not_of(" \t\n\r")+1);
-    auto manifest_seed_id = lv_json_str(manifest_bytes, "seedIdentity");
-    if (manifest_seed_id != seed_id_bytes) add("LV_VERIFY_SEED_ID", "seed identity mismatch");
-
+    // Frame file count check
     if (std::filesystem::exists(package_path/"frames")) {
       std::uint32_t actual_frames = 0;
       for (auto const& e : std::filesystem::directory_iterator(package_path/"frames"))
         if (e.is_regular_file() && e.path().extension() == ".png") ++actual_frames;
       if (actual_frames != result.frame_count)
-        add("LV_VERIFY_FRAME_FILES", "frame file count mismatch");
+        add("LV_VERIFY_FRAME_FILES", "frame file count mismatch: expected "+std::to_string(result.frame_count)+" got "+std::to_string(actual_frames));
     }
   } catch (std::exception const& e) { add("LV_VERIFY_ERROR", e.what()); }
   return result;
