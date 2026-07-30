@@ -20,6 +20,16 @@ static void check(bool v, const char* msg) {
   if (!v) { std::cerr << "FAIL: " << msg << "\n"; ++failures; }
   else { std::cout << "PASS: " << msg << "\n"; }
 }
+static std::string read_file_bytes(std::filesystem::path const& p, std::uint64_t max_bytes) {
+  std::ifstream in(p, std::ios::binary | std::ios::ate);
+  if (!in) throw std::runtime_error("cannot open: " + p.string());
+  auto sz = static_cast<std::uint64_t>(in.tellg());
+  if (sz > max_bytes) throw std::runtime_error("file too large: " + p.string());
+  in.seekg(0, std::ios::beg);
+  std::string out(static_cast<std::size_t>(sz), '\0');
+  in.read(out.data(), static_cast<std::streamsize>(sz));
+  return out;
+}
 
 std::string load_source() {
   fs::path src(GSPL_SPRITES_SOURCE_DIR);
@@ -161,33 +171,107 @@ int main() try {
 
   // ── Mutation tests ──
   {
-    // Mutation 1: corrupt a frame PNG byte
-    auto mut_dir = pkg_dir;
-    mut_dir += "_mut"; fs::remove_all(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
-    // Find first frame PNG and flip a byte
-    for (auto const& e : fs::directory_iterator(mut_dir/"frames")) {
-      if (e.is_regular_file() && e.path().extension() == ".png") {
-        std::fstream f(e.path(), std::ios::binary | std::ios::in | std::ios::out);
-        if (f) { f.seekp(12); f.put(static_cast<char>(0xFF)); f.close(); break; }
+    // M1: corrupt a frame PNG byte
+    {
+      auto mut_dir = pkg_dir; mut_dir += "_m1"; fs::remove_all(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
+      for (auto const& e : fs::directory_iterator(mut_dir/"frames")) {
+        if (e.is_regular_file() && e.path().extension() == ".png") {
+          std::fstream f(e.path(), std::ios::binary | std::ios::in | std::ios::out);
+          if (f) { f.seekp(12); f.put(static_cast<char>(0xFF)); f.close(); break; }
+        }
       }
+      check(!gspl::sprites::verify_living_visual_package(mut_dir).ok(), "M1: corrupted frame PNG fails");
+      fs::remove_all(mut_dir);
     }
-    auto mut_verify = gspl::sprites::verify_living_visual_package(mut_dir);
-    check(!mut_verify.ok(), "mutation: corrupted frame PNG fails verification");
-    fs::remove_all(mut_dir);
-
-    // Mutation 2: corrupt seed-identity.txt
-    mut_dir = pkg_dir; mut_dir += "_mut2"; fs::remove_all(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
-    std::ofstream(mut_dir/"seed-identity.txt", std::ios::trunc) << "0000000000000000000000000000000000000000000000000000000000000000";
-    auto mut2_verify = gspl::sprites::verify_living_visual_package(mut_dir);
-    check(!mut2_verify.ok(), "mutation: wrong seed identity fails verification");
-    fs::remove_all(mut_dir);
-
-    // Mutation 3: missing required artifact
-    mut_dir = pkg_dir; mut_dir += "_mut3"; fs::remove_all(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
-    fs::remove(mut_dir/"animations-2d.json");
-    auto mut3_verify = gspl::sprites::verify_living_visual_package(mut_dir);
-    check(!mut3_verify.ok(), "mutation: missing animations-2d fails verification");
-    fs::remove_all(mut_dir);
+    // M2: corrupt seed-identity.txt
+    {
+      auto mut_dir = pkg_dir; mut_dir += "_m2"; fs::remove_all(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
+      std::ofstream(mut_dir/"seed-identity.txt", std::ios::trunc) << "0000000000000000000000000000000000000000000000000000000000000000";
+      check(!gspl::sprites::verify_living_visual_package(mut_dir).ok(), "M2: wrong seed identity fails");
+      fs::remove_all(mut_dir);
+    }
+    // M3: missing required artifact
+    {
+      auto mut_dir = pkg_dir; mut_dir += "_m3"; fs::remove_all(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
+      fs::remove(mut_dir/"animations-2d.json");
+      check(!gspl::sprites::verify_living_visual_package(mut_dir).ok(), "M3: missing animations-2d fails");
+      fs::remove_all(mut_dir);
+    }
+    // M4: change frames.json schema to wrong value
+    {
+      auto mut_dir = pkg_dir; mut_dir += "_m4"; fs::remove_all(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
+      auto fm_bytes = read_file_bytes(mut_dir/"frames.json", 512ULL*1024*1024);
+      std::string fm(fm_bytes.begin(), fm_bytes.end());
+      auto pos = fm.find("gspl.frames-2d/0.1");
+      if (pos != std::string::npos) fm.replace(pos, 17, "bad-schema/0.0");
+      std::ofstream(mut_dir/"frames.json", std::ios::trunc | std::ios::binary).write(fm.data(), fm.size());
+      check(!gspl::sprites::verify_living_visual_package(mut_dir).ok(), "M4: wrong frames schema fails");
+      fs::remove_all(mut_dir);
+    }
+    // M5: delete a frame PNG
+    {
+      auto mut_dir = pkg_dir; mut_dir += "_m5"; fs::remove_all(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
+      for (auto const& e : fs::directory_iterator(mut_dir/"frames")) {
+        if (e.is_regular_file() && e.path().extension() == ".png") { fs::remove(e.path()); break; }
+      }
+      check(!gspl::sprites::verify_living_visual_package(mut_dir).ok(), "M5: missing frame PNG fails");
+      fs::remove_all(mut_dir);
+    }
+    // M6: change a frame hash in frames.json
+    {
+      auto mut_dir = pkg_dir; mut_dir += "_m6"; fs::remove_all(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
+      auto fm_bytes = read_file_bytes(mut_dir/"frames.json", 512ULL*1024*1024);
+      std::string fm(fm_bytes.begin(), fm_bytes.end());
+      auto pos = fm.find("\"frame_hash\":\"");
+      if (pos != std::string::npos) fm.replace(pos+14, 64, std::string(64, '0'));
+      std::ofstream(mut_dir/"frames.json", std::ios::trunc | std::ios::binary).write(fm.data(), fm.size());
+      check(!gspl::sprites::verify_living_visual_package(mut_dir).ok(), "M6: wrong frame hash fails");
+      fs::remove_all(mut_dir);
+    }
+    // M7: delete a sample from frame-samples.json
+    {
+      auto mut_dir = pkg_dir; mut_dir += "_m7"; fs::remove_all(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
+      auto fs_bytes = read_file_bytes(mut_dir/"frame-samples.json", 512ULL*1024*1024);
+      std::string fs_s(fs_bytes.begin(), fs_bytes.end());
+      auto start = fs_s.find("{\"clip_id\"");
+      if (start != std::string::npos) {
+        auto end = fs_s.find("}", start) + 1;
+        if (fs_s[end] == ',') ++end;
+        fs_s.erase(start, end - start);
+      }
+      std::ofstream(mut_dir/"frame-samples.json", std::ios::trunc | std::ios::binary).write(fs_s.data(), fs_s.size());
+      check(!gspl::sprites::verify_living_visual_package(mut_dir).ok(), "M7: deleted sample fails");
+      fs::remove_all(mut_dir);
+    }
+    // M8: change an event frame_id
+    {
+      auto mut_dir = pkg_dir; mut_dir += "_m8"; fs::remove_all(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
+      auto ev_bytes = read_file_bytes(mut_dir/"animation-events.json", 512ULL*1024*1024);
+      std::string ev(ev_bytes.begin(), ev_bytes.end());
+      auto pos = ev.find("\"frame_id\":\"");
+      if (pos != std::string::npos) ev.replace(pos+12, 4, "XXXX");
+      std::ofstream(mut_dir/"animation-events.json", std::ios::trunc | std::ios::binary).write(ev.data(), ev.size());
+      check(!gspl::sprites::verify_living_visual_package(mut_dir).ok(), "M8: wrong event frame_id fails");
+      fs::remove_all(mut_dir);
+    }
+    // M9: add undeclared file
+    {
+      auto mut_dir = pkg_dir; mut_dir += "_m9"; fs::remove_all(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
+      std::ofstream(mut_dir/"extra.dat") << "undeclared";
+      check(!gspl::sprites::verify_living_visual_package(mut_dir).ok(), "M9: undeclared file fails");
+      fs::remove_all(mut_dir);
+    }
+    // M10: corrupt manifest artifact hash
+    {
+      auto mut_dir = pkg_dir; mut_dir += "_m10"; fs::remove_all(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
+      auto mf_bytes = read_file_bytes(mut_dir/"manifest.json", 4ULL*1024*1024);
+      std::string mf(mf_bytes.begin(), mf_bytes.end());
+      auto pos = mf.find("\"sha256\":\"");
+      if (pos != std::string::npos) mf.replace(pos+10, 64, std::string(64, '0'));
+      std::ofstream(mut_dir/"manifest.json", std::ios::trunc | std::ios::binary).write(mf.data(), mf.size());
+      check(!gspl::sprites::verify_living_visual_package(mut_dir).ok(), "M10: corrupt manifest hash fails");
+      fs::remove_all(mut_dir);
+    }
   }
 
   fs::remove_all(pkg_dir);

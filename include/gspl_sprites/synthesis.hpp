@@ -130,9 +130,10 @@ struct GeneratedFrameSample {
 struct GeneratedAnimationEvent {
   std::string clip_id;
   std::string event_id;
-  std::uint32_t authored_tick;
-  std::uint32_t frame_index;
+  std::uint32_t authored_tick{};
+  std::uint32_t frame_index{};
   std::string frame_id;
+  std::uint32_t mapped_source_tick{};
 };
 
 /* ── Living Animation 2D: entity-level synthesis producing exactly

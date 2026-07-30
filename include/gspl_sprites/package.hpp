@@ -43,6 +43,7 @@ inline constexpr std::string_view kSchemaPoseHashes               = "gspl.pose-h
 inline constexpr std::string_view kSchemaFrameHashes              = "gspl.frame-hashes/0.1";
 inline constexpr std::string_view kSchemaChannelMaps              = "gspl.channel-maps/0.1";
 inline constexpr std::string_view kSchemaCollisions2d             = "gspl.collisions-2d/0.1";
+inline constexpr std::string_view kSchemaFrames2d                   = "gspl.frames-2d/0.1";
 inline constexpr std::string_view kSchemaEffectiveMorphology      = "gspl.effective-morphology/0.1";
 inline constexpr std::string_view kSchemaTransformationMorphologies = "gspl.transformation-morphologies/0.1";
 inline constexpr std::string_view kSchemaSpriteSheet              = "gspl.sprite-sheet/0.1";
