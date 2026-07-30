@@ -1455,7 +1455,7 @@ LivingAnimation2dBuildResult synthesize_living_animation2d(const SpriteSeed& see
         std::uint32_t tick = clip->duration_ticks > 0
           ? (clip->looping
               ? (i * clip->duration_ticks / count)
-              : (count > 1 ? static_cast<std::uint32_t>((i * (clip->duration_ticks - 1ull) + (count - 2) / 2) / (count - 1)) : 0u))
+              : (count > 1 ? static_cast<std::uint32_t>(std::round(static_cast<double>(i) * static_cast<double>(clip->duration_ticks - 1) / static_cast<double>(count - 1))) : 0u))
           : i;
         auto pr = evaluate_pose(*clip, rig, tick);
         if (pr.ok()) {
@@ -1465,7 +1465,10 @@ LivingAnimation2dBuildResult synthesize_living_animation2d(const SpriteSeed& see
                                 canvas_w / 2, canvas_h / 2, dur});
           // Record frame sample
           std::string sample_clip_id = pf + "." + clip_name;
-          std::string pose_str = std::to_string(pr.value->world.size());
+          std::ostringstream pose_os;
+          for (auto const& [bid, bt] : pr.value->world)
+            pose_os << bid << ':' << bt.x << ',' << bt.y << ',' << bt.rotation_degrees << ',' << bt.scale_x << ',' << bt.scale_y << ';';
+          std::string pose_str = sha256(pose_os.str()).substr(0, 16);
           result.samples.push_back({sample_clip_id, frame_id, i, tick, pose_str});
         }
       }
@@ -1483,7 +1486,9 @@ LivingAnimation2dBuildResult synthesize_living_animation2d(const SpriteSeed& see
     std::string tpf = entity_id + ".transform";
     if (tclip) {
       for (std::uint32_t i = 0; i < 10; ++i) {
-        std::uint32_t tick = tclip->duration_ticks > 0 ? (i * tclip->duration_ticks / 10) : i;
+        std::uint32_t tick = tclip->duration_ticks > 0
+          ? static_cast<std::uint32_t>(std::round(static_cast<double>(i) * static_cast<double>(tclip->duration_ticks - 1) / 9.0))
+          : i;
         // Interpolate between base and storm morphology for transformation
         auto t_morph = base_morph;
         double blend = static_cast<double>(i) / 9.0;
@@ -1557,7 +1562,10 @@ LivingAnimation2dBuildResult synthesize_living_animation2d(const SpriteSeed& see
           result.transformation_frames.push_back({tframe_id,
             render_morph(t_morph, *pr.value, t_pal), canvas_w / 2, canvas_h / 2, 2});
           // Record frame sample
-          std::string pose_str = std::to_string(pr.value->world.size());
+          std::ostringstream pose_os;
+          for (auto const& [bid, bt] : pr.value->world)
+            pose_os << bid << ':' << bt.x << ',' << bt.y << ',' << bt.rotation_degrees << ',' << bt.scale_x << ',' << bt.scale_y << ';';
+          std::string pose_str = sha256(pose_os.str()).substr(0, 16);
           result.samples.push_back({tpf, tframe_id, i, tick, pose_str});
         }
       }
@@ -1606,28 +1614,44 @@ LivingAnimation2dBuildResult synthesize_living_animation2d(const SpriteSeed& see
       }
       durs.push_back(2);
     }
-    // Map authored clip events to frame indices using retained schedule
+    // Map authored clip events to frame indices using retained samples schedule
     std::vector<AnimationEvent> events;
     if (skeletal_clip) {
       for (auto const& [ev_name, ev_tick] : skeletal_clip->events) {
-        std::uint32_t fi = skeletal_clip->duration_ticks > 0
-            ? (ev_tick * entry.output_frame_count / skeletal_clip->duration_ticks)
-            : 0;
-        if (fi < entry.output_frame_count) {
+        // Search samples for this clip's schedule
+        std::string geclip_id;
+        if (entry.semantic_role != "transformation") {
+          geclip_id = std::string(pf) + "." + role;
+        } else {
+          geclip_id = std::string(entity_id) + ".transform";
+        }
+        // Find the sample matching this tick (exact, or first after)
+        std::uint32_t fi = entry.output_frame_count - 1; // default to last
+        std::string geframe_id;
+        for (auto const& smp : result.samples) {
+          if (smp.clip_id == geclip_id) {
+            if (smp.source_tick == ev_tick) {
+              fi = smp.frame_index;
+              geframe_id = smp.frame_id;
+              break;
+            }
+            if (smp.source_tick > ev_tick && smp.frame_index < fi) {
+              fi = smp.frame_index;
+              geframe_id = smp.frame_id;
+            }
+          }
+        }
+        // If no sample found after event tick, use last sample (valid endpoint)
+        if (geframe_id.empty()) {
+          for (auto const& smp : result.samples) {
+            if (smp.clip_id == geclip_id && smp.frame_index == entry.output_frame_count - 1) {
+              geframe_id = smp.frame_id;
+              break;
+            }
+          }
+        }
+        if (fi < entry.output_frame_count && !geframe_id.empty()) {
           events.push_back({ev_name, fi});
-          // Also record as GeneratedAnimationEvent
-          std::string geframe_id;
-          if (entry.semantic_role != "transformation") {
-            geframe_id = std::string(pf) + "." + role + "." + std::to_string(fi);
-          } else {
-            geframe_id = std::string(entity_id) + ".transform." + std::to_string(fi);
-          }
-          std::string geclip_id;
-          if (entry.semantic_role != "transformation") {
-            geclip_id = std::string(pf) + "." + role;
-          } else {
-            geclip_id = std::string(entity_id) + ".transform";
-          }
           result.generated_events.push_back({geclip_id, ev_name, ev_tick, fi, geframe_id});
         }
       }

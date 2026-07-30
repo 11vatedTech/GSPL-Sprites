@@ -148,7 +148,7 @@ std::string canonical_identity_payload(CanonicalEntity const& entity) {
         append_key_value(out, "rotation_degrees", part.rotation_degrees);
         append_key_value(out, "emissive", part.emissive);
         append_key_value(out, "electrical_marking", part.electrical_marking);
-        if (part.z_order != 0) append_key_value(out, "z_order", static_cast<std::uint32_t>(part.z_order));
+        if (part.z_order != 0) append_key_value(out, "z_order", part.z_order);
     }
     out << "};";
 
