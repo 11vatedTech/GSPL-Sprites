@@ -317,6 +317,28 @@ JsonReadResult<std::uint32_t> BoundedJsonReader::read_uint32_result() {
     return result;
 }
 
+JsonReadResult<std::int32_t> BoundedJsonReader::read_int32_result() {
+    JsonReadResult<std::int32_t> result;
+    auto int_res = read_int64_result();
+    if (!int_res.ok()) {
+        result.diagnostics = std::move(int_res.diagnostics);
+        return result;
+    }
+    auto val = *int_res.value;
+    if (val < static_cast<std::int64_t>(INT32_MIN)) {
+        result.diagnostics.add_error(DiagnosticCode::GSPL_LEX_NUMERIC_OVERFLOW,
+                                     "int32 underflow", {});
+        return result;
+    }
+    if (val > static_cast<std::int64_t>(INT32_MAX)) {
+        result.diagnostics.add_error(DiagnosticCode::GSPL_LEX_NUMERIC_OVERFLOW,
+                                     "int32 overflow", {});
+        return result;
+    }
+    result.value = static_cast<std::int32_t>(val);
+    return result;
+}
+
 // ── Whitespace ────────────────────────────────────────────
 
 void BoundedJsonReader::skip_ws() {

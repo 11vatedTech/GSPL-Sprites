@@ -134,6 +134,7 @@ public:
 
     // Typed uint32 read with checked narrowing
     JsonReadResult<std::uint32_t> read_uint32_result();
+    JsonReadResult<std::int32_t> read_int32_result();
 
 private:
     std::string_view src_;

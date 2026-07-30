@@ -28,6 +28,24 @@ struct CanonicalPart {
     bool electrical_marking{};
 };
 
+struct CanonicalMorphologyPartOverride {
+    std::string part_id;
+    std::optional<double> x;
+    std::optional<double> y;
+    std::optional<double> z;
+    std::optional<double> size_x;
+    std::optional<double> size_y;
+    std::optional<double> size_z;
+    std::optional<double> rotation_degrees;
+    std::optional<std::string> color;
+    std::optional<std::string> bone_id;
+    std::optional<std::string> primitive;
+    std::optional<std::string> semantic_role;
+    std::optional<std::int32_t> z_order;
+    std::optional<bool> emissive;
+    std::optional<bool> electrical_marking;
+};
+
 struct CanonicalAbility {
     std::string id;
     std::string effect;
@@ -162,7 +180,7 @@ struct CanonicalEntity {
     /* PRESERVED */ std::vector<CanonicalForm> forms;
     /* PRESERVED */ std::vector<CanonicalTransformation> transformations;
     /* PRESERVED */ std::map<std::string, CanonicalPart, std::less<>> morphology;
-    /* PRESERVED */ std::map<std::string, std::map<std::string, CanonicalPart, std::less<>>, std::less<>> form_morphology_overrides;
+    /* PRESERVED */ std::map<std::string, std::map<std::string, CanonicalMorphologyPartOverride, std::less<>>, std::less<>> form_morphology_overrides;
     /* PRESERVED */ std::vector<CanonicalAbility> abilities;
     /* PRESERVED */ std::vector<CanonicalAbility> storm_abilities;
     /* PRESERVED */ std::vector<CanonicalSkeletalBone> bones;

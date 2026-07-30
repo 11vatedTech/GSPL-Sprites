@@ -54,9 +54,28 @@ SpriteIrLowering::Result SpriteIrLowering::lower(CanonicalEntity const& entity) 
     // Lower morphology
     for (auto const& [name, part] : entity.morphology)
         ir.morphology[name] = lower_part(part);
-    for (auto const& [form_name, overrides] : entity.form_morphology_overrides)
-        for (auto const& [name, part] : overrides)
-            ir.form_morphology_overrides[form_name][name] = lower_part(part);
+    for (auto const& [form_name, overrides] : entity.form_morphology_overrides) {
+        for (auto const& [name, part] : overrides) {
+            // Merge override with base part, then lower
+            auto base_it = ir.morphology.find(name);
+            gspl::sprites::MorphologyPart merged = (base_it != ir.morphology.end()) ? base_it->second : gspl::sprites::MorphologyPart{};
+            if (part.x) merged.x = *part.x;
+            if (part.y) merged.y = *part.y;
+            if (part.z) merged.z = *part.z;
+            if (part.size_x) merged.size_x = *part.size_x;
+            if (part.size_y) merged.size_y = *part.size_y;
+            if (part.size_z) merged.size_z = *part.size_z;
+            if (part.color) merged.color = *part.color;
+            if (part.rotation_degrees) merged.rotation_degrees = *part.rotation_degrees;
+            if (part.bone_id) merged.bone_id = *part.bone_id;
+            if (part.primitive) merged.primitive = *part.primitive;
+            if (part.semantic_role) merged.semantic_role = *part.semantic_role;
+            if (part.z_order) merged.z_order = *part.z_order;
+            if (part.emissive) merged.emissive = *part.emissive;
+            if (part.electrical_marking) merged.electrical_marking = *part.electrical_marking;
+            ir.form_morphology_overrides[form_name][name] = std::move(merged);
+        }
+    }
 
     // Lower rig (bones + sockets)
     if (!entity.bones.empty() || !entity.sockets.empty()) {
@@ -378,8 +397,25 @@ gspl::sprites::SpriteSeed SpriteSeedLowering::lower(CanonicalEntity const& entit
         seed.morphology[name] = lower_part(part);
 
     for (auto const& [form_name, overrides] : entity.form_morphology_overrides) {
-        for (auto const& [name, part] : overrides)
-            seed.form_morphology_overrides[form_name][name] = lower_part(part);
+        for (auto const& [name, part] : overrides) {
+            auto base_it = seed.morphology.find(name);
+            gspl::sprites::MorphologyPart merged = (base_it != seed.morphology.end()) ? base_it->second : gspl::sprites::MorphologyPart{};
+            if (part.x) merged.x = *part.x;
+            if (part.y) merged.y = *part.y;
+            if (part.z) merged.z = *part.z;
+            if (part.size_x) merged.size_x = *part.size_x;
+            if (part.size_y) merged.size_y = *part.size_y;
+            if (part.size_z) merged.size_z = *part.size_z;
+            if (part.color) merged.color = *part.color;
+            if (part.rotation_degrees) merged.rotation_degrees = *part.rotation_degrees;
+            if (part.bone_id) merged.bone_id = *part.bone_id;
+            if (part.primitive) merged.primitive = *part.primitive;
+            if (part.semantic_role) merged.semantic_role = *part.semantic_role;
+            if (part.z_order) merged.z_order = *part.z_order;
+            if (part.emissive) merged.emissive = *part.emissive;
+            if (part.electrical_marking) merged.electrical_marking = *part.electrical_marking;
+            seed.form_morphology_overrides[form_name][name] = std::move(merged);
+        }
     }
 
     // Lower rig (bones + sockets)

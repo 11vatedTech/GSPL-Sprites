@@ -270,18 +270,17 @@ std::string canonical_identity_payload(CanonicalEntity const& entity) {
         append_key_value(out, "form", form_name);
         out << "parts{";
         for (auto const& [part_name, part] : parts) {
-            append_key_value(out, "name", part_name);
-            append_key_value(out, "parent", part.parent);
-            append_key_value(out, "x", part.x);
-            append_key_value(out, "y", part.y);
-            append_key_value(out, "z", part.z);
-            append_key_value(out, "size_x", part.size_x);
-            append_key_value(out, "size_y", part.size_y);
-            append_key_value(out, "size_z", part.size_z);
-            append_key_value(out, "color", part.color);
-            append_key_value(out, "rotation_degrees", part.rotation_degrees);
-            append_key_value(out, "emissive", part.emissive);
-            append_key_value(out, "electrical_marking", part.electrical_marking);
+            append_key_value(out, "part_id", part.part_id);
+            if (part.x) append_key_value(out, "x", *part.x);
+            if (part.y) append_key_value(out, "y", *part.y);
+            if (part.z) append_key_value(out, "z", *part.z);
+            if (part.size_x) append_key_value(out, "size_x", *part.size_x);
+            if (part.size_y) append_key_value(out, "size_y", *part.size_y);
+            if (part.size_z) append_key_value(out, "size_z", *part.size_z);
+            if (part.color) append_key_value(out, "color", *part.color);
+            if (part.rotation_degrees) append_key_value(out, "rotation_degrees", *part.rotation_degrees);
+            if (part.emissive) append_key_value(out, "emissive", *part.emissive);
+            if (part.electrical_marking) append_key_value(out, "electrical_marking", *part.electrical_marking);
         }
         out << "};";
     }
@@ -570,6 +569,29 @@ static JsonReadResult<T> decode_object(BoundedJsonReader& r,
         } \
     } while(0)
 
+static JsonReadResult<CanonicalMorphologyPartOverride> decode_canonical_override(
+    BoundedJsonReader& r, std::string const& path) {
+    return decode_object<CanonicalMorphologyPartOverride>(r, path, {},
+        [](std::string const& key, std::string const& /*fp*/,
+           CanonicalMorphologyPartOverride& c, DiagnosticResult& diags, BoundedJsonReader& rr) {
+            if (key == "x") { auto v = rr.read_double_result(); if (!v.ok()) { diags.merge(v.diagnostics); return; } if (v.value) c.x = *v.value; return; }
+            if (key == "y") { auto v = rr.read_double_result(); if (!v.ok()) { diags.merge(v.diagnostics); return; } if (v.value) c.y = *v.value; return; }
+            if (key == "z") { auto v = rr.read_double_result(); if (!v.ok()) { diags.merge(v.diagnostics); return; } if (v.value) c.z = *v.value; return; }
+            if (key == "size_x") { auto v = rr.read_double_result(); if (!v.ok()) { diags.merge(v.diagnostics); return; } if (v.value) c.size_x = *v.value; return; }
+            if (key == "size_y") { auto v = rr.read_double_result(); if (!v.ok()) { diags.merge(v.diagnostics); return; } if (v.value) c.size_y = *v.value; return; }
+            if (key == "size_z") { auto v = rr.read_double_result(); if (!v.ok()) { diags.merge(v.diagnostics); return; } if (v.value) c.size_z = *v.value; return; }
+            if (key == "rotation_degrees") { auto v = rr.read_double_result(); if (!v.ok()) { diags.merge(v.diagnostics); return; } if (v.value) c.rotation_degrees = *v.value; return; }
+            if (key == "color") { auto v = rr.read_string_result(); if (!v.ok()) { diags.merge(v.diagnostics); return; } if (v.value) c.color = std::move(*v.value); return; }
+            if (key == "bone_id") { auto v = rr.read_string_result(); if (!v.ok()) { diags.merge(v.diagnostics); return; } if (v.value) c.bone_id = std::move(*v.value); return; }
+            if (key == "primitive") { auto v = rr.read_string_result(); if (!v.ok()) { diags.merge(v.diagnostics); return; } if (v.value) c.primitive = std::move(*v.value); return; }
+            if (key == "semantic_role") { auto v = rr.read_string_result(); if (!v.ok()) { diags.merge(v.diagnostics); return; } if (v.value) c.semantic_role = std::move(*v.value); return; }
+            if (key == "z_order") { auto v = rr.read_int32_result(); if (!v.ok()) { diags.merge(v.diagnostics); return; } if (v.value) c.z_order = *v.value; return; }
+            if (key == "emissive") { auto v = rr.read_bool_result(); if (!v.ok()) { diags.merge(v.diagnostics); return; } if (v.value) c.emissive = *v.value; return; }
+            if (key == "electrical_marking") { auto v = rr.read_bool_result(); if (!v.ok()) { diags.merge(v.diagnostics); return; } if (v.value) c.electrical_marking = *v.value; return; }
+            rr.skip_value();
+        });
+}
+
 static JsonReadResult<CanonicalPart> decode_canonical_part(
     BoundedJsonReader& r, std::string const& path) {
     return decode_object<CanonicalPart>(r, path, {},
@@ -589,7 +611,7 @@ static JsonReadResult<CanonicalPart> decode_canonical_part(
             DECODE_STRING_FIELD(rr, key, fp, c, bone_id, diags);
             DECODE_STRING_FIELD(rr, key, fp, c, primitive, diags);
             DECODE_STRING_FIELD(rr, key, fp, c, semantic_role, diags);
-            if (key == "z_order") { auto v = rr.read_uint32_result(); if (!v.ok()) { diags.merge(v.diagnostics); return; } if (v.value) c.z_order = static_cast<std::int32_t>(*v.value); return; }
+            if (key == "z_order") { auto v = rr.read_int32_result(); if (!v.ok()) { diags.merge(v.diagnostics); return; } if (v.value) c.z_order = *v.value; return; }
             rr.skip_value();
         });
 }
@@ -1011,13 +1033,13 @@ CanonicalSerializationResult CanonicalEntitySerializer::encode_canonical_entity(
     for (auto const& [form_name, parts] : entity.form_morphology_overrides) {
         for (auto const& [part_name, part] : parts) {
             auto prefix = "$.form_morphology_overrides." + form_name + "." + part_name;
-            validate_double(part.x, prefix + ".x", result);
-            validate_double(part.y, prefix + ".y", result);
-            validate_double(part.z, prefix + ".z", result);
-            validate_double(part.size_x, prefix + ".size_x", result);
-            validate_double(part.size_y, prefix + ".size_y", result);
-            validate_double(part.size_z, prefix + ".size_z", result);
-            validate_double(part.rotation_degrees, prefix + ".rotation_degrees", result);
+            if (part.x) validate_double(*part.x, prefix + ".x", result);
+            if (part.y) validate_double(*part.y, prefix + ".y", result);
+            if (part.z) validate_double(*part.z, prefix + ".z", result);
+            if (part.size_x) validate_double(*part.size_x, prefix + ".size_x", result);
+            if (part.size_y) validate_double(*part.size_y, prefix + ".size_y", result);
+            if (part.size_z) validate_double(*part.size_z, prefix + ".size_z", result);
+            if (part.rotation_degrees) validate_double(*part.rotation_degrees, prefix + ".rotation_degrees", result);
         }
     }
     for (std::size_t i = 0; i < entity.abilities.size(); ++i) {
@@ -1157,21 +1179,23 @@ CanonicalSerializationResult CanonicalEntitySerializer::encode_canonical_entity(
         for (auto const& [part_name, part] : parts) {
             if (!first_part) os << ", ";
             first_part = false;
-            os << "\"" << canonical_escape(part_name) << "\":{"
-               << "\"parent\":\"" << canonical_escape(part.parent) << "\""
-               << ",\"x\":" << part.x << ",\"y\":" << part.y << ",\"z\":" << part.z
-               << ",\"size_x\":" << part.size_x << ",\"size_y\":" << part.size_y << ",\"size_z\":" << part.size_z
-               << ",\"color\":\"" << canonical_escape(part.color) << "\""
-               << ",\"rotation_degrees\":" << part.rotation_degrees
-               << ",\"emissive\":" << (part.emissive ? "true" : "false")
-               << ",\"electrical_marking\":" << (part.electrical_marking ? "true" : "false")
-               << ",\"z_order\":" << part.z_order;
-            if (!part.bone_id.empty())
-               os << ",\"bone_id\":\"" << canonical_escape(part.bone_id) << "\"";
-            if (!part.primitive.empty())
-               os << ",\"primitive\":\"" << canonical_escape(part.primitive) << "\"";
-            if (!part.semantic_role.empty())
-               os << ",\"semantic_role\":\"" << canonical_escape(part.semantic_role) << "\"";
+            os << "\"" << canonical_escape(part_name) << "\":{";
+            // Serialize only fields that are present (optional overrides)
+            if (part.x) os << "\"x\":" << *part.x << ",";
+            if (part.y) os << "\"y\":" << *part.y << ",";
+            if (part.z) os << "\"z\":" << *part.z << ",";
+            if (part.size_x) os << "\"size_x\":" << *part.size_x << ",";
+            if (part.size_y) os << "\"size_y\":" << *part.size_y << ",";
+            if (part.size_z) os << "\"size_z\":" << *part.size_z << ",";
+            if (part.color) os << "\"color\":\"" << canonical_escape(*part.color) << "\",";
+            if (part.rotation_degrees) os << "\"rotation_degrees\":" << *part.rotation_degrees << ",";
+            if (part.emissive) os << "\"emissive\":" << (*part.emissive ? "true" : "false") << ",";
+            if (part.electrical_marking) os << "\"electrical_marking\":" << (*part.electrical_marking ? "true" : "false") << ",";
+            if (part.z_order) os << "\"z_order\":" << *part.z_order << ",";
+            if (part.bone_id && !part.bone_id->empty()) os << "\"bone_id\":\"" << canonical_escape(*part.bone_id) << "\",";
+            if (part.primitive && !part.primitive->empty()) os << "\"primitive\":\"" << canonical_escape(*part.primitive) << "\",";
+            if (part.semantic_role && !part.semantic_role->empty()) os << "\"semantic_role\":\"" << canonical_escape(*part.semantic_role) << "\",";
+            os << "\"part_id\":\"" << canonical_escape(part.part_id) << "\"";
             os << "}";
         }
         os << "}";
@@ -1506,9 +1530,9 @@ CanonicalEntityDeserializeResult CanonicalEntitySerializer::from_json(
                     std::string part_name = std::move(*part_name_res.value);
                     r.require(':', "$.form_morphology_overrides." + form_name + "." + part_name + ": expected ':'");
                     if (r.has_error()) break;
-                    auto part = decode_canonical_part(r, "$.form_morphology_overrides." + form_name + "." + part_name);
+                    auto part = decode_canonical_override(r, "$.form_morphology_overrides." + form_name + "." + part_name);
                     if (!part.ok()) { result.diagnostics.merge(part.diagnostics); return result; }
-                    if (part.value) { part.value->name = part_name; ce.form_morphology_overrides[form_name][part_name] = std::move(*part.value); }
+                    if (part.value) { part.value->part_id = part_name; ce.form_morphology_overrides[form_name][part_name] = std::move(*part.value); }
                     if (!r.consume_if(',')) break;
                 }
                 r.require('}', "$.form_morphology_overrides." + form_name + ": expected '}'");
