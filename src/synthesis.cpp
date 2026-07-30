@@ -448,8 +448,8 @@ Projection2dDefinition synthesize_morphology_projection2d(
       const bool is_eye_or_ear = (name.find("eye") != std::string::npos ||
                                    name.find("ear") != std::string::npos);
       std::uint32_t color = resolve_color(part, is_eye_or_ear);
-      // Bone attachment: use part.bone_id if set, fallback to part name
-      std::string target_bone = part.bone_id.empty() ? name : part.bone_id;
+      // Bone attachment: require explicit bone_id (no name-based fallback)
+      std::string target_bone = part.bone_id;
       auto wit = pose.world.find(target_bone);
       // Bone world transform (identity if no bone found)
       double bx = 0, by = 0, brot = 0, bsx = 1.0, bsy = 1.0;

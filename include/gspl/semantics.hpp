@@ -16,6 +16,9 @@ namespace gspl {
 struct CanonicalPart {
     std::string name;
     std::string parent;
+    std::string bone_id;
+    std::string primitive;
+    std::string semantic_role;
     double x{}, y{}, z{};
     double size_x{1}, size_y{1}, size_z{1};
     std::string color;

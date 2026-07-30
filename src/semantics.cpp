@@ -135,6 +135,9 @@ std::string canonical_identity_payload(CanonicalEntity const& entity) {
     for (auto const& [name, part] : entity.morphology) {
         append_key_value(out, "name", name);
         append_key_value(out, "parent", part.parent);
+        if (!part.bone_id.empty()) append_key_value(out, "bone", part.bone_id);
+        if (!part.primitive.empty() && part.primitive != "ellipse") append_key_value(out, "primitive", part.primitive);
+        if (!part.semantic_role.empty()) append_key_value(out, "semantic_role", part.semantic_role);
         append_key_value(out, "x", part.x);
         append_key_value(out, "y", part.y);
         append_key_value(out, "z", part.z);
@@ -582,6 +585,9 @@ static JsonReadResult<CanonicalPart> decode_canonical_part(
             DECODE_DOUBLE_FIELD(rr, key, fp, c, rotation_degrees, diags);
             DECODE_BOOL_FIELD(rr, key, fp, c, emissive, diags);
             DECODE_BOOL_FIELD(rr, key, fp, c, electrical_marking, diags);
+            DECODE_STRING_FIELD(rr, key, fp, c, bone_id, diags);
+            DECODE_STRING_FIELD(rr, key, fp, c, primitive, diags);
+            DECODE_STRING_FIELD(rr, key, fp, c, semantic_role, diags);
             rr.skip_value();
         });
 }
@@ -1126,8 +1132,14 @@ CanonicalSerializationResult CanonicalEntitySerializer::encode_canonical_entity(
            << ",\"color\":\"" << canonical_escape(part.color) << "\""
            << ",\"rotation_degrees\":" << part.rotation_degrees
            << ",\"emissive\":" << (part.emissive ? "true" : "false")
-           << ",\"electrical_marking\":" << (part.electrical_marking ? "true" : "false")
-           << "}";
+           << ",\"electrical_marking\":" << (part.electrical_marking ? "true" : "false");
+        if (!part.bone_id.empty())
+           os << ",\"bone_id\":\"" << canonical_escape(part.bone_id) << "\"";
+        if (!part.primitive.empty())
+           os << ",\"primitive\":\"" << canonical_escape(part.primitive) << "\"";
+        if (!part.semantic_role.empty())
+           os << ",\"semantic_role\":\"" << canonical_escape(part.semantic_role) << "\"";
+        os << "}";
     }
     os << "},\n";
     // form_morphology_overrides — only if non-empty
@@ -1149,8 +1161,14 @@ CanonicalSerializationResult CanonicalEntitySerializer::encode_canonical_entity(
                << ",\"color\":\"" << canonical_escape(part.color) << "\""
                << ",\"rotation_degrees\":" << part.rotation_degrees
                << ",\"emissive\":" << (part.emissive ? "true" : "false")
-               << ",\"electrical_marking\":" << (part.electrical_marking ? "true" : "false")
-               << "}";
+               << ",\"electrical_marking\":" << (part.electrical_marking ? "true" : "false");
+            if (!part.bone_id.empty())
+               os << ",\"bone_id\":\"" << canonical_escape(part.bone_id) << "\"";
+            if (!part.primitive.empty())
+               os << ",\"primitive\":\"" << canonical_escape(part.primitive) << "\"";
+            if (!part.semantic_role.empty())
+               os << ",\"semantic_role\":\"" << canonical_escape(part.semantic_role) << "\"";
+            os << "}";
         }
         os << "}";
     }
@@ -1943,11 +1961,17 @@ void Canonicalizer::lower_morphology(MorphologyDecl const& morph, CanonicalEntit
         CanonicalPart cp;
         cp.name = part->name;
         cp.color = "#888888";
+        std::set<std::string> seen;
         for (auto const& attr : part->attributes) {
             auto const* a = dynamic_cast<AttributeNode const*>(attr.get());
             if (!a || !a->value) continue;
             auto const* lit = dynamic_cast<LiteralNode const*>(a->value.get());
             if (!lit) continue;
+            if (!seen.insert(a->key).second) {
+                out.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
+                    "part " + cp.name + ": duplicate field '" + a->key + "'", SourceSpan{});
+                continue;
+            }
             if (a->key == "x") cp.x = std::stod(lit->value);
             else if (a->key == "y") cp.y = std::stod(lit->value);
             else if (a->key == "z") cp.z = std::stod(lit->value);
@@ -1957,8 +1981,17 @@ void Canonicalizer::lower_morphology(MorphologyDecl const& morph, CanonicalEntit
             else if (a->key == "color") cp.color = lit->value;
             else if (a->key == "rotation_degrees") cp.rotation_degrees = std::stod(lit->value);
             else if (a->key == "parent") cp.parent = lit->value;
+            else if (a->key == "bone") cp.bone_id = lit->value;
+            else if (a->key == "primitive") cp.primitive = lit->value;
+            else if (a->key == "semantic_role") cp.semantic_role = lit->value;
             else if (a->key == "emissive") cp.emissive = (lit->value == "true");
             else if (a->key == "electrical_marking") cp.electrical_marking = (lit->value == "true");
+            else if (a->key == "bone") cp.bone_id = lit->value;
+            else if (a->key == "primitive") cp.primitive = lit->value;
+            else if (a->key == "semantic_role") cp.semantic_role = lit->value;
+            else
+                out.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
+                    "part " + cp.name + ": unsupported field '" + a->key + "'", SourceSpan{});
         }
         out.morphology[cp.name] = std::move(cp);
     }

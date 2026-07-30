@@ -142,6 +142,9 @@ gspl::sprites::MorphologyPart SpriteIrLowering::lower_part(CanonicalPart const& 
     mp.parent = part.parent;
     mp.emissive = part.emissive;
     mp.electrical_marking = part.electrical_marking;
+    mp.bone_id = part.bone_id;
+    mp.primitive = part.primitive.empty() ? std::string("ellipse") : part.primitive;
+    mp.semantic_role = part.semantic_role;
     return mp;
 }
 

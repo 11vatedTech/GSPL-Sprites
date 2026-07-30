@@ -88,7 +88,7 @@ entity Voltfox {
             bone: "head";
             primitive: "ellipse";
             semantic_role: "head";
-            x: 0.0; y: -14.0; z: 2.0;
+            x: 0.0; y: 0.0; z: 0.0;
             size_x: 10.0; size_y: 9.0; size_z: 8.0;
             color: "#242038";
         }
@@ -146,7 +146,7 @@ entity Voltfox {
             bone: "leg_fl";
             primitive: "capsule";
             semantic_role: "front-left-leg";
-            x: -6.0; y: 8.0; z: 0.0;
+            x: 0.0; y: 0.0; z: 0.0;
             size_x: 4.0; size_y: 10.0; size_z: 4.0;
             color: "#242038";
         }
@@ -155,7 +155,7 @@ entity Voltfox {
             bone: "leg_fr";
             primitive: "capsule";
             semantic_role: "front-right-leg";
-            x: 6.0; y: 8.0; z: 0.0;
+            x: 0.0; y: 0.0; z: 0.0;
             size_x: 4.0; size_y: 10.0; size_z: 4.0;
             color: "#242038";
         }
@@ -164,7 +164,7 @@ entity Voltfox {
             bone: "leg_hl";
             primitive: "capsule";
             semantic_role: "hind-left-leg";
-            x: -6.0; y: -2.0; z: -2.0;
+            x: 0.0; y: 0.0; z: 0.0;
             size_x: 5.0; size_y: 10.0; size_z: 5.0;
             color: "#242038";
         }
@@ -173,7 +173,7 @@ entity Voltfox {
             bone: "leg_hr";
             primitive: "capsule";
             semantic_role: "hind-right-leg";
-            x: 6.0; y: -2.0; z: -2.0;
+            x: 0.0; y: 0.0; z: 0.0;
             size_x: 5.0; size_y: 10.0; size_z: 5.0;
             color: "#242038";
         }
@@ -182,7 +182,7 @@ entity Voltfox {
             bone: "tail";
             primitive: "segmented_curve";
             semantic_role: "tail";
-            x: 0.0; y: 10.0; z: -6.0;
+            x: 0.0; y: 0.0; z: 0.0;
             size_x: 3.0; size_y: 8.0; size_z: 3.0;
             color: "#56F1FF";
             rotation_degrees: 30.0;
@@ -192,7 +192,7 @@ entity Voltfox {
             bone: "aura_bone";
             primitive: "aura_contour";
             semantic_role: "energy-aura";
-            x: 0.0; y: 0.0; z: -10.0;
+            x: 0.0; y: 0.0; z: 0.0;
             size_x: 30.0; size_y: 30.0; size_z: 1.0;
             color: "#9067C6";
             emissive: true;
