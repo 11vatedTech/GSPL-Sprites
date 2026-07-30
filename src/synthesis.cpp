@@ -1804,6 +1804,31 @@ LivingAnimation2dBuildResult synthesize_living_animation2d(const SpriteSeed& see
   if (result.all_frames.size() != 48)
     add("FRAME_COUNT", "total frames: expected 48, got " + std::to_string(result.all_frames.size()));
 
+  // Populate resolved morphologies in result
+  result.base_morphology = base_morph;
+  result.storm_morphology = storm_morph;
+  // Build transformation morphologies vector
+  for (std::uint32_t i = 0; i < 10; ++i) {
+    auto t_morph = base_morph;
+    double blend = static_cast<double>(i) / 9.0;
+    for (auto& [name, part] : t_morph) {
+      auto sit = storm_morph.find(name);
+      if (sit != storm_morph.end()) {
+        part.size_x += (sit->second.size_x - part.size_x) * blend;
+        part.size_y += (sit->second.size_y - part.size_y) * blend;
+        part.x += (sit->second.x - part.x) * blend;
+        part.y += (sit->second.y - part.y) * blend;
+        if (part.emissive != sit->second.emissive && blend >= 0.5)
+          part.emissive = sit->second.emissive;
+        if (part.electrical_marking != sit->second.electrical_marking && blend >= 0.5)
+          part.electrical_marking = sit->second.electrical_marking;
+        if (!sit->second.color.empty() && sit->second.color[0] == '#' && !part.color.empty())
+          part.color = sit->second.color;
+      }
+    }
+    result.transformation_morphologies.push_back(std::move(t_morph));
+  }
+
   if (validation.ok())
     return {std::move(result), std::move(validation)};
   return {std::nullopt, std::move(validation)};

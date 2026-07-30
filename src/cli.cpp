@@ -4,6 +4,7 @@
 #include "gspl_sprites/core.hpp"
 #include "gspl_sprites/living_runtime.hpp"
 #include "gspl_sprites/synthesis.hpp"
+#include "gspl_sprites/package.hpp"
 #include "gspl_sprites/image.hpp"
 #include <algorithm>
 #include <cstring>
@@ -232,14 +233,20 @@ DiagnosticResult Cli::compile_source(SourceBuffer source, CliOptions const& opts
                         for (auto const& d : living.diagnostics.diagnostics)
                             ctx.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH, d.code + ": " + d.message, {});
                     } else {
-                        ::gspl::sprites::AuthoredVisualSet visual;
-                        visual.schema = "gspl.visual-set/0.1";
-                        visual.frames = std::move(living.value->all_frames);
-                        visual.sheet = ::gspl::sprites::SpriteSheetOptions{1024, 2048, 2, false, 0};
-                        visual.channel_maps = std::move(living.value->channel_maps);
-                        visual.canonical_metadata = "{\"projection\":\"morphology-driven-2d\",\"form\":\"base+storm\"}";
-                        visual.canonical_channel_metadata = "{\"channels\":[\"depth\"]}";
-                        ::gspl::sprites::build_package(seed, visual, package_path);
+                        ::gspl::sprites::LivingVisualPackageInput pkg_input;
+                        pkg_input.seed = seed;
+                        pkg_input.frames = std::move(living.value->all_frames);
+                        pkg_input.generated_clips = std::move(living.value->clips);
+                        pkg_input.samples = std::move(living.value->samples);
+                        pkg_input.events = std::move(living.value->generated_events);
+                        pkg_input.channels = std::move(living.value->channel_maps);
+                        pkg_input.collision_shapes = std::move(living.value->collision_shapes);
+                        pkg_input.collision_windows = std::move(living.value->collision_windows);
+                        pkg_input.base_morphology = std::move(living.value->base_morphology);
+                        pkg_input.storm_morphology = std::move(living.value->storm_morphology);
+                        pkg_input.transformation_morphologies = std::move(living.value->transformation_morphologies);
+                        pkg_input.sheet = std::move(living.value->sheet);
+                        ::gspl::sprites::build_living_visual_package(pkg_input, package_path);
                     }
                 } else {
                     ::gspl::sprites::build_package(seed, package_path);

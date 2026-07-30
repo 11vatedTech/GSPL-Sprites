@@ -137,6 +137,8 @@ struct GeneratedAnimationEvent {
 
 /* ── Living Animation 2D: entity-level synthesis producing exactly
      48 frames (19 base + 10 transform + 19 storm) ── */
+using EffectiveMorphology = std::map<std::string, MorphologyPart, std::less<>>;
+
 struct LivingAnimation2d {
   std::vector<FrameSource> base_frames;
   std::vector<FrameSource> transformation_frames;
@@ -149,6 +151,9 @@ struct LivingAnimation2d {
   std::vector<CollisionShape> collision_shapes;
   std::vector<CollisionWindow> collision_windows;
   SpriteSheetArtifacts sheet;
+  EffectiveMorphology base_morphology;
+  EffectiveMorphology storm_morphology;
+  std::vector<EffectiveMorphology> transformation_morphologies;
 };
 
 struct LivingAnimation2dBuildResult {
@@ -160,6 +165,22 @@ struct LivingAnimation2dBuildResult {
 [[nodiscard]] std::string canonicalize_pose(const EvaluatedPose& pose);
 
 [[nodiscard]] LivingAnimation2dBuildResult synthesize_living_animation2d(const SpriteSeed& seed);
+
+/* ── Living Visual Package Input ── */
+struct LivingVisualPackageInput {
+  SpriteSeed seed;
+  std::vector<FrameSource> frames;
+  std::vector<AnimationClip> generated_clips;
+  std::vector<GeneratedFrameSample> samples;
+  std::vector<GeneratedAnimationEvent> events;
+  std::vector<ChannelMap> channels;
+  std::vector<CollisionShape> collision_shapes;
+  std::vector<CollisionWindow> collision_windows;
+  EffectiveMorphology base_morphology;
+  EffectiveMorphology storm_morphology;
+  std::vector<EffectiveMorphology> transformation_morphologies;
+  SpriteSheetArtifacts sheet;
+};
 
 [[nodiscard]] std::uint32_t with_alpha(std::uint32_t rgba, std::uint8_t alpha);
 
