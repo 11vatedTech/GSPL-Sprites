@@ -1740,21 +1740,22 @@ LivingAnimation2dBuildResult synthesize_living_animation2d(const SpriteSeed& see
     return img;
   };
   // Build channel maps for all frame groups
-  auto build_channels = [&](std::vector<FrameSource> const& frames, [[maybe_unused]] std::string_view /*clip_prefix*/) {
+  auto build_channels = [&](std::vector<FrameSource> const& frames) {
     for (auto const& f : frames) {
-      std::string base = f.id;
-      // Extract clip name from frame ID
-      auto clip_end = base.rfind('.');
-      if (clip_end != std::string::npos) base = base.substr(0, clip_end);
-      result.channel_maps.push_back({base + ".depth", f.id, ChannelMapKind::depth,
+      // Use frame ID as channel base for uniqueness: <frame-id>.<channel-kind>
+      result.channel_maps.push_back({f.id + ".depth", f.id, ChannelMapKind::depth,
           make_channel_img(64, 64, 64, ColorSpace::data)});
-      result.channel_maps.push_back({base + ".effects", f.id, ChannelMapKind::effects,
+      result.channel_maps.push_back({f.id + ".alpha", f.id, ChannelMapKind::effects,
+          make_channel_img(255, 255, 255, ColorSpace::data)});
+      result.channel_maps.push_back({f.id + ".effects", f.id, ChannelMapKind::effects,
           make_channel_img(0, 0, 0, ColorSpace::data)});
+      result.channel_maps.push_back({f.id + ".emissive", f.id, ChannelMapKind::emissive,
+          make_channel_img(0, 0, 0, ColorSpace::srgb)});
     }
   };
-  build_channels(result.base_frames, base_pf);
-  build_channels(result.transformation_frames, entity_id + ".transform");
-  build_channels(result.storm_frames, storm_pf);
+  build_channels(result.base_frames);
+  build_channels(result.transformation_frames);
+  build_channels(result.storm_frames);
 
   // Collision shapes and windows from seed
   result.collision_shapes = seed.collision_shapes;

@@ -324,37 +324,91 @@ void test_end_to_end_synthesis() {
     TEST("no orphan frames", no_orphans);
   }
 
-  // Channel maps: 2 per frame group (base, transformation, storm) minimal coverage
-  // Synthesis produces depth+effects channels per clip (9 clips * 2 = 18)
-  TEST("channel maps exist", !result.channel_maps.empty());
-  TEST("channel maps >= 18 (2 per 9 clips)", result.channel_maps.size() >= 18);
-  // At least base and storm each have depth+effects channels
-  bool has_base_depth = false, has_storm_depth = false;
-  for (auto const& cm : result.channel_maps) {
-    if (cm.id.find(".depth") != std::string::npos) {
-      if (cm.id.find("base") != std::string::npos) has_base_depth = true;
-      if (cm.id.find("storm") != std::string::npos) has_storm_depth = true;
-    }
-  }
-  TEST("base depth channel exists", has_base_depth);
-  TEST("storm depth channel exists", has_storm_depth);
-
-  // Required events present
+  // ── Unique per-frame channel IDs (Items 11-12) ──
   {
-    bool has_base_release = false, has_storm_release = false;
-    bool has_midpoint = false, has_complete = false;
-    for (auto const& ev : result.generated_events) {
-      if (ev.event_id == "release" && ev.clip_id.find("base") != std::string::npos)
-        has_base_release = true;
-      if (ev.event_id == "release" && ev.clip_id.find("storm") != std::string::npos)
-        has_storm_release = true;
-      if (ev.event_id == "midpoint") has_midpoint = true;
-      if (ev.event_id == "complete") has_complete = true;
+    TEST("channel maps exist", !result.channel_maps.empty());
+    // Every channel ID should be unique
+    std::set<std::string> channel_ids;
+    for (auto const& cm : result.channel_maps) channel_ids.insert(cm.id);
+    TEST("all channel IDs unique", channel_ids.size() == result.channel_maps.size());
+    TEST("channel maps == 192 (4 per 48 frames)", result.channel_maps.size() == 192); // depth+alpha+effects+emissive per frame
+    // At least base and storm each have depth channels
+    bool has_base_depth = false, has_storm_depth = false;
+    for (auto const& cm : result.channel_maps) {
+      if (cm.kind == ChannelMapKind::depth) {
+        if (cm.id.find("base") != std::string::npos) has_base_depth = true;
+        if (cm.id.find("storm") != std::string::npos) has_storm_depth = true;
+      }
     }
-    TEST("base_attack.release event exists", has_base_release);
-    TEST("storm_attack.release event exists", has_storm_release);
-    TEST("transform_ascend.midpoint event exists", has_midpoint);
-    TEST("transform_ascend.complete event exists", has_complete);
+    TEST("base depth channel exists", has_base_depth);
+    TEST("storm depth channel exists", has_storm_depth);
+    // Every channel target frame must exist
+    bool all_targets_exist = true;
+    std::set<std::string> all_frame_ids;
+    for (auto const& f : result.all_frames) all_frame_ids.insert(f.id);
+    for (auto const& cm : result.channel_maps) {
+      if (!all_frame_ids.contains(cm.target_frame_id)) {
+        all_targets_exist = false;
+        std::cerr << "  MISSING TARGET: channel " << cm.id << " targets " << cm.target_frame_id << "\n";
+      }
+    }
+    TEST("all channel target frames exist", all_targets_exist);
+  }
+
+  // ── Exact event mapping assertions (Item 6) ──
+  {
+    // Compute expected mappings:
+    // base_attack: duration=8, 6 nonlooping frames. Nonlooping: tick = round(i * 7 / 5)
+    //   frame 0:0 1:1 2:3 3:4 4:6 5:7. Event "release" at tick 6 -> exact match at frame 4.
+    // storm_attack: same as base_attack. Event "release" at tick 6 -> frame 4.
+    // transform_ascend: duration=41, 10 nonlooping frames. Nonlooping: tick = round(i * 40 / 9)
+    //   frame 0:0 1:4 2:9 3:13 4:18 5:22 6:27 7:31 8:36 9:40.
+    //   Event "midpoint" at tick 20 -> first after is frame 5 at tick 22.
+    //   Event "complete" at tick 40 -> exact match at frame 9.
+    // Expected sample ticks computed from nonlooping schedule:
+    // base_attack: duration=8, 6 frames, tick = round(i*7/5) → frame 4 = round(28/5) = 6
+    // transform_ascend: duration=41, 10 frames, tick = round(i*40/9) → frame 5 = round(200/9) = 22, frame 9 = 40
+    struct EventExpectation {
+      std::string clip_id;
+      std::string event_id;
+      std::uint32_t authored_tick;
+      std::uint32_t expected_frame;
+      std::uint32_t expected_source_tick;
+    };
+    std::vector<EventExpectation> expectations = {
+      {"test.voltfox.base.attack", "release", 6, 4, 6},
+      {"test.voltfox.storm.attack", "release", 6, 4, 6},
+      {"test.voltfox.transform", "midpoint", 20, 5, 22},
+      {"test.voltfox.transform", "complete", 40, 9, 40},
+    };
+    for (auto const& exp : expectations) {
+      bool found = false;
+      for (auto const& ev : result.generated_events) {
+        if (ev.clip_id == exp.clip_id && ev.event_id == exp.event_id) {
+          TEST(std::string("event ") + exp.clip_id + "." + exp.event_id + " authored_tick", ev.authored_tick == exp.authored_tick);
+          TEST(std::string("event ") + exp.clip_id + "." + exp.event_id + " frame_index", ev.frame_index == exp.expected_frame);
+          // Verify the sample exists with exact expected source tick
+          auto sample_it = std::ranges::find(result.samples, ev.frame_id, &GeneratedFrameSample::frame_id);
+          if (sample_it != result.samples.end()) {
+            TEST(std::string("event ") + exp.clip_id + "." + exp.event_id + " exact source_tick",
+                 sample_it->source_tick == exp.expected_source_tick);
+          }
+          found = true;
+          break;
+        }
+      }
+      TEST(std::string("event ") + exp.clip_id + "." + exp.event_id + " exists", found);
+    }
+    // Verify complete maps to transformation frame 9
+    for (auto const& ev : result.generated_events) {
+      if (ev.clip_id == "test.voltfox.transform" && ev.event_id == "complete") {
+        TEST("complete maps to transform frame 9", ev.frame_index == 9);
+        auto const& tf = result.transformation_frames;
+        if (!tf.empty() && ev.frame_index < tf.size()) {
+          TEST("complete frame_id matches transformation_frames[9]", ev.frame_id == tf[ev.frame_index].id);
+        }
+      }
+    }
   }
 
   // Transformation frames: check they exist and are renderable
