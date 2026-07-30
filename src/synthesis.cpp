@@ -1459,9 +1459,14 @@ LivingAnimation2dBuildResult synthesize_living_animation2d(const SpriteSeed& see
           : i;
         auto pr = evaluate_pose(*clip, rig, tick);
         if (pr.ok()) {
-          out_frames.push_back({pf + "." + clip_name + "." + std::to_string(i),
+          auto frame_id = pf + "." + clip_name + "." + std::to_string(i);
+          out_frames.push_back({frame_id,
                                 render_morph(morph, *pr.value, pal),
                                 canvas_w / 2, canvas_h / 2, dur});
+          // Record frame sample
+          std::string sample_clip_id = pf + "." + clip_name;
+          std::string pose_str = std::to_string(pr.value->world.size());
+          result.samples.push_back({sample_clip_id, frame_id, i, tick, pose_str});
         }
       }
       first_frame[clip_name] = start;
@@ -1548,8 +1553,12 @@ LivingAnimation2dBuildResult synthesize_living_animation2d(const SpriteSeed& see
         t_pal.background = lerp_palette(base_pal.background, storm_pal.background);
         auto pr = evaluate_pose(*tclip, rig, tick);
         if (pr.ok()) {
-          result.transformation_frames.push_back({tpf + "." + std::to_string(i),
+          auto tframe_id = tpf + "." + std::to_string(i);
+          result.transformation_frames.push_back({tframe_id,
             render_morph(t_morph, *pr.value, t_pal), canvas_w / 2, canvas_h / 2, 2});
+          // Record frame sample
+          std::string pose_str = std::to_string(pr.value->world.size());
+          result.samples.push_back({tpf, tframe_id, i, tick, pose_str});
         }
       }
     }
@@ -1604,7 +1613,23 @@ LivingAnimation2dBuildResult synthesize_living_animation2d(const SpriteSeed& see
         std::uint32_t fi = skeletal_clip->duration_ticks > 0
             ? (ev_tick * entry.output_frame_count / skeletal_clip->duration_ticks)
             : 0;
-        if (fi < entry.output_frame_count) events.push_back({ev_name, fi});
+        if (fi < entry.output_frame_count) {
+          events.push_back({ev_name, fi});
+          // Also record as GeneratedAnimationEvent
+          std::string geframe_id;
+          if (entry.semantic_role != "transformation") {
+            geframe_id = std::string(pf) + "." + role + "." + std::to_string(fi);
+          } else {
+            geframe_id = std::string(entity_id) + ".transform." + std::to_string(fi);
+          }
+          std::string geclip_id;
+          if (entry.semantic_role != "transformation") {
+            geclip_id = std::string(pf) + "." + role;
+          } else {
+            geclip_id = std::string(entity_id) + ".transform";
+          }
+          result.generated_events.push_back({geclip_id, ev_name, ev_tick, fi, geframe_id});
+        }
       }
     }
     bool looping = skeletal_clip ? skeletal_clip->looping : entry.is_looping;
@@ -1642,14 +1667,31 @@ LivingAnimation2dBuildResult synthesize_living_animation2d(const SpriteSeed& see
     }
   }
 
-  // Channel maps
-  auto depth = ImageRgba8{canvas_w, canvas_h, ColorSpace::data, AlphaMode::opaque,
-                          std::vector<std::uint8_t>(static_cast<std::size_t>(canvas_w) * canvas_h * 4, 0)};
-  for (std::size_t i = 0; i < depth.pixels.size(); i += 4) {
-    depth.pixels[i] = depth.pixels[i+1] = depth.pixels[i+2] = 64;
-    depth.pixels[i+3] = 255;
-  }
-  result.channel_maps = {{base_pf + ".idle.0.depth", base_pf + ".idle.0", ChannelMapKind::depth, depth}};
+  // Channel maps — generate per-form depth, outline, alpha, and emissive channels
+  auto make_channel_img = [&](std::uint8_t r, std::uint8_t g, std::uint8_t b, ColorSpace cs) -> ImageRgba8 {
+    ImageRgba8 img(canvas_w, canvas_h, cs, AlphaMode::opaque,
+        std::vector<std::uint8_t>(static_cast<std::size_t>(canvas_w) * canvas_h * 4, 0));
+    for (std::size_t i = 0; i < img.pixels.size(); i += 4) {
+      img.pixels[i] = r; img.pixels[i+1] = g; img.pixels[i+2] = b; img.pixels[i+3] = 255;
+    }
+    return img;
+  };
+  // Build channel maps for all frame groups
+  auto build_channels = [&](std::vector<FrameSource> const& frames, [[maybe_unused]] std::string_view /*clip_prefix*/) {
+    for (auto const& f : frames) {
+      std::string base = f.id;
+      // Extract clip name from frame ID
+      auto clip_end = base.rfind('.');
+      if (clip_end != std::string::npos) base = base.substr(0, clip_end);
+      result.channel_maps.push_back({base + ".depth", f.id, ChannelMapKind::depth,
+          make_channel_img(64, 64, 64, ColorSpace::data)});
+      result.channel_maps.push_back({base + ".effects", f.id, ChannelMapKind::effects,
+          make_channel_img(0, 0, 0, ColorSpace::data)});
+    }
+  };
+  build_channels(result.base_frames, base_pf);
+  build_channels(result.transformation_frames, entity_id + ".transform");
+  build_channels(result.storm_frames, storm_pf);
 
   // Collision shapes and windows from seed
   result.collision_shapes = seed.collision_shapes;

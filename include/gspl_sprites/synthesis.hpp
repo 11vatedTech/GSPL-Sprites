@@ -117,6 +117,23 @@ inline constexpr RequiredLivingClip kRequiredClips[] = {
   {"storm_hit",        "storm_hit",          3, false},
 };
 
+/* ── Frame sample schedule for event mapping ── */
+struct GeneratedFrameSample {
+  std::string clip_id;
+  std::string frame_id;
+  std::uint32_t frame_index;
+  std::uint32_t source_tick;
+  std::string pose_hash;
+};
+
+struct GeneratedAnimationEvent {
+  std::string clip_id;
+  std::string event_id;
+  std::uint32_t authored_tick;
+  std::uint32_t frame_index;
+  std::string frame_id;
+};
+
 /* ── Living Animation 2D: entity-level synthesis producing exactly
      48 frames (19 base + 10 transform + 19 storm) ── */
 struct LivingAnimation2d {
@@ -125,6 +142,8 @@ struct LivingAnimation2d {
   std::vector<FrameSource> storm_frames;
   std::vector<FrameSource> all_frames;
   std::vector<AnimationClip> clips;
+  std::vector<GeneratedFrameSample> samples;
+  std::vector<GeneratedAnimationEvent> generated_events;
   std::vector<ChannelMap> channel_maps;
   std::vector<CollisionShape> collision_shapes;
   std::vector<CollisionWindow> collision_windows;
