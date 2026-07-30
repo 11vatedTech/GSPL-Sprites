@@ -805,16 +805,51 @@ static void build_package_internal(const SpriteSeed& seed, std::span<const Frame
     std::error_code ignored; std::filesystem::remove_all(staging, ignored); throw;
   }
 }
-std::map<std::string, MorphologyPart, std::less<>> resolve_form_morphology(
+EffectiveMorphologyResult resolve_form_morphology(
     const SpriteSeed& seed, std::string_view form_id) {
+  ValidationResult validation;
+  auto add = [&](std::string code, std::string msg) {
+    validation.diagnostics.push_back({std::move(code), std::move(msg)});
+  };
+
+  // Validate form exists
+  bool form_found = false;
+  for (const auto& f : seed.forms) {
+    if (f.id == form_id) { form_found = true; break; }
+  }
+  if (!form_found) {
+    add("FORM_NOT_FOUND", std::string("form '") + std::string(form_id) + "' not found in seed");
+    return {std::nullopt, std::move(validation)};
+  }
+
+  if (seed.morphology.empty()) {
+    add("MORPHOLOGY_EMPTY", "base morphology is empty");
+    return {std::nullopt, std::move(validation)};
+  }
+
   auto result = seed.morphology;
   auto it = seed.form_morphology_overrides.find(std::string(form_id));
   if (it != seed.form_morphology_overrides.end()) {
     for (auto const& [name, override] : it->second) {
+      // Validate override part exists in base morphology
+      if (!result.count(name)) {
+        add("OVERRIDE_PART_NOT_FOUND", std::string("override part '") + name + "' not found in base morphology");
+        continue;
+      }
+      // Validate override fields
+      if (!override.primitive.empty() && override.primitive != "ellipse"
+          && override.primitive != "capsule" && override.primitive != "triangle"
+          && override.primitive != "segmented_curve" && override.primitive != "aura_contour"
+          && override.primitive != "electrical_arc") {
+        add("UNSUPPORTED_PRIMITIVE", std::string("unsupported primitive '") + override.primitive + "' in override for part '" + name + "'");
+      }
+      if (override.size_x <= 0 || override.size_y <= 0 || override.size_z <= 0) {
+        add("NONPOSITIVE_DIMENSION", std::string("non-positive dimension in override for part '") + name + "'");
+      }
       result[name] = override;
     }
   }
-  return result;
+  return {std::move(result), std::move(validation)};
 }
 
 } // namespace gspl::sprites

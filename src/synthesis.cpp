@@ -1179,8 +1179,20 @@ LivingAnimation2dBuildResult synthesize_living_animation2d(const SpriteSeed& see
         !seed.storm_accent_color.empty() ? seed.storm_accent_color : seed.primary_color);
 
   // Resolve per-form morphology
-  auto base_morph = resolve_form_morphology(seed, "base");
-  auto storm_morph = resolve_form_morphology(seed, "storm");
+  auto base_result = resolve_form_morphology(seed, "base");
+  if (!base_result.ok()) {
+    for (auto& d : base_result.diagnostics.diagnostics)
+      add(d.code, d.message);
+    return {std::nullopt, std::move(validation)};
+  }
+  auto storm_result = resolve_form_morphology(seed, "storm");
+  if (!storm_result.ok()) {
+    for (auto& d : storm_result.diagnostics.diagnostics)
+      add(d.code, d.message);
+    return {std::nullopt, std::move(validation)};
+  }
+  auto& base_morph = *base_result.value;
+  auto& storm_morph = *storm_result.value;
 
   // Build form→clip map from seed's clip naming convention (base_*, storm_*, transform_*)
   std::map<std::string, const SkeletalClip*, std::less<>> clip_map;

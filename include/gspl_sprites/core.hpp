@@ -217,7 +217,13 @@ struct ResourceLimits {
 [[nodiscard]] ValidationResult enforce_resource_limits(const SpriteSeed& seed, const ResourceLimits& limits = {});
 [[nodiscard]] ValidationResult enforce_resource_limits_source(std::string_view source, const ResourceLimits& limits = {});
 
-[[nodiscard]] std::map<std::string, MorphologyPart, std::less<>> resolve_form_morphology(
+struct EffectiveMorphologyResult {
+  std::optional<std::map<std::string, MorphologyPart, std::less<>>> value;
+  ValidationResult diagnostics;
+  [[nodiscard]] bool ok() const { return value.has_value() && diagnostics.ok(); }
+};
+
+[[nodiscard]] EffectiveMorphologyResult resolve_form_morphology(
     const SpriteSeed& seed, std::string_view form_id);
 
 [[nodiscard]] SpriteSeed parse_seed(std::string_view source);

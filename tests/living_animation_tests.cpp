@@ -158,7 +158,9 @@ void test_resolve_form_morphology() {
   seed.form_morphology_overrides["storm"]["torso"] = storm_torso;
 
   // Resolve base form
-  auto base = resolve_form_morphology(seed, "base");
+  auto base_r = resolve_form_morphology(seed, "base");
+  TEST("base form resolved ok", base_r.ok());
+  auto& base = *base_r.value;
   TEST("base form has torso", base.contains("torso"));
   TEST("base torso size_x == 20", base.at("torso").size_x == 20.0);
   TEST("base torso size_y == 14", base.at("torso").size_y == 14.0);
@@ -166,7 +168,9 @@ void test_resolve_form_morphology() {
   TEST("base torso not emissive", base.at("torso").emissive == false);
 
   // Resolve storm form
-  auto storm = resolve_form_morphology(seed, "storm");
+  auto storm_r = resolve_form_morphology(seed, "storm");
+  TEST("storm form resolved ok", storm_r.ok());
+  auto& storm = *storm_r.value;
   TEST("storm form has torso", storm.contains("torso"));
   TEST("storm torso size_x == 26", storm.at("torso").size_x == 26.0);
   TEST("storm torso size_y == 18", storm.at("torso").size_y == 18.0);
@@ -177,10 +181,9 @@ void test_resolve_form_morphology() {
   TEST("base/storm size_x differ", base.at("torso").size_x != storm.at("torso").size_x);
   TEST("base/storm size_y differ", base.at("torso").size_y != storm.at("torso").size_y);
 
-  // Unknown form returns base morphology
-  auto unknown = resolve_form_morphology(seed, "unknown_form");
-  TEST("unknown form has torso", unknown.contains("torso"));
-  TEST("unknown form torso size_x == 20", unknown.at("torso").size_x == 20.0);
+  // Unknown form must be rejected
+  auto unknown_r = resolve_form_morphology(seed, "unknown_form");
+  TEST("unknown form rejected", !unknown_r.ok());
 
   // Unoverridden part retains base values in storm
   MorphologyPart base_head;
@@ -192,7 +195,9 @@ void test_resolve_form_morphology() {
   base_head.semantic_role = "head";
   seed.morphology["head"] = base_head;
 
-  auto storm2 = resolve_form_morphology(seed, "storm");
+  auto storm2_r = resolve_form_morphology(seed, "storm");
+  TEST("storm form resolved ok", storm2_r.ok());
+  auto& storm2 = *storm2_r.value;
   TEST("storm head size preserves base", storm2.at("head").size_x == 10.0);
   TEST("storm head color preserves base", storm2.at("head").color == "#66AAEE");
 }
