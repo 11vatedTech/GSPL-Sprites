@@ -2077,6 +2077,45 @@ static std::uint32_t parse_uint(std::string const& s) {
     try { return static_cast<std::uint32_t>(std::stoul(s)); } catch (...) { return 0; }
 }
 
+struct Uint32ParseResult { std::optional<std::uint32_t> value; DiagnosticResult diagnostics; bool ok() const { return value.has_value() && diagnostics.ok(); } };
+static Uint32ParseResult parse_uint32_diagnostic(std::string const& s, std::string const& context) {
+    Uint32ParseResult r;
+    if (s.empty()) {
+        r.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
+            context + ": empty tick name", SourceSpan{});
+        return r;
+    }
+    // Reject sign prefix
+    if (s[0] == '-' || s[0] == '+') {
+        r.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
+            context + ": tick must be unsigned, got '" + s + "'", SourceSpan{});
+        return r;
+    }
+    // Reject non-decimal characters
+    for (char c : s) {
+        if (c < '0' || c > '9') {
+            r.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
+                context + ": tick must be unsigned decimal, got '" + s + "'", SourceSpan{});
+            return r;
+        }
+    }
+    // Parse with full token consumption
+    std::uint32_t result = 0;
+    auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), result);
+    if (ec == std::errc::result_out_of_range) {
+        r.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
+            context + ": tick overflow, got '" + s + "'", SourceSpan{});
+        return r;
+    }
+    if (ec != std::errc{} || ptr != s.data() + s.size()) {
+        r.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
+            context + ": invalid tick '" + s + "'", SourceSpan{});
+        return r;
+    }
+    r.value = result;
+    return r;
+}
+
 void Canonicalizer::lower_generic_block(GenericBlock const& block, CanonicalEntity& out) {
     auto get_attr = [&](std::string const& key) -> std::string {
         for (auto const& attr_ptr : block.attributes) {
@@ -2128,8 +2167,15 @@ void Canonicalizer::lower_generic_block(GenericBlock const& block, CanonicalEnti
                 for (auto const& child_ptr : gb->attributes) {
                     auto const* child_gb = dynamic_cast<GenericBlock const*>(child_ptr.get());
                     if (child_gb && (child_gb->block_type == "key")) {
+                        // Fail-closed tick parsing: validate name as uint32
+                        auto tick_result = parse_uint32_diagnostic(child_gb->name,
+                            "clip=" + clip.name + " track=" + track.bone);
+                        if (!tick_result.ok()) {
+                            out.diagnostics.merge(tick_result.diagnostics);
+                            continue;
+                        }
                         CanonicalKeyframe kf;
-                        kf.tick = parse_uint(child_gb->name);
+                        kf.tick = *tick_result.value;
                         auto get_key_attr = [&](std::string const& key) -> std::string {
                             for (auto const& a : child_gb->attributes) {
                                 auto const* attr = dynamic_cast<AttributeNode const*>(a.get());
@@ -2195,20 +2241,7 @@ void Canonicalizer::lower_generic_block(GenericBlock const& block, CanonicalEnti
                         track.keys.push_back(std::move(kf));
                     }
                 }
-                // Fallback: legacy tick/transform attributes
-                if (track.keys.empty()) {
-                    for (auto const& key_attr_ptr : gb->attributes) {
-                        auto const* ka = dynamic_cast<AttributeNode const*>(key_attr_ptr.get());
-                        if (ka && ka->key == "tick" && ka->value) {
-                            auto const* kl = dynamic_cast<LiteralNode const*>(ka->value.get());
-                            if (kl) {
-                                CanonicalKeyframe kf;
-                                kf.tick = parse_uint(kl->value);
-                                track.keys.push_back(std::move(kf));
-                            }
-                        }
-                    }
-                }
+                // Legacy tick-only fallback removed — all tracks must use typed keyframe syntax
                 clip.tracks.push_back(std::move(track));
             }
         }

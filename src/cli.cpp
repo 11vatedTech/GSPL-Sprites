@@ -227,22 +227,12 @@ DiagnosticResult Cli::compile_source(SourceBuffer source, CliOptions const& opts
                 if (!package_path.parent_path().empty())
                     std::filesystem::create_directories(package_path.parent_path());
                 if (opts.synthesize && !seed.morphology.empty()) {
-                    // Synthesize morphology-driven 2D frames for base and storm forms
-                    auto base_pal = ::gspl::sprites::make_palette(seed.primary_color, seed.accent_color);
-                    auto storm_pal = ::gspl::sprites::make_palette(seed.accent_color, seed.primary_color);
-                    auto rig = seed.rig.has_value() ? *seed.rig : ::gspl::sprites::make_biped_rig(seed.stable_id);
-                    auto proj_base = ::gspl::sprites::synthesize_morphology_projection2d(
-                        seed.stable_id, "base", base_pal, seed.morphology, rig, seed.clips);
-                    auto proj_storm = ::gspl::sprites::synthesize_morphology_projection2d(
-                        seed.stable_id, "storm", storm_pal, seed.morphology, rig, seed.clips);
-                    // Build AuthoredVisualSet and pass to build_package
+                    auto living = ::gspl::sprites::synthesize_living_animation2d(seed);
                     ::gspl::sprites::AuthoredVisualSet visual;
                     visual.schema = "gspl.visual-set/0.1";
-                    visual.frames = std::move(proj_base.source_frames);
-                    for (auto& f : proj_storm.source_frames)
-                        visual.frames.push_back(std::move(f));
+                    visual.frames = std::move(living.all_frames);
                     visual.sheet = ::gspl::sprites::SpriteSheetOptions{1024, 2048, 2, false, 0};
-                    visual.channel_maps = std::move(proj_base.channel_maps);
+                    visual.channel_maps = std::move(living.channel_maps);
                     visual.canonical_metadata = "{\"projection\":\"morphology-driven-2d\",\"form\":\"base+storm\"}";
                     visual.canonical_channel_metadata = "{\"channels\":[\"depth\"]}";
                     ::gspl::sprites::build_package(seed, visual, package_path);

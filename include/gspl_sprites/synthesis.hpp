@@ -97,4 +97,23 @@ struct SynthesisResult {
                                                          const SynthesisResult& result,
                                                          const ResourceLimits& limits = {});
 
+/* ── Living Animation 2D: entity-level synthesis producing exactly
+     48 frames (19 base + 10 transform + 19 storm) ── */
+struct LivingAnimation2dResult {
+  std::vector<FrameSource> base_frames;
+  std::vector<FrameSource> transformation_frames;
+  std::vector<FrameSource> storm_frames;
+  std::vector<FrameSource> all_frames;
+  std::vector<AnimationClip> clips;
+  std::vector<ChannelMap> channel_maps;
+  std::vector<CollisionShape> collision_shapes;
+  std::vector<CollisionWindow> collision_windows;
+  SpriteSheetArtifacts sheet;
+  ValidationResult validation;
+};
+
+[[nodiscard]] LivingAnimation2dResult synthesize_living_animation2d(const SpriteSeed& seed);
+
+[[nodiscard]] std::uint32_t with_alpha(std::uint32_t rgba, std::uint8_t alpha);
+
 } // namespace gspl::sprites

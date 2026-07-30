@@ -683,4 +683,16 @@ static void build_package_internal(const SpriteSeed& seed, std::span<const Frame
     std::error_code ignored; std::filesystem::remove_all(staging, ignored); throw;
   }
 }
+std::map<std::string, MorphologyPart, std::less<>> resolve_form_morphology(
+    const SpriteSeed& seed, std::string_view form_id) {
+  auto result = seed.morphology;
+  auto it = seed.form_morphology_overrides.find(std::string(form_id));
+  if (it != seed.form_morphology_overrides.end()) {
+    for (auto const& [name, override] : it->second) {
+      result[name] = override;
+    }
+  }
+  return result;
+}
+
 } // namespace gspl::sprites

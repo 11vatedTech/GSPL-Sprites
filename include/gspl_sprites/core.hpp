@@ -51,6 +51,7 @@ struct MorphologyPart {
   std::string bone_id;        // explicit skeleton attachment
   std::string primitive{"ellipse"}; // rendering primitive: ellipse, capsule, triangle, segmented_curve, aura_contour
   std::string semantic_role;   // semantic part role: front-left-leg, energy-aura, etc.
+  std::int32_t z_order{};      // explicit draw order (separate from 3D z coordinate)
 };
 
 struct TransformationSeed {
@@ -215,6 +216,9 @@ struct ResourceLimits {
 
 [[nodiscard]] ValidationResult enforce_resource_limits(const SpriteSeed& seed, const ResourceLimits& limits = {});
 [[nodiscard]] ValidationResult enforce_resource_limits_source(std::string_view source, const ResourceLimits& limits = {});
+
+[[nodiscard]] std::map<std::string, MorphologyPart, std::less<>> resolve_form_morphology(
+    const SpriteSeed& seed, std::string_view form_id);
 
 [[nodiscard]] SpriteSeed parse_seed(std::string_view source);
 [[nodiscard]] ValidationResult validate(const SpriteSeed &seed);

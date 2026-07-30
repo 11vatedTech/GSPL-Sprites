@@ -1136,4 +1136,269 @@ ValidationResult enforce_resource_limits(const SpriteSeed& seed,
       "Sprite IR node count " + std::to_string(ir_node_count) + " exceeds maximum " + std::to_string(limits.max_sprite_ir_nodes));
   return res;
 }
+
+std::uint32_t with_alpha(std::uint32_t rgba, std::uint8_t alpha) {
+  return (rgba & 0x00FFFFFF) | (static_cast<std::uint32_t>(alpha));
+}
+
+LivingAnimation2dResult synthesize_living_animation2d(const SpriteSeed& seed) {
+  LivingAnimation2dResult result;
+  auto add = [&](std::string code, std::string msg) {
+    result.validation.diagnostics.push_back({std::move(code), std::move(msg)});
+  };
+
+  const std::string entity_id = seed.stable_id;
+  const RigDefinition& rig = seed.rig.has_value() ? *seed.rig : make_biped_rig(entity_id);
+  constexpr std::int32_t canvas_w = 128, canvas_h = 128;
+
+  auto base_pal = make_palette(seed.primary_color, seed.accent_color);
+  auto storm_pal = make_palette(seed.accent_color, seed.primary_color);
+
+  // Resolve per-form morphology
+  auto base_morph = resolve_form_morphology(seed, "base");
+  auto storm_morph = resolve_form_morphology(seed, "storm");
+
+  // Build form→clip map from seed's clip naming convention (base_*, storm_*, transform_*)
+  std::map<std::string, const SkeletalClip*, std::less<>> clip_map;
+  for (auto const& c : seed.clips) clip_map[c.id] = &c;
+
+  auto find_clip = [&](std::string_view form_id, std::string_view name) -> const SkeletalClip* {
+    std::string exact = std::string(form_id) + "_" + std::string(name);
+    auto it = clip_map.find(exact);
+    if (it != clip_map.end()) return it->second;
+    // Fallback: substring match for transform clips
+    for (auto const& c : seed.clips) {
+      if (c.id.find(name) != std::string::npos && (form_id == "base" || form_id == "storm" || c.id.find("transform") != std::string::npos))
+        return &c;
+    }
+    return nullptr;
+  };
+
+  // Rendering lambda: uses z_order for sorting
+  auto render_morph = [&](const std::map<std::string, MorphologyPart, std::less<>>& morph,
+                           const EvaluatedPose& pose, const SynthesisPalette& pal) -> ImageRgba8 {
+    ImageRgba8 canvas(canvas_w, canvas_h, ColorSpace::srgb, AlphaMode::straight,
+                      std::vector<std::uint8_t>(static_cast<std::size_t>(canvas_w) * canvas_h * 4, 0));
+    // Draw rotated ellipse helper
+    auto draw_rotated_ellipse = [&](ImageRgba8& img, int cx, int cy, int rx, int ry,
+                                     double rotation_deg, double scale_x, double scale_y,
+                                     std::uint32_t rgba) {
+      std::uint8_t r = (rgba >> 24) & 0xFF, g = (rgba >> 16) & 0xFF, b = (rgba >> 8) & 0xFF, a = rgba & 0xFF;
+      double rad = -rotation_deg * 3.141592653589793 / 180.0;
+      double cos_r = std::cos(rad), sin_r = std::sin(rad);
+      int erx = (std::max)(static_cast<int>(rx * scale_x), 1);
+      int ery = (std::max)(static_cast<int>(ry * scale_y), 1);
+      int bb = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(erx)*erx + static_cast<double>(ery)*ery))) + 1;
+      for (int dy = -bb; dy <= bb; ++dy) {
+        for (int dx = -bb; dx <= bb; ++dx) {
+          double lx = dx * cos_r - dy * sin_r;
+          double ly = dx * sin_r + dy * cos_r;
+          if (lx*lx / (erx*erx) + ly*ly / (ery*ery) <= 1.0) {
+            int px = cx + dx, py = cy + dy;
+            if (px >= 0 && px < (int)img.width && py >= 0 && py < (int)img.height) {
+              std::size_t idx = (static_cast<std::size_t>(py) * img.width + static_cast<std::size_t>(px)) * 4;
+              img.pixels[idx] = r; img.pixels[idx+1] = g; img.pixels[idx+2] = b; img.pixels[idx+3] = a;
+            }
+          }
+        }
+      }
+    };
+    // Sort by z_order then by name for deterministic tie-breaking
+    std::vector<std::pair<std::string, MorphologyPart>> sorted;
+    for (auto const& [n, p] : morph) sorted.push_back({n, p});
+    std::ranges::sort(sorted, [](auto const& a, auto const& b) {
+      if (a.second.z_order != b.second.z_order) return a.second.z_order < b.second.z_order;
+      return a.first < b.first;
+    });
+    for (auto const& [name, part] : sorted) {
+      std::uint32_t color = !part.color.empty() && part.color[0] == '#' && part.color.size() == 7
+          ? hex_color(part.color) : pal.primary;
+      std::string target = part.bone_id;
+      auto wit = pose.world.find(target);
+      double bx = 0, by = 0, brot = 0, bsx = 1.0, bsy = 1.0;
+      if (wit != pose.world.end()) {
+        bx = wit->second.x; by = wit->second.y;
+        brot = wit->second.rotation_degrees;
+        bsx = wit->second.scale_x; bsy = wit->second.scale_y;
+      }
+      // Affine composition: bone world × part local offset
+      double rad = brot * 3.141592653589793 / 180.0;
+      double cos_r = std::cos(rad), sin_r = std::sin(rad);
+      double wx = bx + part.x * cos_r * bsx - part.y * sin_r * bsy;
+      double wy = by + part.x * sin_r * bsx + part.y * cos_r * bsy;
+      int pcx = canvas_w / 2 + static_cast<int>(wx * 3);
+      int pcy = canvas_h / 2 - static_cast<int>(wy * 3);
+      int prx = (std::max)(static_cast<int>(part.size_x * 1.5), 2);
+      int pry = (std::max)(static_cast<int>(part.size_y * 1.5), 2);
+      double total_rot = brot + part.rotation_degrees;
+      // Primitive selection with full scale consumed
+      if (part.primitive == "capsule") {
+        int len = static_cast<int>(pry * 2 * bsy);
+        int wid = static_cast<int>(prx * bsx);
+        // Draw capsule with scale applied... (simplified: uses draw_rotated_ellipse with scaled radii)
+        draw_rotated_ellipse(canvas, pcx, pcy, std::max(wid/2, 1), std::max(len/2, 1), total_rot, 1.0, 1.0, color);
+      } else if (part.primitive == "triangle") {
+        draw_rotated_ellipse(canvas, pcx, pcy, std::max(static_cast<int>(prx * bsx), 2), std::max(static_cast<int>(pry * bsy), 2), total_rot, 1.0, 1.0, color);
+      } else if (part.primitive == "segmented_curve") {
+        draw_rotated_ellipse(canvas, pcx, pcy, std::max(static_cast<int>(prx * bsx), 2), std::max(static_cast<int>(pry * 3 * bsy), 2), total_rot, 1.0, 1.0, color);
+      } else if (part.primitive == "aura_contour") {
+        std::uint32_t aura_rgba = with_alpha(color, (color & 0xFF) / 3);
+        draw_rotated_ellipse(canvas, pcx, pcy, static_cast<int>(prx * 2 * bsx), static_cast<int>(pry * 2 * bsy), total_rot, 1.0, 1.0, aura_rgba);
+      } else {
+        draw_rotated_ellipse(canvas, pcx, pcy, prx, pry, total_rot, bsx, bsy, color);
+      }
+    }
+    return canvas;
+  };
+
+  // Generate frames for a form: calls evaluate_pose per clip, returns frame index of first frame
+  auto gen_form_frames = [&](const std::map<std::string, MorphologyPart, std::less<>>& morph,
+                              std::string_view form_id, const SynthesisPalette& pal,
+                              std::vector<FrameSource>& out_frames,
+                              std::string& pf) -> std::map<std::string, std::uint32_t> {
+    pf = entity_id + "." + std::string(form_id);
+    std::map<std::string, std::uint32_t> first_frame;
+    auto gen = [&](const char* clip_name, std::uint32_t count, std::uint32_t dur) {
+      auto* clip = find_clip(form_id, clip_name);
+      if (!clip) return;
+      std::uint32_t start = static_cast<std::uint32_t>(out_frames.size());
+      for (std::uint32_t i = 0; i < count; ++i) {
+        std::uint32_t tick = clip->duration_ticks > 0 ? (i * clip->duration_ticks / count) : i;
+        auto pr = evaluate_pose(*clip, rig, tick);
+        if (pr.ok()) {
+          out_frames.push_back({pf + "." + clip_name + "." + std::to_string(i),
+                                render_morph(morph, *pr.value, pal),
+                                canvas_w / 2, canvas_h / 2, dur});
+        }
+      }
+      first_frame[clip_name] = start;
+    };
+    gen("idle", 4, 4);
+    gen("locomotion", 6, 3);
+    gen("attack", 6, 2);
+    gen("hit", 3, 2);
+    return first_frame;
+  };
+
+  std::string base_pf, storm_pf;
+  auto base_first = gen_form_frames(base_morph, "base", base_pal, result.base_frames, base_pf);
+
+  // Generate transformation once
+  {
+    auto* tclip = find_clip("transform", "transform");
+    std::string tpf = entity_id + ".transform";
+    if (tclip) {
+      for (std::uint32_t i = 0; i < 10; ++i) {
+        std::uint32_t tick = tclip->duration_ticks > 0 ? (i * tclip->duration_ticks / 10) : i;
+        // Interpolate between base and storm morphology for transformation
+        auto t_morph = base_morph;
+        double blend = static_cast<double>(i) / 9.0;
+        for (auto& [name, part] : t_morph) {
+          auto sit = storm_morph.find(name);
+          if (sit != storm_morph.end()) {
+            part.size_x += (sit->second.size_x - part.size_x) * blend;
+            part.size_y += (sit->second.size_y - part.size_y) * blend;
+            part.x += (sit->second.x - part.x) * blend;
+            part.y += (sit->second.y - part.y) * blend;
+          }
+        }
+        auto pr = evaluate_pose(*tclip, rig, tick);
+        if (pr.ok()) {
+          result.transformation_frames.push_back({tpf + "." + std::to_string(i),
+            render_morph(t_morph, *pr.value, base_pal), canvas_w / 2, canvas_h / 2, 2});
+        }
+      }
+    }
+  }
+
+  auto storm_first = gen_form_frames(storm_morph, "storm", storm_pal, result.storm_frames, storm_pf);
+
+  // Assemble all_frames: base + transform + storm
+  result.all_frames = result.base_frames;
+  for (auto& f : result.transformation_frames) result.all_frames.push_back(f);
+  for (auto& f : result.storm_frames) result.all_frames.push_back(f);
+
+  // Compute frame hashes
+  for (auto& f : result.all_frames) f.frame_hash = compute_frame_hash(f.image);
+
+  // Build sprite sheet
+  SpriteSheetOptions opts{1024, 2048, 2, false, 0};
+  result.sheet = compile_sprite_sheet(result.all_frames, opts);
+
+  // Build animation clips with authored events
+  auto build_clips = [&](std::string_view pf, std::map<std::string, std::uint32_t> const& first,
+                          std::string_view form_id, std::uint32_t /*base_idx*/) {
+    struct ClipDef { std::string name; std::uint32_t count; std::uint32_t dur; };
+    std::vector<ClipDef> defs = {
+      {"idle", 4, 4}, {"locomotion", 6, 3}, {"attack", 6, 2}, {"hit", 3, 2}
+    };
+    for (auto const& d : defs) {
+      auto fit = first.find(d.name);
+      if (fit == first.end()) continue;
+      std::vector<std::string> fids;
+      std::vector<std::uint32_t> durs;
+      for (std::uint32_t i = 0; i < d.count; ++i) {
+        fids.push_back(std::string(pf) + "." + d.name + "." + std::to_string(i));
+        durs.push_back(d.dur);
+      }
+      // Map authored clip events to frame indices
+      std::vector<AnimationEvent> events;
+      auto* clip = find_clip(form_id, d.name);
+      if (clip) {
+        for (auto const& [ev_name, ev_tick] : clip->events) {
+          std::uint32_t fi = clip->duration_ticks > 0 ? (ev_tick * d.count / clip->duration_ticks) : 0;
+          if (fi < d.count) events.push_back({ev_name, fi});
+        }
+      }
+      result.clips.push_back({std::string(pf) + "." + d.name, std::move(fids), std::move(durs), std::move(events), true});
+    }
+  };
+  build_clips(base_pf, base_first, "base", 0);
+  // Transformation clip
+  {
+    std::string tpf = entity_id + ".transform";
+    std::vector<std::string> fids;
+    std::vector<std::uint32_t> durs;
+    for (int i = 0; i < 10; ++i) {
+      fids.push_back(tpf + "." + std::to_string(i));
+      durs.push_back(2);
+    }
+    std::vector<AnimationEvent> events;
+    auto* tclip = find_clip("transform", "transform");
+    if (tclip) {
+      for (auto const& [ev_name, ev_tick] : tclip->events) {
+        std::uint32_t fi = tclip->duration_ticks > 0 ? (ev_tick * 10 / tclip->duration_ticks) : 0;
+        if (fi < 10) events.push_back({ev_name, fi});
+      }
+    }
+    result.clips.push_back({tpf, std::move(fids), std::move(durs), std::move(events), false});
+  }
+  build_clips(storm_pf, storm_first, "storm", 19);
+
+  // Channel maps
+  auto depth = ImageRgba8{canvas_w, canvas_h, ColorSpace::data, AlphaMode::opaque,
+                          std::vector<std::uint8_t>(static_cast<std::size_t>(canvas_w) * canvas_h * 4, 0)};
+  for (std::size_t i = 0; i < depth.pixels.size(); i += 4) {
+    depth.pixels[i] = depth.pixels[i+1] = depth.pixels[i+2] = 64;
+    depth.pixels[i+3] = 255;
+  }
+  result.channel_maps = {{base_pf + ".idle.0.depth", base_pf + ".idle.0", ChannelMapKind::depth, depth}};
+
+  // Collision shapes and windows from seed
+  result.collision_shapes = seed.collision_shapes;
+  result.collision_windows = seed.collision_windows;
+
+  // Validate invariants
+  if (result.base_frames.size() != 19)
+    add("FRAME_COUNT", "base frames: expected 19, got " + std::to_string(result.base_frames.size()));
+  if (result.transformation_frames.size() != 10)
+    add("FRAME_COUNT", "transform frames: expected 10, got " + std::to_string(result.transformation_frames.size()));
+  if (result.storm_frames.size() != 19)
+    add("FRAME_COUNT", "storm frames: expected 19, got " + std::to_string(result.storm_frames.size()));
+  if (result.all_frames.size() != 48)
+    add("FRAME_COUNT", "total frames: expected 48, got " + std::to_string(result.all_frames.size()));
+
+  return result;
+}
+
 } // namespace gspl::sprites
