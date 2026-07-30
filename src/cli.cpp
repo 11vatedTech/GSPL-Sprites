@@ -41,6 +41,11 @@ Cli::ParseResult Cli::parse(int argc, char* argv[]) {
         }
         if (arg == "--verify") { opts.verify = true; continue; }
         if (arg == "--synthesize") { opts.synthesize = true; continue; }
+        if (arg == "--verify-package") {
+            opts.verify_package = true;
+            if (++i < static_cast<std::size_t>(argc)) opts.verify_package_path = argv[i];
+            continue;
+        }
         if (arg == "--living-run") { opts.living_run = true; continue; }
         if (arg == "--evidence") { opts.evidence = true; continue; }
         if (arg == "--deterministic") { opts.deterministic_seed = true; continue; }
@@ -136,6 +141,18 @@ int Cli::run(CliOptions const& options) {
     if (options.input_files.empty()) {
         std::cerr << "gsplc: no input files\n";
         return 1;
+    }
+    // --verify-package <path>: verify existing package without compiling
+    if (options.verify_package && !options.verify_package_path.empty()) {
+        auto ver = ::gspl::sprites::verify_living_visual_package(options.verify_package_path);
+        if (!ver.ok()) {
+            for (auto const& d : ver.validation.diagnostics)
+                std::cerr << "verify: " << d.code << ": " << d.message << std::endl;
+            return 1;
+        }
+        if (options.verbose)
+            std::cout << "Package verified: " << options.verify_package_path << " (" << ver.frame_count << " frames, " << ver.clip_count << " clips)" << std::endl;
+        return 0;
     }
     bool all_ok = true;
     for (auto const& file : options.input_files) {
@@ -247,6 +264,14 @@ DiagnosticResult Cli::compile_source(SourceBuffer source, CliOptions const& opts
                         pkg_input.transformation_morphologies = std::move(living.value->transformation_morphologies);
                         pkg_input.sheet = std::move(living.value->sheet);
                         ::gspl::sprites::build_living_visual_package(pkg_input, package_path);
+                        // Verify the emitted package independently
+                        auto ver = ::gspl::sprites::verify_living_visual_package(package_path);
+                        if (!ver.ok()) {
+                            for (auto const& d : ver.validation.diagnostics)
+                                ctx.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH,
+                                    d.code + ": " + d.message, {});
+                        } else if (opts.verbose)
+                            std::cout << "Living package verified: " << ver.frame_count << " frames, " << ver.clip_count << " clips" << std::endl;
                     }
                 } else {
                     ::gspl::sprites::build_package(seed, package_path);

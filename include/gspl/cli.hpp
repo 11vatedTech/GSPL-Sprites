@@ -19,6 +19,8 @@ struct CliOptions {
     bool package_output{false};
     bool verify{false};
     bool synthesize{false};
+    bool verify_package{false};
+    std::filesystem::path verify_package_path;
     bool living_run{false};
     bool evidence{false};
     std::filesystem::path package_dir;

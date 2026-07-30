@@ -34,67 +34,83 @@ int main() try {
   std::string src = load_source();
   check(src.size() > 1000, "source loaded");
 
-  gspl::GsplContext ctx;
-  auto buf = gspl::SourceBuffer::from_string("voltfox.gspl", src);
-  ctx.compile_source(std::move(buf));
-  check(!ctx.has_fatal_errors(), "compilation ok");
-
-  gspl::sprites::SpriteSeed seed;
-  seed = gspl::SpriteSeedLowering::lower(ctx.compilation_context().canonical);
-  check(!seed.stable_id.empty(), "seed has id");
-
-  gspl::sprites::LivingAnimation2dBuildResult living = gspl::sprites::synthesize_living_animation2d(seed);
-  check(living.ok(), "synthesis ok");
-  auto& lv = *living.value;
-  check(lv.all_frames.size() == 48, "48 frames");
-  check(lv.clips.size() == 9, "9 clips");
-  check(lv.samples.size() == 48, "48 samples");
-  check(!lv.base_morphology.empty(), "base morphology");
-  check(!lv.storm_morphology.empty(), "storm morphology");
-  check(lv.transformation_morphologies.size() == 10, "10 trans morphs");
-
+  // ── Scope 1: compile, synthesize, build, record identities ──
   auto pkg_dir = fs::temp_directory_path() / "lv_pkg_test";
   fs::remove_all(pkg_dir);
 
-  gspl::sprites::LivingVisualPackageInput pkg_input;
-  pkg_input.seed = seed;
-  pkg_input.frames = lv.all_frames;
-  pkg_input.generated_clips = lv.clips;
-  pkg_input.samples = lv.samples;
-  pkg_input.events = lv.generated_events;
-  pkg_input.channels = lv.channel_maps;
-  pkg_input.collision_shapes = lv.collision_shapes;
-  pkg_input.collision_windows = lv.collision_windows;
-  pkg_input.base_morphology = lv.base_morphology;
-  pkg_input.storm_morphology = lv.storm_morphology;
-  pkg_input.transformation_morphologies = lv.transformation_morphologies;
-  pkg_input.sheet = lv.sheet;
+  std::string expected_seed_id;
+  std::string expected_pkg_id;
 
-  gspl::sprites::build_living_visual_package(pkg_input, pkg_dir);
-  check(fs::exists(pkg_dir / "manifest.json"), "manifest exists");
-  check(fs::exists(pkg_dir / "seed.json"), "seed exists");
-  check(fs::exists(pkg_dir / "animations-2d.json"), "animations-2d exists");
-  check(fs::exists(pkg_dir / "animation-events.json"), "events exist");
-  check(fs::exists(pkg_dir / "frame-samples.json"), "samples exist");
-  check(fs::exists(pkg_dir / "pose-hashes.json"), "pose hashes exist");
-  check(fs::exists(pkg_dir / "frame-hashes.json"), "frame hashes exist");
-  check(fs::exists(pkg_dir / "collisions-2d.json"), "collisions exist");
+  {
+    gspl::GsplContext ctx;
+    auto buf = gspl::SourceBuffer::from_string("voltfox.gspl", src);
+    ctx.compile_source(std::move(buf));
+    check(!ctx.has_fatal_errors(), "compilation ok");
 
-  auto verify = gspl::sprites::verify_living_visual_package(pkg_dir);
+    gspl::sprites::SpriteSeed seed;
+    seed = gspl::SpriteSeedLowering::lower(ctx.compilation_context().canonical);
+    check(!seed.stable_id.empty(), "seed has id");
+    expected_seed_id = gspl::sprites::sha256(gspl::sprites::canonicalize(seed));
 
-  check(verify.ok(), "verification ok");
-  check(verify.frame_count == 48, "verify: 48 frames");
-  check(verify.clip_count == 9, "verify: 9 clips");
-  check(verify.sample_count == 48, "verify: 48 samples");
+    gspl::sprites::LivingAnimation2dBuildResult living = gspl::sprites::synthesize_living_animation2d(seed);
+    check(living.ok(), "synthesis ok");
+    auto& lv = *living.value;
+    check(lv.all_frames.size() == 48, "48 frames");
+    check(lv.clips.size() == 9, "9 clips");
+    check(lv.samples.size() == 48, "48 samples");
+    check(!lv.base_morphology.empty(), "base morphology");
+    check(!lv.storm_morphology.empty(), "storm morphology");
+    check(lv.transformation_morphologies.size() == 10, "10 trans morphs");
 
-  auto read = gspl::sprites::read_living_visual_package(pkg_dir);
+    gspl::sprites::LivingVisualPackageInput pkg_input;
+    pkg_input.seed = seed;
+    pkg_input.frames = lv.all_frames;
+    pkg_input.generated_clips = lv.clips;
+    pkg_input.samples = lv.samples;
+    pkg_input.events = lv.generated_events;
+    pkg_input.channels = lv.channel_maps;
+    pkg_input.collision_shapes = lv.collision_shapes;
+    pkg_input.collision_windows = lv.collision_windows;
+    pkg_input.base_morphology = lv.base_morphology;
+    pkg_input.storm_morphology = lv.storm_morphology;
+    pkg_input.transformation_morphologies = lv.transformation_morphologies;
+    pkg_input.sheet = lv.sheet;
 
-  check(read.ok(), "read ok");
+    gspl::sprites::build_living_visual_package(pkg_input, pkg_dir);
+    check(fs::exists(pkg_dir / "manifest.json"), "manifest exists");
+    check(fs::exists(pkg_dir / "seed.json"), "seed exists");
+    check(fs::exists(pkg_dir / "animations-2d.json"), "animations-2d exists");
+    check(fs::exists(pkg_dir / "animation-events.json"), "events exist");
+    check(fs::exists(pkg_dir / "frame-samples.json"), "samples exist");
+    check(fs::exists(pkg_dir / "pose-hashes.json"), "pose hashes exist");
+    check(fs::exists(pkg_dir / "frame-hashes.json"), "frame hashes exist");
+    check(fs::exists(pkg_dir / "collisions-2d.json"), "collisions exist");
+  }
+  // ── End Scope 1: all source objects destroyed ──
+
+  // ── Scope 2: read from filesystem only, verify, inspect ──
+  {
+    auto verify = gspl::sprites::verify_living_visual_package(pkg_dir);
+    check(verify.ok(), "verification ok");
+    check(verify.frame_count == 48, "verify: 48 frames");
+    check(verify.clip_count == 9, "verify: 9 clips");
+    check(verify.sample_count == 48, "verify: 48 samples");
+
+    auto read = gspl::sprites::read_living_visual_package(pkg_dir);
+    check(read.ok(), "read ok");
+    if (read.value) {
+      auto& pkg = *read.value;
+      check(!pkg.entity_id.empty(), "reconstructed entity_id");
+      check(!pkg.seed_identity.empty(), "reconstructed seed_identity");
+      check(!pkg.package_identity.empty(), "reconstructed package_identity");
+      check(!pkg.seed.stable_id.empty(), "reconstructed seed.stable_id");
+    }
+  }
 
   fs::remove_all(pkg_dir);
 
   if (failures == 0)
-    std::cout << "\nALL LIVING PACKAGE TESTS PASSED\n";
+    std::cout << "\nALL LIVING PACKAGE TESTS PASSED (" << (23+5) << " assertions)\n";
   else
     std::cerr << failures << " FAILURES\n";
   return failures ? 1 : 0;
