@@ -460,7 +460,46 @@ ValidationResult enforce_resource_limits(const SpriteSeed& seed, const ResourceL
   return result;
 }
 
+// ── Helpers for canonicalizing morphology data ──
+static std::string canonicalize_morphology_part(const MorphologyPart& part) {
+  std::ostringstream out;
+  out << "{\"boneId\":\"" << escape_json(part.bone_id) << "\",\"color\":\"" << escape_json(part.color) << "\",\"electricalMarking\":" << (part.electrical_marking ? "true" : "false")
+      << ",\"emissive\":" << (part.emissive ? "true" : "false") << ",\"parent\":\"" << escape_json(part.parent) << "\",\"primitive\":\"" << escape_json(part.primitive)
+      << "\",\"rotationDegrees\":" << part.rotation_degrees << ",\"semanticRole\":\"" << escape_json(part.semantic_role)
+      << "\",\"sizeX\":" << part.size_x << ",\"sizeY\":" << part.size_y << ",\"sizeZ\":" << part.size_z
+      << ",\"x\":" << part.x << ",\"y\":" << part.y << ",\"z\":" << part.z
+      << ",\"zOrder\":" << part.z_order << "}";
+  return out.str();
+}
+
+static std::string canonicalize_morphology_map(const std::map<std::string, MorphologyPart, std::less<>>& map) {
+  std::ostringstream out;
+  out << "{";
+  bool first = true;
+  for (const auto& [name, part] : map) {
+    if (!first) out << ",";
+    first = false;
+    out << "\"" << escape_json(name) << "\":" << canonicalize_morphology_part(part);
+  }
+  out << "}";
+  return out.str();
+}
+
+static std::string canonicalize_form_morphology_overrides(const std::map<std::string, std::map<std::string, MorphologyPart, std::less<>>, std::less<>>& overrides) {
+  std::ostringstream out;
+  out << "{";
+  bool first_form = true;
+  for (const auto& [form_id, parts] : overrides) {
+    if (!first_form) out << ",";
+    first_form = false;
+    out << "\"" << escape_json(form_id) << "\":" << canonicalize_morphology_map(parts);
+  }
+  out << "}";
+  return out.str();
+}
+
 std::string canonicalize(const SpriteSeed& seed) {
+  // Abilities (sorted)
   std::vector<AbilitySeed> abilities = seed.abilities;
   std::ranges::sort(abilities, {}, &AbilitySeed::id);
   std::ostringstream out;
@@ -472,13 +511,96 @@ std::string canonicalize(const SpriteSeed& seed) {
   }
   out << "],\"animationClips\":" << canonicalize_clips(seed.clips) << ",\"animationStateGraph\":";
   if(seed.animation_graph) out << canonicalize_state_graph(*seed.animation_graph); else out << "null";
-  out << ",\"classification\":\"" << escape_json(seed.classification) << "\",\"collisions\":" << canonicalize_collisions(seed.collision_shapes,seed.collision_windows) << ",\"colors\":{\"accent\":\"" << seed.accent_color << "\",\"primary\":\"" << seed.primary_color << "\"";
+
+  // Animation intents (sorted)
+  out << ",\"animationIntents\":[";
+  if (seed.runtime) {
+    auto intents = seed.runtime->animation_intents;
+    std::ranges::sort(intents);
+    for (std::size_t i = 0; i < intents.size(); ++i) {
+      if (i) out << ',';
+      out << "{\"behavior\":\"" << escape_json(intents[i].first) << "\",\"clip\":\"" << escape_json(intents[i].second) << "\"}";
+    }
+  }
+  out << "],\"classification\":\"" << escape_json(seed.classification) << "\",\"collisions\":" << canonicalize_collisions(seed.collision_shapes,seed.collision_windows) << ",\"colors\":{\"accent\":\"" << seed.accent_color << "\",\"primary\":\"" << seed.primary_color << "\"";
   if(!seed.storm_primary_color.empty()) out << ",\"stormPrimary\":\"" << seed.storm_primary_color << "\",\"stormAccent\":\"" << seed.storm_accent_color << "\"";
   if(!seed.emissive_color.empty()) out << ",\"emissive\":\"" << seed.emissive_color << "\"";
   if(!seed.aura_color.empty()) out << ",\"aura\":\"" << seed.aura_color << "\"";
-  out << "},\"entropyRoot\":" << seed.entropy_root << ",\"id\":\"" << escape_json(seed.stable_id) << "\",\"name\":\"" << escape_json(seed.name) << "\",\"rig\":";
+  out << "},\"entropyRoot\":" << seed.entropy_root;
+
+  // Forms (sorted)
+  out << ",\"forms\":[";
+  auto forms = seed.forms;
+  std::ranges::sort(forms, {}, &FormSeed::id);
+  for (std::size_t i = 0; i < forms.size(); ++i) {
+    if (i) out << ',';
+    out << "{\"id\":\"" << escape_json(forms[i].id) << "\",\"transformationIds\":[";
+    auto tids = forms[i].transformation_ids;
+    std::ranges::sort(tids);
+    for (std::size_t j = 0; j < tids.size(); ++j) {
+      if (j) out << ',';
+      out << "\"" << escape_json(tids[j]) << "\"";
+    }
+    out << "]}";
+  }
+  out << "]";
+
+  // Form attributes (sorted by form id)
+  out << ",\"formAttributes\":{";
+  bool first_fa = true;
+  for (const auto& [fid, fa] : seed.form_attributes) {
+    if (!first_fa) out << ",";
+    first_fa = false;
+    out << "\"" << escape_json(fid) << "\":{\"abilityEnvelope\":" << fa.ability_envelope << ",\"collisionScale\":" << fa.collision_scale << ",\"maxHealth\":" << fa.max_health << ",\"resourceCapacity\":" << fa.resource_capacity << "}";
+  }
+  out << "}";
+
+  // Id
+  out << ",\"id\":\"" << escape_json(seed.stable_id) << "\"";
+
+  // Morphology
+  out << ",\"morphology\":" << canonicalize_morphology_map(seed.morphology);
+
+  // Form morphology overrides
+  out << ",\"morphologyOverrides\":" << canonicalize_form_morphology_overrides(seed.form_morphology_overrides);
+
+  // Name
+  out << ",\"name\":\"" << escape_json(seed.name) << "\"";
+
+  // Rig
+  out << ",\"rig\":";
   if(seed.rig) out << canonicalize_rig(*seed.rig); else out << "null";
-  out << ",\"rights\":\"" << rights_text(seed.rights) << "\",\"schema\":\"" << seed.schema << "\"}";
+
+  // Rights
+  out << ",\"rights\":\"" << rights_text(seed.rights) << "\",\"schema\":\"" << seed.schema << "\"";
+
+  // Storm abilities (sorted)
+  out << ",\"stormAbilities\":[";
+  auto storm_abilities = seed.storm_abilities;
+  std::ranges::sort(storm_abilities, {}, &AbilitySeed::id);
+  for (std::size_t i = 0; i < storm_abilities.size(); ++i) {
+    if (i) out << ',';
+    const auto& a = storm_abilities[i];
+    out << "{\"activeTicks\":" << a.active_ticks << ",\"cooldownTicks\":" << a.cooldown_ticks << ",\"cost\":" << a.cost << ",\"effect\":\"" << escape_json(a.effect) << "\",\"id\":\"" << escape_json(a.id) << "\"}";
+  }
+  out << "]";
+
+  // Transformations (sorted)
+  out << ",\"transformations\":[";
+  auto trans = seed.transformations;
+  std::ranges::sort(trans, {}, &TransformationSeed::id);
+  for (std::size_t i = 0; i < trans.size(); ++i) {
+    if (i) out << ',';
+    out << "{\"durationTicks\":" << trans[i].duration_ticks << ",\"fromForm\":\"" << escape_json(trans[i].from_form) << "\",\"id\":\"" << escape_json(trans[i].id) << "\",\"resourceCost\":" << trans[i].resource_cost << ",\"toForm\":\"" << escape_json(trans[i].to_form) << "\",\"triggerCondition\":\"" << escape_json(trans[i].trigger_condition) << "\"}";
+  }
+  out << "]";
+
+  // Runtime attributes (when present)
+  if (seed.runtime) {
+    out << ",\"runtime\":{\"aggression\":" << seed.runtime->aggression << ",\"curiosity\":" << seed.runtime->curiosity << ",\"energy\":" << seed.runtime->energy << ",\"loyalty\":" << seed.runtime->loyalty << "}";
+  }
+
+  out << "}";
   return out.str();
 }
 
