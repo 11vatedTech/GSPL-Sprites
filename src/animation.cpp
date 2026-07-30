@@ -109,7 +109,7 @@ ValidationResult validate_skeletal_clip(const SkeletalClip& clip, const RigDefin
   for (const auto& track : clip.tracks) {
     if (!bones.contains(track.bone_id) || !tracks.insert(track.bone_id).second || track.keys.empty() || track.keys.size() > 65536) { add("SPRITE_CLIP_TRACK_INVALID", "track is absent, duplicate, empty, or unbounded"); continue; }
     std::uint32_t previous = 0; bool first = true;
-    for (const auto& key : track.keys) { if (!finite(key.transform) || key.tick > clip.duration_ticks || (!first && key.tick <= previous)) add("SPRITE_CLIP_KEY_INVALID", "key is malformed, outside clip, or not strictly ordered"); previous = key.tick; first = false; }
+    for (const auto& key : track.keys) { if (!finite(key.transform) || key.tick >= clip.duration_ticks || (!first && key.tick <= previous)) add("SPRITE_CLIP_KEY_INVALID", "key is malformed, outside clip, or not strictly ordered. key tick must be strictly increasing and < duration_ticks"); previous = key.tick; first = false; }
   }
   std::set<std::string> events; for (const auto& [id, tick] : clip.events) if (id.empty() || tick >= clip.duration_ticks || !events.insert(id + ":" + std::to_string(tick)).second) add("SPRITE_CLIP_EVENT_INVALID", "event is empty, duplicate, or outside clip");
   return result;

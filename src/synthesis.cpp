@@ -10,8 +10,10 @@
 #include "gspl_sprites/combat.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -1141,6 +1143,30 @@ std::uint32_t with_alpha(std::uint32_t rgba, std::uint8_t alpha) {
   return (rgba & 0xFFFFFF00u) | static_cast<std::uint32_t>(alpha);
 }
 
+std::string canonicalize_pose(const EvaluatedPose& pose) {
+  // Generate deterministic SHA-256 hash of the world-space pose
+  // Using stable bone ID ordering and to_chars for cross-platform determinism
+  std::string data;
+  data += "pose-v1|";
+  auto append_num = [&](double v) {
+    char buf[64];
+    // Normalize negative zero
+    if (v == 0.0) v = 0.0;
+    auto r = std::to_chars(buf, buf + sizeof(buf), v, std::chars_format::general,
+                            std::numeric_limits<double>::max_digits10);
+    data.append(buf, r.ptr - buf);
+  };
+  for (auto const& [bid, bt] : pose.world) {
+    data += bid; data += ':';
+    append_num(bt.x); data += ',';
+    append_num(bt.y); data += ',';
+    append_num(bt.rotation_degrees); data += ',';
+    append_num(bt.scale_x); data += ',';
+    append_num(bt.scale_y); data += ';';
+  }
+  return sha256(data);
+}
+
 void blend_source_over(std::uint8_t* dest, std::uint32_t src_rgba) {
   // 0xRRGGBBAA packed format: R=bits 24-31, G=16-23, B=8-15, A=0-7
   std::uint8_t sr = static_cast<std::uint8_t>((src_rgba >> 24) & 0xFF);
@@ -1475,13 +1501,11 @@ LivingAnimation2dBuildResult synthesize_living_animation2d(const SpriteSeed& see
           out_frames.push_back({frame_id,
                                 render_morph(morph, *pr.value, pal),
                                 canvas_w / 2, canvas_h / 2, dur});
-          // Record frame sample
+          // Record frame sample with canonical pose hash and frame hash
           std::string sample_clip_id = pf + "." + clip_name;
-          std::ostringstream pose_os;
-          for (auto const& [bid, bt] : pr.value->world)
-            pose_os << bid << ':' << bt.x << ',' << bt.y << ',' << bt.rotation_degrees << ',' << bt.scale_x << ',' << bt.scale_y << ';';
-          std::string pose_str = sha256(pose_os.str()).substr(0, 16);
-          result.samples.push_back({sample_clip_id, frame_id, i, tick, pose_str});
+          std::string pose_hash = canonicalize_pose(*pr.value);
+          std::string frame_h = compute_frame_hash(out_frames.back().image);
+          result.samples.push_back({sample_clip_id, frame_id, i, tick, pose_hash, frame_h});
         }
       }
       first_frame[clip_name] = start;
@@ -1573,12 +1597,10 @@ LivingAnimation2dBuildResult synthesize_living_animation2d(const SpriteSeed& see
           auto tframe_id = tpf + "." + std::to_string(i);
           result.transformation_frames.push_back({tframe_id,
             render_morph(t_morph, *pr.value, t_pal), canvas_w / 2, canvas_h / 2, 2});
-          // Record frame sample
-          std::ostringstream pose_os;
-          for (auto const& [bid, bt] : pr.value->world)
-            pose_os << bid << ':' << bt.x << ',' << bt.y << ',' << bt.rotation_degrees << ',' << bt.scale_x << ',' << bt.scale_y << ';';
-          std::string pose_str = sha256(pose_os.str()).substr(0, 16);
-          result.samples.push_back({tpf, tframe_id, i, tick, pose_str});
+          // Record frame sample with canonical pose hash and frame hash
+          std::string pose_hash = canonicalize_pose(*pr.value);
+          std::string frame_h = compute_frame_hash(result.transformation_frames.back().image);
+          result.samples.push_back({tpf, tframe_id, i, tick, pose_hash, frame_h});
         }
       }
     }

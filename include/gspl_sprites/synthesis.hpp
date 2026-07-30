@@ -124,6 +124,7 @@ struct GeneratedFrameSample {
   std::uint32_t frame_index;
   std::uint32_t source_tick;
   std::string pose_hash;
+  std::string frame_hash;
 };
 
 struct GeneratedAnimationEvent {
@@ -155,6 +156,8 @@ struct LivingAnimation2dBuildResult {
   ValidationResult diagnostics;
   [[nodiscard]] bool ok() const { return value.has_value() && diagnostics.ok(); }
 };
+
+[[nodiscard]] std::string canonicalize_pose(const EvaluatedPose& pose);
 
 [[nodiscard]] LivingAnimation2dBuildResult synthesize_living_animation2d(const SpriteSeed& seed);
 
