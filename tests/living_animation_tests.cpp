@@ -76,19 +76,19 @@ static SpriteSeed make_living_seed() {
 
   // Nine clips with tracks
   seed.clips.push_back({"base_idle", 12, true, {}, {}});
-  add_track("base_idle", "head", {{0, {0, 0, 0, 1, 1}}, {6, {0, 0, 5, 1, 1}}, {12, {0, 0, 0, 1, 1}}});
-  add_track("base_idle", "tail", {{0, {0, 0, 0, 1, 1}}, {6, {0, 0, 15, 1, 1}}, {12, {0, 0, 0, 1, 1}}});
+  add_track("base_idle", "head", {{0, {0, 0, 0, 1, 1}}, {6, {0, 0, 5, 1, 1}}, {11, {0, 0, 0, 1, 1}}});
+  add_track("base_idle", "tail", {{0, {0, 0, 0, 1, 1}}, {6, {0, 0, 15, 1, 1}}, {11, {0, 0, 0, 1, 1}}});
 
   seed.clips.push_back({"base_locomotion", 8, true, {}, {}});
-  add_track("base_locomotion", "leg_fl", {{0, {0, 0, 20, 1, 1}}, {4, {0, 0, -20, 1, 1}}, {8, {0, 0, 20, 1, 1}}});
-  add_track("base_locomotion", "leg_fr", {{0, {0, 0, -20, 1, 1}}, {4, {0, 0, 20, 1, 1}}, {8, {0, 0, -20, 1, 1}}});
+  add_track("base_locomotion", "leg_fl", {{0, {0, 0, 20, 1, 1}}, {4, {0, 0, -20, 1, 1}}, {7, {0, 0, 20, 1, 1}}});
+  add_track("base_locomotion", "leg_fr", {{0, {0, 0, -20, 1, 1}}, {4, {0, 0, 20, 1, 1}}, {7, {0, 0, -20, 1, 1}}});
 
   seed.clips.push_back({"base_attack", 8, false, {}, {}});
-  add_track("base_attack", "head", {{0, {0, 0, 0, 1, 1}}, {3, {2, -2, -10, 1.2, 1.2}}, {6, {4, 0, -25, 1.1, 1.1}}, {8, {0, 0, 0, 1, 1}}});
+  add_track("base_attack", "head", {{0, {0, 0, 0, 1, 1}}, {3, {2, -2, -10, 1.2, 1.2}}, {6, {4, 0, -25, 1.1, 1.1}}, {7, {0, 0, 0, 1, 1}}});
   seed.clips.back().events.push_back({"release", 6});
 
   seed.clips.push_back({"base_hit", 6, false, {}, {}});
-  add_track("base_hit", "head", {{0, {0, 0, 0, 1, 1}}, {3, {-2, 2, 15, 1, 1}}, {6, {0, 0, 0, 1, 1}}});
+  add_track("base_hit", "head", {{0, {0, 0, 0, 1, 1}}, {3, {-2, 2, 15, 1, 1}}, {5, {0, 0, 0, 1, 1}}});
 
   seed.clips.push_back({"transform_ascend", 41, false, {}, {}});
   // Transformation: base→storm over 41 ticks with keyframes at both endpoints and midpoint
@@ -98,19 +98,19 @@ static SpriteSeed make_living_seed() {
   seed.clips.back().events.push_back({"complete", 40});
 
   seed.clips.push_back({"storm_idle", 12, true, {}, {}});
-  add_track("storm_idle", "head", {{0, {0, 0, 5, 1, 1}}, {6, {0, 0, -5, 1, 1}}, {12, {0, 0, 5, 1, 1}}});
-  add_track("storm_idle", "tail", {{0, {0, 0, 20, 1, 1}}, {6, {0, 0, -10, 1, 1}}, {12, {0, 0, 20, 1, 1}}});
+  add_track("storm_idle", "head", {{0, {0, 0, 5, 1, 1}}, {6, {0, 0, -5, 1, 1}}, {11, {0, 0, 5, 1, 1}}});
+  add_track("storm_idle", "tail", {{0, {0, 0, 20, 1, 1}}, {6, {0, 0, -10, 1, 1}}, {11, {0, 0, 20, 1, 1}}});
 
   seed.clips.push_back({"storm_locomotion", 8, true, {}, {}});
-  add_track("storm_locomotion", "leg_fl", {{0, {0, 0, 30, 1, 1}}, {4, {0, 0, -30, 1, 1}}, {8, {0, 0, 30, 1, 1}}});
-  add_track("storm_locomotion", "leg_hl", {{0, {0, 0, -30, 1, 1}}, {4, {0, 0, 30, 1, 1}}, {8, {0, 0, -30, 1, 1}}});
+  add_track("storm_locomotion", "leg_fl", {{0, {0, 0, 30, 1, 1}}, {4, {0, 0, -30, 1, 1}}, {7, {0, 0, 30, 1, 1}}});
+  add_track("storm_locomotion", "leg_hl", {{0, {0, 0, -30, 1, 1}}, {4, {0, 0, 30, 1, 1}}, {7, {0, 0, -30, 1, 1}}});
 
   seed.clips.push_back({"storm_attack", 8, false, {}, {}});
-  add_track("storm_attack", "head", {{0, {0, 0, 0, 1, 1}}, {3, {3, -3, -15, 1.3, 1.3}}, {6, {5, 0, -30, 1.2, 1.2}}, {8, {0, 0, 0, 1, 1}}});
+  add_track("storm_attack", "head", {{0, {0, 0, 0, 1, 1}}, {3, {3, -3, -15, 1.3, 1.3}}, {6, {5, 0, -30, 1.2, 1.2}}, {7, {0, 0, 0, 1, 1}}});
   seed.clips.back().events.push_back({"release", 6});
 
   seed.clips.push_back({"storm_hit", 6, false, {}, {}});
-  add_track("storm_hit", "head", {{0, {0, 0, 0, 1, 1}}, {3, {-3, 2, 20, 1, 1}}, {6, {0, 0, 0, 1, 1}}});
+  add_track("storm_hit", "head", {{0, {0, 0, 0, 1, 1}}, {3, {-3, 2, 20, 1, 1}}, {5, {0, 0, 0, 1, 1}}});
 
   // Forms
   seed.forms.push_back({"base", {"ascend"}});
@@ -156,28 +156,41 @@ static SpriteSeed make_living_seed() {
   add_part("aura", "aura_bone", "aura_contour", "energy-aura", 0, 0, 0, 16, 16, 1, "#56F1FF", -10);
   add_part("electrical_marking", "spine", "electrical_arc", "electrical-markings", 0, 0, 0, 6, 4, 1, "#56F1FF", 40, true, true);
 
-  // Storm form overrides: structural differences
+  // Storm form overrides: structural differences (include ALL overridden fields)
   MorphologyPart storm_aura;
   storm_aura.size_x = 22; storm_aura.size_y = 22; storm_aura.size_z = 1;
+  storm_aura.x = 0; storm_aura.y = 0; storm_aura.z = 0;
   storm_aura.color = "#FF6B6B";
   storm_aura.emissive = true;
   storm_aura.bone_id = "aura_bone";
+  storm_aura.primitive = "aura_contour";
+  storm_aura.semantic_role = "energy-aura";
+  storm_aura.z_order = -10;
   seed.form_morphology_overrides["storm"]["aura"] = storm_aura;
 
   MorphologyPart storm_eyes;
   storm_eyes.size_x = 3; storm_eyes.size_y = 3; storm_eyes.size_z = 1;
+  storm_eyes.x = -2; storm_eyes.y = -2; storm_eyes.z = 0;
   storm_eyes.color = "#FF6B6B";
   storm_eyes.emissive = true;
   storm_eyes.bone_id = "head";
+  storm_eyes.primitive = "ellipse";
+  storm_eyes.semantic_role = "left-eye";
+  storm_eyes.z_order = 34;
   seed.form_morphology_overrides["storm"]["eye_l"] = storm_eyes;
+  storm_eyes.x = 2; storm_eyes.semantic_role = "right-eye";
   seed.form_morphology_overrides["storm"]["eye_r"] = storm_eyes;
 
   MorphologyPart storm_electrical;
   storm_electrical.size_x = 8; storm_electrical.size_y = 6; storm_electrical.size_z = 1;
+  storm_electrical.x = 0; storm_electrical.y = 0; storm_electrical.z = 0;
   storm_electrical.color = "#FF6B6B";
   storm_electrical.emissive = true;
   storm_electrical.electrical_marking = true;
   storm_electrical.bone_id = "spine";
+  storm_electrical.primitive = "electrical_arc";
+  storm_electrical.semantic_role = "electrical-markings";
+  storm_electrical.z_order = 40;
   seed.form_morphology_overrides["storm"]["electrical_marking"] = storm_electrical;
 
   // Animation graph
@@ -266,16 +279,24 @@ void test_end_to_end_synthesis() {
     TEST("all pose hashes nonempty", all_nonempty);
   }
 
-  // Moving clips contain distinct hashes
+  // Moving clips must have >= 2 distinct frame hashes
   {
+    // List of clip IDs that should exhibit motion
+    std::set<std::string> moving_prefixes = {"base.locomotion", "base.attack", "base.hit",
+                                              "transform", "storm.locomotion", "storm.attack", "storm.hit"};
     for (auto const& clip : result.clips) {
+      bool is_moving = false;
+      for (auto const& prefix : moving_prefixes)
+        if (clip.id.find(prefix) != std::string::npos) { is_moving = true; break; }
       std::set<std::string> hashes;
       for (auto const& fid : clip.frame_ids) {
         auto it = std::ranges::find(result.all_frames, fid, &FrameSource::id);
         if (it != result.all_frames.end()) hashes.insert(it->frame_hash);
       }
-      if (hashes.size() > 1)
-        TEST(std::string("clip ") + clip.id + " has distinct hashes", true);
+      if (is_moving)
+        TEST(std::string("moving clip ") + clip.id + " has >= 2 distinct hashes", hashes.size() >= 2);
+      else
+        TEST(std::string("clip ") + clip.id + " has hashes", hashes.size() >= 1);
     }
   }
 
@@ -342,16 +363,15 @@ void test_end_to_end_synthesis() {
   if (tf.size() >= 10) {
     std::set<std::string> t_hashes;
     for (auto const& f : tf) t_hashes.insert(f.frame_hash);
-    // Verify all 10 frames exist — morphology/palette interpolation for visual hash
-    // distinction requires synthesis code changes (interpolating part sizes, colors,
-    // palette channels across transformation frames)
     bool all_nonempty = true;
     for (auto const& f : tf) if (f.frame_hash.empty()) { all_nonempty = false; break; }
     TEST("transform frames all have nonempty hashes", all_nonempty);
     TEST("transform frames count is 10", tf.size() == 10);
-    // Marked as EXPLICIT WIP: morphology/palette interpolation not yet wired
-    // Once gen_form_frames interpolates base→storm dimensions/colors/palette across
-    // frames 0-9, change this to t_hashes.size() >= 2
+    std::set<std::string> tf_hashes;
+    for (auto const& f : tf) tf_hashes.insert(f.frame_hash);
+    // With proper morphology/palette interpolation between base and storm,
+    // transformation frames should produce distinct hashes
+    TEST("transform frames have >= 2 unique hashes", tf_hashes.size() >= 2);
   }
 }
 

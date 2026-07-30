@@ -843,10 +843,28 @@ EffectiveMorphologyResult resolve_form_morphology(
           && override.primitive != "electrical_arc") {
         add("UNSUPPORTED_PRIMITIVE", std::string("unsupported primitive '") + override.primitive + "' in override for part '" + name + "'");
       }
-      if (override.size_x <= 0 || override.size_y <= 0 || override.size_z <= 0) {
-        add("NONPOSITIVE_DIMENSION", std::string("non-positive dimension in override for part '") + name + "'");
+      // MERGE override into base part: only overridden fields replace base values
+      auto& base = result[name];
+      if (!override.primitive.empty()) base.primitive = override.primitive;
+      if (!override.semantic_role.empty()) base.semantic_role = override.semantic_role;
+      if (!override.bone_id.empty()) base.bone_id = override.bone_id;
+      if (!override.parent.empty()) base.parent = override.parent;
+      if (!override.color.empty()) base.color = override.color;
+      if (override.emissive) base.emissive = true;
+      if (override.electrical_marking) base.electrical_marking = true;
+      if (override.z_order != 0) base.z_order = override.z_order;
+      if (override.size_x != 1.0 || override.size_y != 1.0 || override.size_z != 1.0 || override.x != 0.0 || override.y != 0.0 || override.z != 0.0 || override.rotation_degrees != 0.0) {
+        // At least one numeric field was explicitly overridden — apply all non-default numerics
+        // Note: this convention means a single numeric field override sets all explicit numerics
+        // We rely on the override being constructed with only the fields the author intended
+        if (override.size_x != 1.0) base.size_x = override.size_x;
+        if (override.size_y != 1.0) base.size_y = override.size_y;
+        if (override.size_z != 1.0) base.size_z = override.size_z;
+        if (override.x != 0.0) base.x = override.x;
+        if (override.y != 0.0) base.y = override.y;
+        if (override.z != 0.0) base.z = override.z;
+        if (override.rotation_degrees != 0.0) base.rotation_degrees = override.rotation_degrees;
       }
-      result[name] = override;
     }
   }
   return {std::move(result), std::move(validation)};

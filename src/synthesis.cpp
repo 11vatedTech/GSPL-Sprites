@@ -1589,13 +1589,15 @@ LivingAnimation2dBuildResult synthesize_living_animation2d(const SpriteSeed& see
 
   auto storm_first = gen_form_frames(storm_morph, "storm", storm_pal, result.storm_frames, storm_pf);
 
+  // Compute frame hashes on each vector before assembly
+  for (auto& f : result.base_frames) f.frame_hash = compute_frame_hash(f.image);
+  for (auto& f : result.transformation_frames) f.frame_hash = compute_frame_hash(f.image);
+  for (auto& f : result.storm_frames) f.frame_hash = compute_frame_hash(f.image);
+
   // Assemble all_frames: base + transform + storm
   result.all_frames = result.base_frames;
   for (auto& f : result.transformation_frames) result.all_frames.push_back(f);
   for (auto& f : result.storm_frames) result.all_frames.push_back(f);
-
-  // Compute frame hashes
-  for (auto& f : result.all_frames) f.frame_hash = compute_frame_hash(f.image);
 
   // Build sprite sheet
   SpriteSheetOptions opts{1024, 2048, 2, false, 0};
