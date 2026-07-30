@@ -2193,6 +2193,9 @@ void Canonicalizer::lower_generic_block(GenericBlock const& block, CanonicalEnti
                 "clip=" + clip.name + ": invalid loop value '" + loop_str + "' (expected true/false)", SourceSpan{});
         }
         // Parse event sub-blocks
+        // Track used event names to reject duplicates
+        std::set<std::string> used_event_names;
+        std::set<std::pair<std::uint32_t, std::string>> used_event_tick_names;
         auto parse_event_block = [&](GenericBlock const& ev_block) {
             if (ev_block.block_type != "event" && ev_block.block_type != "Event") return;
             std::string event_id = ev_block.name;
@@ -2201,13 +2204,22 @@ void Canonicalizer::lower_generic_block(GenericBlock const& block, CanonicalEnti
                     "clip=" + clip.name + ": event block has empty name", SourceSpan{});
                 return;
             }
+            // Reject duplicate event names
+            if (!used_event_names.insert(event_id).second) {
+                out.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
+                    "clip=" + clip.name + ": duplicate event '" + event_id + "'", SourceSpan{});
+                return;
+            }
+            // Extract tick attribute
             std::uint32_t ev_tick = 0;
             bool has_tick = false;
+            SourceSpan tick_span;
             for (auto const& ev_attr : ev_block.attributes) {
                 auto const* attr = dynamic_cast<AttributeNode const*>(ev_attr.get());
                 if (attr && attr->key == "tick" && attr->value) {
                     auto const* lit = dynamic_cast<LiteralNode const*>(attr->value.get());
                     if (lit) {
+                        tick_span = lit->span;
                         auto tick_result = parse_uint32_diagnostic(lit->value,
                             "clip=" + clip.name + " event=" + event_id);
                         if (tick_result.ok()) {
@@ -2224,7 +2236,12 @@ void Canonicalizer::lower_generic_block(GenericBlock const& block, CanonicalEnti
                     "clip=" + clip.name + " event=" + event_id + ": missing required field 'tick'", SourceSpan{});
                 return;
             }
-            // Validate tick is within clip duration (duration unknown at parse time, so just store)
+            // Reject duplicate tick+name pair
+            if (!used_event_tick_names.insert({ev_tick, event_id}).second) {
+                out.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
+                    "clip=" + clip.name + ": duplicate tick+event pair '" + event_id + "' at tick " + std::to_string(ev_tick), tick_span);
+                return;
+            }
             clip.clip_events.push_back({ev_tick, event_id});
         };
         for (auto const& attr_ptr : block.attributes) {

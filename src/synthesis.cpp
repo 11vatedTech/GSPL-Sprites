@@ -1304,16 +1304,19 @@ LivingAnimation2dBuildResult synthesize_living_animation2d(const SpriteSeed& see
           }
         }
       } else if (part.primitive == "segmented_curve") {
-        // Segmented curve: N-segment thick polyline with overlapping circles + connecting capsules
+        // Curved tail: deterministic quadratic curve with N segments
         int slen = std::max(rpy * 3, 6);
         int segments = 6;
         int sr = std::max(slen / (segments * 2), 1);
         double srad = total_rot * 3.141592653589793 / 180.0;
         double scos = std::cos(srad), ssin = std::sin(srad);
+        double curvature = 0.3;  // Controls tail curve bend
         for (int seg = 0; seg < segments; ++seg) {
           double t = static_cast<double>(seg) / (segments - 1) - 0.5;
-          int scx = pcx + static_cast<int>(t * slen * scos);
-          int scy = pcy + static_cast<int>(t * slen * ssin);
+          // Quadratic curve: add curvature perpendicular to the main axis
+          double curve_offset = curvature * (1.0 - 4.0 * t * t);  // parabolic arc
+          int scx = pcx + static_cast<int>(t * slen * scos - curve_offset * slen * 0.3 * ssin);
+          int scy = pcy + static_cast<int>(t * slen * ssin + curve_offset * slen * 0.3 * scos);
           // Draw connecting capsule to next point
           if (seg + 1 < segments) {
             double tn = static_cast<double>(seg + 1) / (segments - 1) - 0.5;
@@ -1376,25 +1379,41 @@ LivingAnimation2dBuildResult synthesize_living_animation2d(const SpriteSeed& see
           }
         }
       } else if (part.primitive == "electrical_arc") {
-        // Deterministic segmented displacement arc (jagged lightning-like path)
+        // Continuous deterministic electrical arc with connecting capsules
         int esegs = 8;
         int elen = std::max(rpy2, 8);
         double erad = total_rot * 3.141592653589793 / 180.0;
         double ecos = std::cos(erad), esin = std::sin(erad);
         int ew = std::max(rpx / 2, 1);
+        // Precompute all point positions
+        struct EPoint { int x, y; };
+        std::vector<EPoint> epts;
         for (int es = 0; es < esegs; ++es) {
           double et = static_cast<double>(es) / (esegs - 1) - 0.5;
-          // Deterministic displacement using hash-like math
-          int edx = static_cast<int>(et * elen * ecos + std::sin(et * 37.0 + et * et * 13.0) * 3.0);
-          int edy = static_cast<int>(et * elen * esin + std::cos(et * 41.0 + et * et * 17.0) * 3.0);
-          int ecx = pcx + edx, ecy = pcy + edy;
-          for (int edy2 = -ew; edy2 <= ew; ++edy2) {
-            for (int edx2 = -ew; edx2 <= ew; ++edx2) {
-              if (edx2 * edx2 + edy2 * edy2 <= ew * ew) {
-                int epx = ecx + edx2, epy = ecy + edy2;
-                if (epx >= 0 && epx < canvas_w && epy >= 0 && epy < canvas_h) {
-                  std::size_t eidx = (static_cast<std::size_t>(epy) * canvas_w + static_cast<std::size_t>(epx)) * 4;
-                  blend_source_over(&canvas.pixels[eidx], color);
+          double disp = std::sin(et * 37.0 + et * et * 13.0) * 3.0;
+          double disp2 = std::cos(et * 41.0 + et * et * 17.0) * 3.0;
+          int edx = static_cast<int>(et * elen * ecos + disp * ecos - disp2 * esin);
+          int edy = static_cast<int>(et * elen * esin + disp * esin + disp2 * ecos);
+          epts.push_back({pcx + edx, pcy + edy});
+        }
+        // Draw continuous connecting capsules between consecutive points
+        for (std::size_t es = 0; es + 1 < epts.size(); ++es) {
+          int x0 = epts[es].x, y0 = epts[es].y;
+          int x1 = epts[es + 1].x, y1 = epts[es + 1].y;
+          int mdx = x1 - x0, mdy = y1 - y0;
+          double seg_len = std::sqrt(static_cast<double>(mdx * mdx + mdy * mdy));
+          int steps = std::max(static_cast<int>(seg_len), 1);
+          for (int ss = 0; ss <= steps; ++ss) {
+            int epx = x0 + static_cast<int>(mdx * ss / steps);
+            int epy = y0 + static_cast<int>(mdy * ss / steps);
+            for (int edy2 = -ew; edy2 <= ew; ++edy2) {
+              for (int edx2 = -ew; edx2 <= ew; ++edx2) {
+                if (edx2 * edx2 + edy2 * edy2 <= ew * ew) {
+                  int fpx = epx + edx2, fpy = epy + edy2;
+                  if (fpx >= 0 && fpx < canvas_w && fpy >= 0 && fpy < canvas_h) {
+                    std::size_t eidx = (static_cast<std::size_t>(fpy) * canvas_w + static_cast<std::size_t>(fpx)) * 4;
+                    blend_source_over(&canvas.pixels[eidx], color);
+                  }
                 }
               }
             }
@@ -1415,12 +1434,21 @@ LivingAnimation2dBuildResult synthesize_living_animation2d(const SpriteSeed& see
                               std::string& pf) -> std::map<std::string, std::uint32_t> {
     pf = entity_id + "." + std::string(form_id);
     std::map<std::string, std::uint32_t> first_frame;
-    auto gen = [&](const char* clip_name, std::uint32_t count, std::uint32_t dur) {
+    // Use kRequiredClips to determine frame counts
+    for (auto const& entry : kRequiredClips) {
+      // Match entries for the current form (base_* or storm_*)
+      std::string expected_prefix = std::string(form_id) + "_";
+      if (!entry.semantic_role.starts_with(expected_prefix)) continue;
+      // Extract clip name from entry.exact_id (e.g., "base_idle" -> "idle")
+      auto pos = entry.exact_id.find('_');
+      std::string clip_name = (pos != std::string_view::npos) ? std::string(entry.exact_id.substr(pos + 1)) : std::string(entry.exact_id);
       auto* clip = find_clip(form_id, clip_name);
       if (!clip) {
         add("MISSING_CLIP", std::string(form_id) + "_" + clip_name + " not found in seed clips");
-        return;
+        continue;
       }
+      std::uint32_t count = entry.output_frame_count;
+      std::uint32_t dur = (clip_name == "idle" || clip_name == "locomotion") ? 4 : 2;
       std::uint32_t start = static_cast<std::uint32_t>(out_frames.size());
       for (std::uint32_t i = 0; i < count; ++i) {
         // Nonlooping: include both endpoints; looping: sample evenly spaced
@@ -1437,11 +1465,7 @@ LivingAnimation2dBuildResult synthesize_living_animation2d(const SpriteSeed& see
         }
       }
       first_frame[clip_name] = start;
-    };
-    gen("idle", 4, 4);
-    gen("locomotion", 6, 3);
-    gen("attack", 6, 2);
-    gen("hit", 3, 2);
+    }
     return first_frame;
   };
 
@@ -1465,12 +1489,67 @@ LivingAnimation2dBuildResult synthesize_living_animation2d(const SpriteSeed& see
             part.size_y += (sit->second.size_y - part.size_y) * blend;
             part.x += (sit->second.x - part.x) * blend;
             part.y += (sit->second.y - part.y) * blend;
+            // Interpolate color fields when present
+            auto const& storm_color_str = sit->second.color;
+            if (!storm_color_str.empty() && storm_color_str[0] == '#' && storm_color_str.size() == 7 &&
+                !part.color.empty() && part.color[0] == '#') {
+              // Lerp RGB channels between base and storm colors
+              auto hex_val = [](char c) -> std::uint8_t {
+                if (c >= '0' && c <= '9') return static_cast<std::uint8_t>(c - '0');
+                if (c >= 'a' && c <= 'f') return static_cast<std::uint8_t>(c - 'a' + 10);
+                if (c >= 'A' && c <= 'F') return static_cast<std::uint8_t>(c - 'A' + 10);
+                return 0;
+              };
+              auto hex_pair = [&](char hi, char lo) -> std::uint8_t {
+                return static_cast<std::uint8_t>((hex_val(hi) << 4) | hex_val(lo));
+              };
+              std::uint8_t br = hex_pair(part.color[1], part.color[2]);
+              std::uint8_t bg = hex_pair(part.color[3], part.color[4]);
+              std::uint8_t bb = hex_pair(part.color[5], part.color[6]);
+              std::uint8_t sr = hex_pair(storm_color_str[1], storm_color_str[2]);
+              std::uint8_t sg = hex_pair(storm_color_str[3], storm_color_str[4]);
+              std::uint8_t sb = hex_pair(storm_color_str[5], storm_color_str[6]);
+              auto lerp_u8 = [&](std::uint8_t a, std::uint8_t b) -> std::uint8_t {
+                return static_cast<std::uint8_t>(static_cast<int>(a) + static_cast<int>((static_cast<int>(b) - static_cast<int>(a)) * blend));
+              };
+              char r_hi = "0123456789abcdef"[(lerp_u8(br, sr) >> 4) & 0xF];
+              char r_lo = "0123456789abcdef"[lerp_u8(br, sr) & 0xF];
+              char g_hi = "0123456789abcdef"[(lerp_u8(bg, sg) >> 4) & 0xF];
+              char g_lo = "0123456789abcdef"[lerp_u8(bg, sg) & 0xF];
+              char b_hi = "0123456789abcdef"[(lerp_u8(bb, sb) >> 4) & 0xF];
+              char b_lo = "0123456789abcdef"[lerp_u8(bb, sb) & 0xF];
+              part.color = std::string("#") + r_hi + r_lo + g_hi + g_lo + b_hi + b_lo;
+            }
+            // Boolean fields: flip at midpoint threshold
+            double midpoint = 0.5;
+            if (part.emissive != sit->second.emissive) {
+              part.emissive = (blend >= midpoint) ? sit->second.emissive : part.emissive;
+            }
+            if (part.electrical_marking != sit->second.electrical_marking) {
+              part.electrical_marking = (blend >= midpoint) ? sit->second.electrical_marking : part.electrical_marking;
+            }
           }
         }
+        // Interpolate palette colors
+        auto lerp_palette = [&](std::uint32_t a, std::uint32_t b) -> std::uint32_t {
+          auto lerp_c = [&](std::uint8_t ca, std::uint8_t cb) -> std::uint8_t {
+            return static_cast<std::uint8_t>(static_cast<int>(ca) + static_cast<int>((static_cast<int>(cb) - static_cast<int>(ca)) * blend));
+          };
+          return (static_cast<std::uint32_t>(lerp_c((a >> 24) & 0xFF, (b >> 24) & 0xFF)) << 24)
+               | (static_cast<std::uint32_t>(lerp_c((a >> 16) & 0xFF, (b >> 16) & 0xFF)) << 16)
+               | (static_cast<std::uint32_t>(lerp_c((a >> 8) & 0xFF, (b >> 8) & 0xFF)) << 8)
+               | lerp_c(a & 0xFF, b & 0xFF);
+        };
+        SynthesisPalette t_pal;
+        t_pal.primary = lerp_palette(base_pal.primary, storm_pal.primary);
+        t_pal.secondary = lerp_palette(base_pal.secondary, storm_pal.secondary);
+        t_pal.accent = lerp_palette(base_pal.accent, storm_pal.accent);
+        t_pal.outline = lerp_palette(base_pal.outline, storm_pal.outline);
+        t_pal.background = lerp_palette(base_pal.background, storm_pal.background);
         auto pr = evaluate_pose(*tclip, rig, tick);
         if (pr.ok()) {
           result.transformation_frames.push_back({tpf + "." + std::to_string(i),
-            render_morph(t_morph, *pr.value, base_pal), canvas_w / 2, canvas_h / 2, 2});
+            render_morph(t_morph, *pr.value, t_pal), canvas_w / 2, canvas_h / 2, 2});
         }
       }
     }
@@ -1529,6 +1608,11 @@ LivingAnimation2dBuildResult synthesize_living_animation2d(const SpriteSeed& see
       }
     }
     bool looping = skeletal_clip ? skeletal_clip->looping : entry.is_looping;
+    // Validate loop-flag mismatch against kRequiredClips
+    if (skeletal_clip && skeletal_clip->looping != entry.is_looping) {
+      add("LOOP_MISMATCH", std::string(entry.exact_id) + ": authored loop=" + (skeletal_clip->looping ? "true" : "false")
+          + " but kRequiredClips expects " + (entry.is_looping ? "true" : "false"));
+    }
     // Build clip ID
     std::string clip_id;
     if (entry.semantic_role != "transformation") {
