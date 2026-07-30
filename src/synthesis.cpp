@@ -1141,10 +1141,33 @@ std::uint32_t with_alpha(std::uint32_t rgba, std::uint8_t alpha) {
   return (rgba & 0xFFFFFF00u) | static_cast<std::uint32_t>(alpha);
 }
 
-LivingAnimation2dResult synthesize_living_animation2d(const SpriteSeed& seed) {
-  LivingAnimation2dResult result;
+void blend_source_over(std::uint8_t* dest, std::uint32_t src_rgba) {
+  // 0xRRGGBBAA packed format: R=bits 24-31, G=16-23, B=8-15, A=0-7
+  std::uint8_t sr = static_cast<std::uint8_t>((src_rgba >> 24) & 0xFF);
+  std::uint8_t sg = static_cast<std::uint8_t>((src_rgba >> 16) & 0xFF);
+  std::uint8_t sb = static_cast<std::uint8_t>((src_rgba >> 8) & 0xFF);
+  std::uint8_t sa = static_cast<std::uint8_t>(src_rgba & 0xFF);
+  if (sa == 0) return;  // fully transparent source: no change
+  if (sa == 255) {
+    // Fully opaque: direct overwrite
+    dest[0] = sr; dest[1] = sg; dest[2] = sb; dest[3] = 255;
+    return;
+  }
+  std::uint8_t dr = dest[0], dg = dest[1], db = dest[2], da = dest[3];
+  std::uint32_t dst_factor = (static_cast<std::uint32_t>(da) * (255 - sa)) / 255;
+  std::uint32_t out_a = sa + dst_factor;
+  if (out_a == 0) { dest[0] = dest[1] = dest[2] = dest[3] = 0; return; }
+  dest[0] = static_cast<std::uint8_t>((static_cast<std::uint32_t>(sr) * sa + static_cast<std::uint32_t>(dr) * dst_factor) / out_a);
+  dest[1] = static_cast<std::uint8_t>((static_cast<std::uint32_t>(sg) * sa + static_cast<std::uint32_t>(dg) * dst_factor) / out_a);
+  dest[2] = static_cast<std::uint8_t>((static_cast<std::uint32_t>(sb) * sa + static_cast<std::uint32_t>(db) * dst_factor) / out_a);
+  dest[3] = static_cast<std::uint8_t>(out_a);
+}
+
+LivingAnimation2dBuildResult synthesize_living_animation2d(const SpriteSeed& seed) {
+  LivingAnimation2d result;
+  ValidationResult validation;
   auto add = [&](std::string code, std::string msg) {
-    result.validation.diagnostics.push_back({std::move(code), std::move(msg)});
+    validation.diagnostics.push_back({std::move(code), std::move(msg)});
   };
 
   const std::string entity_id = seed.stable_id;
@@ -1226,21 +1249,159 @@ LivingAnimation2dResult synthesize_living_animation2d(const SpriteSeed& seed) {
       int prx = (std::max)(static_cast<int>(part.size_x * 1.5), 2);
       int pry = (std::max)(static_cast<int>(part.size_y * 1.5), 2);
       double total_rot = brot + part.rotation_degrees;
-      // Primitive selection with full scale consumed
+      // Real primitive selection — each primitive has distinct geometry
+      int rpx = static_cast<int>(prx * bsx), rpy = static_cast<int>(pry * bsy);
+      int rpx2 = static_cast<int>(prx * 2 * bsx), rpy2 = static_cast<int>(pry * 2 * bsy);
       if (part.primitive == "capsule") {
-        int len = static_cast<int>(pry * 2 * bsy);
-        int wid = static_cast<int>(prx * bsx);
-        draw_rotated_ellipse(canvas, pcx, pcy, std::max(wid/2, 1), std::max(len/2, 1), total_rot, 1.0, 1.0, color);
+        // Capsule: straight body at center + two half-ellipse end caps
+        int half_len = std::max(rpy, 2);
+        int half_wid = std::max(rpx / 2, 1);
+        // Draw body rectangle segment
+        int brect_len = std::max(half_len - half_wid, 0);
+        double crad = total_rot * 3.141592653589793 / 180.0;
+        double ccos = std::cos(crad), csin = std::sin(crad);
+        int bb = half_len + 2;
+        for (int dy = -bb; dy <= bb; ++dy) {
+          for (int dx = -bb; dx <= bb; ++dx) {
+            double lx = dx * ccos + dy * (-csin);
+            double ly = dx * csin + dy * ccos;
+            double dx_rect = std::max(std::abs(ly) - static_cast<double>(brect_len), 0.0);
+            if (dx_rect * dx_rect + lx * lx <= static_cast<double>(half_wid) * half_wid) {
+              int px = pcx + dx, py = pcy + dy;
+              if (px >= 0 && px < canvas_w && py >= 0 && py < canvas_h) {
+                std::size_t idx = (static_cast<std::size_t>(py) * canvas_w + static_cast<std::size_t>(px)) * 4;
+                blend_source_over(&canvas.pixels[idx], color);
+              }
+            }
+          }
+        }
       } else if (part.primitive == "triangle") {
-        int tw = static_cast<int>(prx * 2 * bsx);
-        int th = static_cast<int>(pry * 2 * bsy);
-        draw_rotated_ellipse(canvas, pcx, pcy, std::max(tw/2, 2), std::max(th/2, 2), total_rot, 1.0, 1.0, color);
+        // Isosceles triangle: apex at (0, -h/2), base at (+/-w/2, h/2)
+        int tw = std::max(rpx2, 4), th = std::max(rpy2, 4);
+        double trad = total_rot * 3.141592653589793 / 180.0;
+        double tcos = std::cos(trad), tsin = std::sin(trad);
+        double hw = tw * 0.5, hh = th * 0.5;
+        int tbb = std::max(tw, th) / 2 + 2;
+        for (int dy = -tbb; dy <= tbb; ++dy) {
+          for (int dx = -tbb; dx <= tbb; ++dx) {
+            double lx = dx * tcos + dy * (-tsin);
+            double ly = dx * tsin + dy * tcos;
+            double tax = 0, tay = -hh;
+            double tbx = -hw, tby = hh;
+            double tcx = hw, tcy = hh;
+            double d1 = (lx - tbx) * (tay - tby) - (tax - tbx) * (ly - tby);
+            double d2 = (lx - tcx) * (tby - tcy) - (tbx - tcx) * (ly - tcy);
+            double d3 = (lx - tax) * (tcy - tay) - (tcx - tax) * (ly - tay);
+            bool neg = (d1 < 0) || (d2 < 0) || (d3 < 0);
+            bool pos = (d1 > 0) || (d2 > 0) || (d3 > 0);
+            if (!(neg && pos)) {
+              int px = pcx + dx, py = pcy + dy;
+              if (px >= 0 && px < canvas_w && py >= 0 && py < canvas_h) {
+                std::size_t idx = (static_cast<std::size_t>(py) * canvas_w + static_cast<std::size_t>(px)) * 4;
+                blend_source_over(&canvas.pixels[idx], color);
+              }
+            }
+          }
+        }
       } else if (part.primitive == "segmented_curve") {
-        draw_rotated_ellipse(canvas, pcx, pcy, std::max(static_cast<int>(prx * bsx), 2), std::max(static_cast<int>(pry * 3 * bsy), 2), total_rot, 1.0, 1.0, color);
+        // Segmented curve: N-segment thick polyline with overlapping circles + connecting capsules
+        int slen = std::max(rpy * 3, 6);
+        int segments = 6;
+        int sr = std::max(slen / (segments * 2), 1);
+        double srad = total_rot * 3.141592653589793 / 180.0;
+        double scos = std::cos(srad), ssin = std::sin(srad);
+        for (int seg = 0; seg < segments; ++seg) {
+          double t = static_cast<double>(seg) / (segments - 1) - 0.5;
+          int scx = pcx + static_cast<int>(t * slen * scos);
+          int scy = pcy + static_cast<int>(t * slen * ssin);
+          // Draw connecting capsule to next point
+          if (seg + 1 < segments) {
+            double tn = static_cast<double>(seg + 1) / (segments - 1) - 0.5;
+            int snx = pcx + static_cast<int>(tn * slen * scos);
+            int sny = pcy + static_cast<int>(tn * slen * ssin);
+            int mdx = snx - scx, mdy = sny - scy;
+            double seg_len = std::sqrt(static_cast<double>(mdx * mdx + mdy * mdy));
+            if (seg_len > 0) {
+              int seg_steps = static_cast<int>(seg_len) + 1;
+              for (int ss = 0; ss <= seg_steps; ++ss) {
+                int isx = scx + static_cast<int>(mdx * ss / seg_steps);
+                int isy = scy + static_cast<int>(mdy * ss / seg_steps);
+                for (int sdy = -sr; sdy <= sr; ++sdy) {
+                  for (int sdx = -sr; sdx <= sr; ++sdx) {
+                    if (sdx * sdx + sdy * sdy <= sr * sr) {
+                      int spx = isx + sdx, spy = isy + sdy;
+                      if (spx >= 0 && spx < canvas_w && spy >= 0 && spy < canvas_h) {
+                        std::size_t sidx = (static_cast<std::size_t>(spy) * canvas_w + static_cast<std::size_t>(spx)) * 4;
+                        blend_source_over(&canvas.pixels[sidx], color);
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          } else {
+            // Last segment: just circle
+            for (int sdy = -sr; sdy <= sr; ++sdy) {
+              for (int sdx = -sr; sdx <= sr; ++sdx) {
+                if (sdx * sdx + sdy * sdy <= sr * sr) {
+                  int spx = scx + sdx, spy = scy + sdy;
+                  if (spx >= 0 && spx < canvas_w && spy >= 0 && spy < canvas_h) {
+                    std::size_t sidx = (static_cast<std::size_t>(spy) * canvas_w + static_cast<std::size_t>(spx)) * 4;
+                    blend_source_over(&canvas.pixels[sidx], color);
+                  }
+                }
+              }
+            }
+          }
+        }
       } else if (part.primitive == "aura_contour") {
-        std::uint32_t aura_rgba = with_alpha(color, (color & 0xFF) / 3);
-        draw_rotated_ellipse(canvas, pcx, pcy, static_cast<int>(prx * 2 * bsx), static_cast<int>(pry * 2 * bsy), total_rot, 1.0, 1.0, aura_rgba);
+        // Aura: hollow ring between inner and outer radii, fading alpha with distance
+        int aur_r = std::max(static_cast<int>(prx * 2 * bsx), 4);
+        int aur_inner = aur_r * 2 / 3;
+        int aur_bb = aur_r + 2;
+        for (int dy = -aur_bb; dy <= aur_bb; ++dy) {
+          for (int dx = -aur_bb; dx <= aur_bb; ++dx) {
+            double dist2 = static_cast<double>(dx * dx + dy * dy);
+            if (dist2 >= static_cast<double>(aur_inner * aur_inner) && dist2 <= static_cast<double>(aur_r * aur_r)) {
+              double dist = std::sqrt(dist2);
+              double ring_f = (dist - aur_inner) / static_cast<double>(aur_r - aur_inner);
+              std::uint8_t aura_alpha = static_cast<std::uint8_t>((static_cast<int>((color & 0xFF) * (1.0 - ring_f * 0.5))));
+              std::uint32_t aura_rgba = with_alpha(color, aura_alpha);
+              int apx = pcx + dx, apy = pcy + dy;
+              if (apx >= 0 && apx < canvas_w && apy >= 0 && apy < canvas_h) {
+                std::size_t aidx = (static_cast<std::size_t>(apy) * canvas_w + static_cast<std::size_t>(apx)) * 4;
+                blend_source_over(&canvas.pixels[aidx], aura_rgba);
+              }
+            }
+          }
+        }
+      } else if (part.primitive == "electrical_arc") {
+        // Deterministic segmented displacement arc (jagged lightning-like path)
+        int esegs = 8;
+        int elen = std::max(rpy2, 8);
+        double erad = total_rot * 3.141592653589793 / 180.0;
+        double ecos = std::cos(erad), esin = std::sin(erad);
+        int ew = std::max(rpx / 2, 1);
+        for (int es = 0; es < esegs; ++es) {
+          double et = static_cast<double>(es) / (esegs - 1) - 0.5;
+          // Deterministic displacement using hash-like math
+          int edx = static_cast<int>(et * elen * ecos + std::sin(et * 37.0 + et * et * 13.0) * 3.0);
+          int edy = static_cast<int>(et * elen * esin + std::cos(et * 41.0 + et * et * 17.0) * 3.0);
+          int ecx = pcx + edx, ecy = pcy + edy;
+          for (int edy2 = -ew; edy2 <= ew; ++edy2) {
+            for (int edx2 = -ew; edx2 <= ew; ++edx2) {
+              if (edx2 * edx2 + edy2 * edy2 <= ew * ew) {
+                int epx = ecx + edx2, epy = ecy + edy2;
+                if (epx >= 0 && epx < canvas_w && epy >= 0 && epy < canvas_h) {
+                  std::size_t eidx = (static_cast<std::size_t>(epy) * canvas_w + static_cast<std::size_t>(epx)) * 4;
+                  blend_source_over(&canvas.pixels[eidx], color);
+                }
+              }
+            }
+          }
+        }
       } else {
+        // Default: ellipse
         draw_rotated_ellipse(canvas, pcx, pcy, prx, pry, total_rot, bsx, bsy, color);
       }
     }
@@ -1289,7 +1450,7 @@ LivingAnimation2dResult synthesize_living_animation2d(const SpriteSeed& seed) {
 
   // Generate transformation once
   {
-    auto* tclip = find_clip("transform", "transform");
+    auto* tclip = find_clip("transform", "ascend");
     std::string tpf = entity_id + ".transform";
     if (tclip) {
       for (std::uint32_t i = 0; i < 10; ++i) {
@@ -1369,7 +1530,7 @@ LivingAnimation2dResult synthesize_living_animation2d(const SpriteSeed& seed) {
       durs.push_back(2);
     }
     std::vector<AnimationEvent> events;
-    auto* tclip = find_clip("transform", "transform");
+    auto* tclip = find_clip("transform", "ascend");
     if (tclip) {
       for (auto const& [ev_name, ev_tick] : tclip->events) {
         std::uint32_t fi = tclip->duration_ticks > 0 ? (ev_tick * 10 / tclip->duration_ticks) : 0;
@@ -1403,7 +1564,9 @@ LivingAnimation2dResult synthesize_living_animation2d(const SpriteSeed& seed) {
   if (result.all_frames.size() != 48)
     add("FRAME_COUNT", "total frames: expected 48, got " + std::to_string(result.all_frames.size()));
 
-  return result;
+  if (validation.ok())
+    return {std::move(result), std::move(validation)};
+  return {std::nullopt, std::move(validation)};
 }
 
 } // namespace gspl::sprites

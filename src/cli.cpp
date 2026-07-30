@@ -228,14 +228,19 @@ DiagnosticResult Cli::compile_source(SourceBuffer source, CliOptions const& opts
                     std::filesystem::create_directories(package_path.parent_path());
                 if (opts.synthesize && !seed.morphology.empty()) {
                     auto living = ::gspl::sprites::synthesize_living_animation2d(seed);
-                    ::gspl::sprites::AuthoredVisualSet visual;
-                    visual.schema = "gspl.visual-set/0.1";
-                    visual.frames = std::move(living.all_frames);
-                    visual.sheet = ::gspl::sprites::SpriteSheetOptions{1024, 2048, 2, false, 0};
-                    visual.channel_maps = std::move(living.channel_maps);
-                    visual.canonical_metadata = "{\"projection\":\"morphology-driven-2d\",\"form\":\"base+storm\"}";
-                    visual.canonical_channel_metadata = "{\"channels\":[\"depth\"]}";
-                    ::gspl::sprites::build_package(seed, visual, package_path);
+                    if (!living.ok()) {
+                        for (auto const& d : living.diagnostics.diagnostics)
+                            ctx.diagnostics.add_error(DiagnosticCode::GSPL_TYPE_MISMATCH, d.code + ": " + d.message, {});
+                    } else {
+                        ::gspl::sprites::AuthoredVisualSet visual;
+                        visual.schema = "gspl.visual-set/0.1";
+                        visual.frames = std::move(living.value->all_frames);
+                        visual.sheet = ::gspl::sprites::SpriteSheetOptions{1024, 2048, 2, false, 0};
+                        visual.channel_maps = std::move(living.value->channel_maps);
+                        visual.canonical_metadata = "{\"projection\":\"morphology-driven-2d\",\"form\":\"base+storm\"}";
+                        visual.canonical_channel_metadata = "{\"channels\":[\"depth\"]}";
+                        ::gspl::sprites::build_package(seed, visual, package_path);
+                    }
                 } else {
                     ::gspl::sprites::build_package(seed, package_path);
                 }

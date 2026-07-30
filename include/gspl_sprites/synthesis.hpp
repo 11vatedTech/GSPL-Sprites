@@ -97,9 +97,29 @@ struct SynthesisResult {
                                                          const SynthesisResult& result,
                                                          const ResourceLimits& limits = {});
 
+/* ── Required clip table for living animation ── */
+struct RequiredLivingClip {
+  std::string_view semantic_role;
+  std::string_view exact_id;
+  std::uint32_t output_frame_count;
+  bool is_looping;
+};
+
+inline constexpr RequiredLivingClip kRequiredClips[] = {
+  {"base_idle",        "base_idle",         4, true},
+  {"base_locomotion",  "base_locomotion",   6, true},
+  {"base_attack",      "base_attack",       6, false},
+  {"base_hit",         "base_hit",          3, false},
+  {"transformation",   "transform_ascend", 10, false},
+  {"storm_idle",       "storm_idle",        4, true},
+  {"storm_locomotion", "storm_locomotion",  6, true},
+  {"storm_attack",     "storm_attack",       6, false},
+  {"storm_hit",        "storm_hit",          3, false},
+};
+
 /* ── Living Animation 2D: entity-level synthesis producing exactly
      48 frames (19 base + 10 transform + 19 storm) ── */
-struct LivingAnimation2dResult {
+struct LivingAnimation2d {
   std::vector<FrameSource> base_frames;
   std::vector<FrameSource> transformation_frames;
   std::vector<FrameSource> storm_frames;
@@ -109,11 +129,19 @@ struct LivingAnimation2dResult {
   std::vector<CollisionShape> collision_shapes;
   std::vector<CollisionWindow> collision_windows;
   SpriteSheetArtifacts sheet;
-  ValidationResult validation;
 };
 
-[[nodiscard]] LivingAnimation2dResult synthesize_living_animation2d(const SpriteSeed& seed);
+struct LivingAnimation2dBuildResult {
+  std::optional<LivingAnimation2d> value;
+  ValidationResult diagnostics;
+  [[nodiscard]] bool ok() const { return value.has_value() && diagnostics.ok(); }
+};
+
+[[nodiscard]] LivingAnimation2dBuildResult synthesize_living_animation2d(const SpriteSeed& seed);
 
 [[nodiscard]] std::uint32_t with_alpha(std::uint32_t rgba, std::uint8_t alpha);
+
+/* ── Source-over blending for RGBA (0xRRGGBBAA packed format) ── */
+void blend_source_over(std::uint8_t* dest, std::uint32_t src_rgba);
 
 } // namespace gspl::sprites
