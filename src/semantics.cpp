@@ -2184,24 +2184,72 @@ void Canonicalizer::lower_generic_block(GenericBlock const& block, CanonicalEnti
     } else if (block.block_type == "clip" || block.block_type == "Clip") {
         CanonicalAnimationClip clip;
         clip.name = block.name;
+        // Parse loop flag from attribute
+        auto loop_str = get_attr("loop");
+        if (!loop_str.empty()) {
+            if (loop_str == "true") clip.loop = true;
+            else if (loop_str == "false") clip.loop = false;
+            else out.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
+                "clip=" + clip.name + ": invalid loop value '" + loop_str + "' (expected true/false)", SourceSpan{});
+        }
+        // Parse event sub-blocks
+        auto parse_event_block = [&](GenericBlock const& ev_block) {
+            if (ev_block.block_type != "event" && ev_block.block_type != "Event") return;
+            std::string event_id = ev_block.name;
+            if (event_id.empty()) {
+                out.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
+                    "clip=" + clip.name + ": event block has empty name", SourceSpan{});
+                return;
+            }
+            std::uint32_t ev_tick = 0;
+            bool has_tick = false;
+            for (auto const& ev_attr : ev_block.attributes) {
+                auto const* attr = dynamic_cast<AttributeNode const*>(ev_attr.get());
+                if (attr && attr->key == "tick" && attr->value) {
+                    auto const* lit = dynamic_cast<LiteralNode const*>(attr->value.get());
+                    if (lit) {
+                        auto tick_result = parse_uint32_diagnostic(lit->value,
+                            "clip=" + clip.name + " event=" + event_id);
+                        if (tick_result.ok()) {
+                            ev_tick = *tick_result.value;
+                            has_tick = true;
+                        } else {
+                            out.diagnostics.merge(tick_result.diagnostics);
+                        }
+                    }
+                }
+            }
+            if (!has_tick) {
+                out.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
+                    "clip=" + clip.name + " event=" + event_id + ": missing required field 'tick'", SourceSpan{});
+                return;
+            }
+            // Validate tick is within clip duration (duration unknown at parse time, so just store)
+            clip.clip_events.push_back({ev_tick, event_id});
+        };
         for (auto const& attr_ptr : block.attributes) {
             auto const* gb = dynamic_cast<GenericBlock const*>(attr_ptr.get());
-            if (gb && (gb->block_type == "track" || gb->block_type == "Track")) {
-                CanonicalAnimationClip::Track track;
-                track.bone = gb->name;
-                // Process key blocks first (typed keyframe syntax)
-                for (auto const& child_ptr : gb->attributes) {
-                    auto const* child_gb = dynamic_cast<GenericBlock const*>(child_ptr.get());
-                    if (child_gb && (child_gb->block_type == "key")) {
-                        // Fail-closed tick parsing: validate name as uint32
-                        auto tick_result = parse_uint32_diagnostic(child_gb->name,
-                            "clip=" + clip.name + " track=" + track.bone);
-                        if (!tick_result.ok()) {
-                            out.diagnostics.merge(tick_result.diagnostics);
-                            continue;
-                        }
-                        CanonicalKeyframe kf;
-                        kf.tick = *tick_result.value;
+            if (gb) {
+                if (gb->block_type == "event" || gb->block_type == "Event") {
+                    parse_event_block(*gb);
+                    continue;
+                }
+                if (gb->block_type == "track" || gb->block_type == "Track") {
+                    CanonicalAnimationClip::Track track;
+                    track.bone = gb->name;
+                    // Process key blocks first (typed keyframe syntax)
+                    for (auto const& child_ptr : gb->attributes) {
+                        auto const* child_gb = dynamic_cast<GenericBlock const*>(child_ptr.get());
+                        if (child_gb && (child_gb->block_type == "key")) {
+                            // Fail-closed tick parsing: validate name as uint32
+                            auto tick_result = parse_uint32_diagnostic(child_gb->name,
+                                "clip=" + clip.name + " track=" + track.bone);
+                            if (!tick_result.ok()) {
+                                out.diagnostics.merge(tick_result.diagnostics);
+                                continue;
+                            }
+                            CanonicalKeyframe kf;
+                            kf.tick = *tick_result.value;
                         auto get_key_attr = [&](std::string const& key) -> std::string {
                             for (auto const& a : child_gb->attributes) {
                                 auto const* attr = dynamic_cast<AttributeNode const*>(a.get());
@@ -2270,6 +2318,7 @@ void Canonicalizer::lower_generic_block(GenericBlock const& block, CanonicalEnti
                 // Legacy tick-only fallback removed — all tracks must use typed keyframe syntax
                 clip.tracks.push_back(std::move(track));
             }
+            }  // close if (gb)
         }
         out.clips.push_back(std::move(clip));
     } else if (block.block_type == "state" || block.block_type == "State") {

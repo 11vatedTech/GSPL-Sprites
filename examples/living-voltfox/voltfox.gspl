@@ -353,6 +353,7 @@ entity Voltfox {
 
     // ── Animation Clips ──
     clip base_idle {
+        loop: true;
         track torso {
             key 0 { x: 0.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
         }
@@ -366,6 +367,7 @@ entity Voltfox {
         }
     }
     clip base_locomotion {
+        loop: true;
         track torso {
             key 0 { x: 0.0; y: 3.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
             key 8 { x: 0.0; y: -3.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
@@ -387,6 +389,10 @@ entity Voltfox {
         }
     }
     clip base_attack {
+        loop: false;
+        event release {
+            tick: 6;
+        }
         track head {
             key 0 { x: -2.0; y: 1.0; rotation_degrees: -5.0; scale_x: 1.0; scale_y: 1.0; }
             key 6 { x: 4.0; y: -1.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
@@ -401,6 +407,7 @@ entity Voltfox {
         }
     }
     clip base_hit {
+        loop: false;
         track torso {
             key 0 { x: -4.0; y: 2.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
             key 6 { x: -1.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
@@ -412,6 +419,13 @@ entity Voltfox {
         }
     }
     clip transform_ascend {
+        loop: false;
+        event midpoint {
+            tick: 20;
+        }
+        event complete {
+            tick: 40;
+        }
         track torso {
             key 0 { x: 0.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
             key 20 { x: 0.0; y: 5.0; rotation_degrees: 0.0; scale_x: 1.1; scale_y: 1.1; }
@@ -434,6 +448,7 @@ entity Voltfox {
         }
     }
     clip storm_idle {
+        loop: true;
         track torso {
             key 0 { x: 0.0; y: 0.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
         }
@@ -453,6 +468,10 @@ entity Voltfox {
         }
     }
     clip storm_attack {
+        loop: false;
+        event release {
+            tick: 6;
+        }
         track head {
             key 0 { x: -3.0; y: 1.0; rotation_degrees: -5.0; scale_x: 1.0; scale_y: 1.0; }
             key 8 { x: 5.0; y: -2.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
@@ -478,6 +497,7 @@ entity Voltfox {
         }
     }
     clip storm_locomotion {
+        loop: true;
         track torso {
             key 0 { x: 0.0; y: 4.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
             key 8 { x: 0.0; y: -4.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
@@ -501,6 +521,7 @@ entity Voltfox {
         }
     }
     clip storm_hit {
+        loop: false;
         track torso {
             key 0 { x: -5.0; y: 3.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }
             key 6 { x: -2.0; y: 1.0; rotation_degrees: 0.0; scale_x: 1.0; scale_y: 1.0; }

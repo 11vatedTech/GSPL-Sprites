@@ -1490,56 +1490,73 @@ LivingAnimation2dBuildResult synthesize_living_animation2d(const SpriteSeed& see
   SpriteSheetOptions opts{1024, 2048, 2, false, 0};
   result.sheet = compile_sprite_sheet(result.all_frames, opts);
 
-  // Build animation clips with authored events
-  auto build_clips = [&](std::string_view pf, std::map<std::string, std::uint32_t> const& first,
-                          std::string_view form_id, std::uint32_t /*base_idx*/) {
-    struct ClipDef { std::string name; std::uint32_t count; std::uint32_t dur; };
-    std::vector<ClipDef> defs = {
-      {"idle", 4, 4}, {"locomotion", 6, 3}, {"attack", 6, 2}, {"hit", 3, 2}
-    };
-    for (auto const& d : defs) {
-      auto fit = first.find(d.name);
-      if (fit == first.end()) continue;
-      std::vector<std::string> fids;
-      std::vector<std::uint32_t> durs;
-      for (std::uint32_t i = 0; i < d.count; ++i) {
-        fids.push_back(std::string(pf) + "." + d.name + "." + std::to_string(i));
-        durs.push_back(d.dur);
-      }
-      // Map authored clip events to frame indices
-      std::vector<AnimationEvent> events;
-      auto* clip = find_clip(form_id, d.name);
-      if (clip) {
-        for (auto const& [ev_name, ev_tick] : clip->events) {
-          std::uint32_t fi = clip->duration_ticks > 0 ? (ev_tick * d.count / clip->duration_ticks) : 0;
-          if (fi < d.count) events.push_back({ev_name, fi});
-        }
-      }
-      bool looping = clip ? clip->looping : true;
-      result.clips.push_back({std::string(pf) + "." + d.name, std::move(fids), std::move(durs), std::move(events), looping});
-    }
-  };
-  build_clips(base_pf, base_first, "base", 0);
-  // Transformation clip
-  {
-    std::string tpf = entity_id + ".transform";
+  // Build animation clips driven entirely by kRequiredClips
+  auto build_clip_from_table = [&](RequiredLivingClip const& entry, std::string_view pf,
+                                    std::map<std::string, std::uint32_t> const& first) {
+    // Determine clip name from entry.exact_id by stripping prefix (base_/storm_/transform_)
+    std::string_view clip_name = entry.exact_id;
+    auto pos = clip_name.find('_');
+    std::string role = (pos != std::string_view::npos) ? std::string(clip_name.substr(pos + 1)) : std::string(clip_name);
+    auto fit = (entry.semantic_role != "transformation") ? first.find(role) : first.find("ascend");
+    if (fit == first.end()) return;
+    // Determine the form prefix for frame IDs and clip lookup
+    std::string lookup_form;
+    std::string lookup_role = role;
+    if (entry.semantic_role.starts_with("base_")) lookup_form = "base";
+    else if (entry.semantic_role.starts_with("storm_")) lookup_form = "storm";
+    else { lookup_form = "transform"; lookup_role = "ascend"; }  // transformation
+    // Look up the skeletal clip
+    auto* skeletal_clip = find_clip(lookup_form, lookup_role);
+    // Build frames
     std::vector<std::string> fids;
     std::vector<std::uint32_t> durs;
-    for (int i = 0; i < 10; ++i) {
-      fids.push_back(tpf + "." + std::to_string(i));
+    for (std::uint32_t i = 0; i < entry.output_frame_count; ++i) {
+      if (entry.semantic_role != "transformation") {
+        fids.push_back(std::string(pf) + "." + role + "." + std::to_string(i));
+      } else {
+        fids.push_back(std::string(entity_id) + ".transform." + std::to_string(i));
+      }
       durs.push_back(2);
     }
+    // Map authored clip events to frame indices using retained schedule
     std::vector<AnimationEvent> events;
-    auto* tclip = find_clip("transform", "ascend");
-    if (tclip) {
-      for (auto const& [ev_name, ev_tick] : tclip->events) {
-        std::uint32_t fi = tclip->duration_ticks > 0 ? (ev_tick * 10 / tclip->duration_ticks) : 0;
-        if (fi < 10) events.push_back({ev_name, fi});
+    if (skeletal_clip) {
+      for (auto const& [ev_name, ev_tick] : skeletal_clip->events) {
+        std::uint32_t fi = skeletal_clip->duration_ticks > 0
+            ? (ev_tick * entry.output_frame_count / skeletal_clip->duration_ticks)
+            : 0;
+        if (fi < entry.output_frame_count) events.push_back({ev_name, fi});
       }
     }
-    result.clips.push_back({tpf, std::move(fids), std::move(durs), std::move(events), false});
+    bool looping = skeletal_clip ? skeletal_clip->looping : entry.is_looping;
+    // Build clip ID
+    std::string clip_id;
+    if (entry.semantic_role != "transformation") {
+      clip_id = std::string(pf) + "." + role;
+    } else {
+      clip_id = std::string(entity_id) + ".transform";
+    }
+    result.clips.push_back({clip_id, std::move(fids), std::move(durs), std::move(events), looping});
+  };
+
+  // Build clips for base frames using kRequiredClips base entries
+  for (auto const& entry : kRequiredClips) {
+    if (entry.semantic_role.starts_with("base_")) {
+      build_clip_from_table(entry, base_pf, base_first);
+    }
   }
-  build_clips(storm_pf, storm_first, "storm", 19);
+  // Build clips for transformation
+  for (auto const& entry : kRequiredClips) {
+    if (entry.semantic_role == "transformation") {
+      build_clip_from_table(entry, base_pf, base_first);
+    }
+  }
+  // Build clips for storm frames
+  for (auto const& entry : kRequiredClips) {
+    if (entry.semantic_role.starts_with("storm_")) {
+      build_clip_from_table(entry, storm_pf, storm_first);
+    }
+  }
 
   // Channel maps
   auto depth = ImageRgba8{canvas_w, canvas_h, ColorSpace::data, AlphaMode::opaque,
