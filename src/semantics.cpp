@@ -148,6 +148,7 @@ std::string canonical_identity_payload(CanonicalEntity const& entity) {
         append_key_value(out, "rotation_degrees", part.rotation_degrees);
         append_key_value(out, "emissive", part.emissive);
         append_key_value(out, "electrical_marking", part.electrical_marking);
+        if (part.z_order != 0) append_key_value(out, "z_order", static_cast<std::uint32_t>(part.z_order));
     }
     out << "};";
 
@@ -588,6 +589,7 @@ static JsonReadResult<CanonicalPart> decode_canonical_part(
             DECODE_STRING_FIELD(rr, key, fp, c, bone_id, diags);
             DECODE_STRING_FIELD(rr, key, fp, c, primitive, diags);
             DECODE_STRING_FIELD(rr, key, fp, c, semantic_role, diags);
+            if (key == "z_order") { auto v = rr.read_uint32_result(); if (!v.ok()) { diags.merge(v.diagnostics); return; } if (v.value) c.z_order = static_cast<std::int32_t>(*v.value); return; }
             rr.skip_value();
         });
 }
@@ -1132,7 +1134,8 @@ CanonicalSerializationResult CanonicalEntitySerializer::encode_canonical_entity(
            << ",\"color\":\"" << canonical_escape(part.color) << "\""
            << ",\"rotation_degrees\":" << part.rotation_degrees
            << ",\"emissive\":" << (part.emissive ? "true" : "false")
-           << ",\"electrical_marking\":" << (part.electrical_marking ? "true" : "false");
+           << ",\"electrical_marking\":" << (part.electrical_marking ? "true" : "false")
+           << ",\"z_order\":" << part.z_order;
         if (!part.bone_id.empty())
            os << ",\"bone_id\":\"" << canonical_escape(part.bone_id) << "\"";
         if (!part.primitive.empty())
@@ -1161,7 +1164,8 @@ CanonicalSerializationResult CanonicalEntitySerializer::encode_canonical_entity(
                << ",\"color\":\"" << canonical_escape(part.color) << "\""
                << ",\"rotation_degrees\":" << part.rotation_degrees
                << ",\"emissive\":" << (part.emissive ? "true" : "false")
-               << ",\"electrical_marking\":" << (part.electrical_marking ? "true" : "false");
+               << ",\"electrical_marking\":" << (part.electrical_marking ? "true" : "false")
+               << ",\"z_order\":" << part.z_order;
             if (!part.bone_id.empty())
                os << ",\"bone_id\":\"" << canonical_escape(part.bone_id) << "\"";
             if (!part.primitive.empty())
@@ -1986,9 +1990,7 @@ void Canonicalizer::lower_morphology(MorphologyDecl const& morph, CanonicalEntit
             else if (a->key == "semantic_role") cp.semantic_role = lit->value;
             else if (a->key == "emissive") cp.emissive = (lit->value == "true");
             else if (a->key == "electrical_marking") cp.electrical_marking = (lit->value == "true");
-            else if (a->key == "bone") cp.bone_id = lit->value;
-            else if (a->key == "primitive") cp.primitive = lit->value;
-            else if (a->key == "semantic_role") cp.semantic_role = lit->value;
+            else if (a->key == "z_order") cp.z_order = static_cast<std::int32_t>(std::stoi(lit->value));
             else
                 out.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
                     "part " + cp.name + ": unsupported field '" + a->key + "'", SourceSpan{});

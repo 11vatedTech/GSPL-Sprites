@@ -145,6 +145,7 @@ gspl::sprites::MorphologyPart SpriteIrLowering::lower_part(CanonicalPart const& 
     mp.bone_id = part.bone_id;
     mp.primitive = part.primitive.empty() ? std::string("ellipse") : part.primitive;
     mp.semantic_role = part.semantic_role;
+    mp.z_order = part.z_order;
     return mp;
 }
 

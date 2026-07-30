@@ -368,7 +368,7 @@ std::unique_ptr<AstNode> Parser::parse_declaration() {
                 text == "transition" || text == "runtime" || text == "rig" ||
                 text == "track" || text == "event" || text == "window" || text == "key" ||
                 text == "initial" || text == "part" || text == "material" ||
-                text == "palette") {
+                text == "palette" || text == "form_morphology" || text == "override") {
                 result = parse_generic_block(text);
             } else {
                 diags_.add_error(DiagnosticCode::GSPL_PARSE_INVALID_DECLARATION,

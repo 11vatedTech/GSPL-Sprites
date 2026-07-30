@@ -1138,7 +1138,7 @@ ValidationResult enforce_resource_limits(const SpriteSeed& seed,
 }
 
 std::uint32_t with_alpha(std::uint32_t rgba, std::uint8_t alpha) {
-  return (rgba & 0x00FFFFFF) | (static_cast<std::uint32_t>(alpha));
+  return (rgba & 0xFFFFFF00u) | static_cast<std::uint32_t>(alpha);
 }
 
 LivingAnimation2dResult synthesize_living_animation2d(const SpriteSeed& seed) {
@@ -1151,8 +1151,9 @@ LivingAnimation2dResult synthesize_living_animation2d(const SpriteSeed& seed) {
   const RigDefinition& rig = seed.rig.has_value() ? *seed.rig : make_biped_rig(entity_id);
   constexpr std::int32_t canvas_w = 128, canvas_h = 128;
 
-  auto base_pal = make_palette(seed.primary_color, seed.accent_color);
-  auto storm_pal = make_palette(seed.accent_color, seed.primary_color);
+  auto base_pal = make_palette(seed.primary_color, seed.accent_color);      auto storm_pal = make_palette(
+        !seed.storm_primary_color.empty() ? seed.storm_primary_color : seed.accent_color,
+        !seed.storm_accent_color.empty() ? seed.storm_accent_color : seed.primary_color);
 
   // Resolve per-form morphology
   auto base_morph = resolve_form_morphology(seed, "base");
@@ -1165,13 +1166,7 @@ LivingAnimation2dResult synthesize_living_animation2d(const SpriteSeed& seed) {
   auto find_clip = [&](std::string_view form_id, std::string_view name) -> const SkeletalClip* {
     std::string exact = std::string(form_id) + "_" + std::string(name);
     auto it = clip_map.find(exact);
-    if (it != clip_map.end()) return it->second;
-    // Fallback: substring match for transform clips
-    for (auto const& c : seed.clips) {
-      if (c.id.find(name) != std::string::npos && (form_id == "base" || form_id == "storm" || c.id.find("transform") != std::string::npos))
-        return &c;
-    }
-    return nullptr;
+    return (it != clip_map.end()) ? it->second : nullptr;
   };
 
   // Rendering lambda: uses z_order for sorting
@@ -1235,10 +1230,11 @@ LivingAnimation2dResult synthesize_living_animation2d(const SpriteSeed& seed) {
       if (part.primitive == "capsule") {
         int len = static_cast<int>(pry * 2 * bsy);
         int wid = static_cast<int>(prx * bsx);
-        // Draw capsule with scale applied... (simplified: uses draw_rotated_ellipse with scaled radii)
         draw_rotated_ellipse(canvas, pcx, pcy, std::max(wid/2, 1), std::max(len/2, 1), total_rot, 1.0, 1.0, color);
       } else if (part.primitive == "triangle") {
-        draw_rotated_ellipse(canvas, pcx, pcy, std::max(static_cast<int>(prx * bsx), 2), std::max(static_cast<int>(pry * bsy), 2), total_rot, 1.0, 1.0, color);
+        int tw = static_cast<int>(prx * 2 * bsx);
+        int th = static_cast<int>(pry * 2 * bsy);
+        draw_rotated_ellipse(canvas, pcx, pcy, std::max(tw/2, 2), std::max(th/2, 2), total_rot, 1.0, 1.0, color);
       } else if (part.primitive == "segmented_curve") {
         draw_rotated_ellipse(canvas, pcx, pcy, std::max(static_cast<int>(prx * bsx), 2), std::max(static_cast<int>(pry * 3 * bsy), 2), total_rot, 1.0, 1.0, color);
       } else if (part.primitive == "aura_contour") {
@@ -1260,10 +1256,18 @@ LivingAnimation2dResult synthesize_living_animation2d(const SpriteSeed& seed) {
     std::map<std::string, std::uint32_t> first_frame;
     auto gen = [&](const char* clip_name, std::uint32_t count, std::uint32_t dur) {
       auto* clip = find_clip(form_id, clip_name);
-      if (!clip) return;
+      if (!clip) {
+        add("MISSING_CLIP", std::string(form_id) + "_" + clip_name + " not found in seed clips");
+        return;
+      }
       std::uint32_t start = static_cast<std::uint32_t>(out_frames.size());
       for (std::uint32_t i = 0; i < count; ++i) {
-        std::uint32_t tick = clip->duration_ticks > 0 ? (i * clip->duration_ticks / count) : i;
+        // Nonlooping: include both endpoints; looping: sample evenly spaced
+        std::uint32_t tick = clip->duration_ticks > 0
+          ? (clip->looping
+              ? (i * clip->duration_ticks / count)
+              : (count > 1 ? static_cast<std::uint32_t>((i * (clip->duration_ticks - 1ull) + (count - 2) / 2) / (count - 1)) : 0u))
+          : i;
         auto pr = evaluate_pose(*clip, rig, tick);
         if (pr.ok()) {
           out_frames.push_back({pf + "." + clip_name + "." + std::to_string(i),
@@ -1350,7 +1354,8 @@ LivingAnimation2dResult synthesize_living_animation2d(const SpriteSeed& seed) {
           if (fi < d.count) events.push_back({ev_name, fi});
         }
       }
-      result.clips.push_back({std::string(pf) + "." + d.name, std::move(fids), std::move(durs), std::move(events), true});
+      bool looping = clip ? clip->looping : true;
+      result.clips.push_back({std::string(pf) + "." + d.name, std::move(fids), std::move(durs), std::move(events), looping});
     }
   };
   build_clips(base_pf, base_first, "base", 0);

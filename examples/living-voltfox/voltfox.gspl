@@ -79,6 +79,7 @@ entity Voltfox {
             bone: "torso";
             primitive: "ellipse";
             semantic_role: "torso";
+            z_order: 5;
             x: 0.0; y: 0.0; z: 0.0;
             size_x: 18.0; size_y: 14.0; size_z: 10.0;
             color: "#242038";
@@ -88,6 +89,7 @@ entity Voltfox {
             bone: "head";
             primitive: "ellipse";
             semantic_role: "head";
+            z_order: 8;
             x: 0.0; y: 0.0; z: 0.0;
             size_x: 10.0; size_y: 9.0; size_z: 8.0;
             color: "#242038";
@@ -97,6 +99,7 @@ entity Voltfox {
             bone: "head";
             primitive: "ellipse";
             semantic_role: "muzzle";
+            z_order: 9;
             x: 0.0; y: -5.0; z: 4.0;
             size_x: 6.0; size_y: 4.0; size_z: 3.0;
             color: "#56F1FF";
@@ -106,6 +109,7 @@ entity Voltfox {
             bone: "head";
             primitive: "triangle";
             semantic_role: "left-ear";
+            z_order: 7;
             x: -5.0; y: -3.0; z: -2.0;
             size_x: 4.0; size_y: 6.0; size_z: 2.0;
             color: "#242038";
@@ -116,6 +120,7 @@ entity Voltfox {
             bone: "head";
             primitive: "triangle";
             semantic_role: "right-ear";
+            z_order: 7;
             x: 5.0; y: -3.0; z: -2.0;
             size_x: 4.0; size_y: 6.0; size_z: 2.0;
             color: "#242038";
@@ -126,6 +131,7 @@ entity Voltfox {
             bone: "head";
             primitive: "ellipse";
             semantic_role: "left-eye";
+            z_order: 10;
             x: -3.0; y: -1.0; z: 5.0;
             size_x: 2.0; size_y: 2.0; size_z: 1.0;
             color: "#56F1FF";
@@ -136,6 +142,7 @@ entity Voltfox {
             bone: "head";
             primitive: "ellipse";
             semantic_role: "right-eye";
+            z_order: 10;
             x: 3.0; y: -1.0; z: 5.0;
             size_x: 2.0; size_y: 2.0; size_z: 1.0;
             color: "#56F1FF";
@@ -146,6 +153,7 @@ entity Voltfox {
             bone: "leg_fl";
             primitive: "capsule";
             semantic_role: "front-left-leg";
+            z_order: 6;
             x: 0.0; y: 0.0; z: 0.0;
             size_x: 4.0; size_y: 10.0; size_z: 4.0;
             color: "#242038";
@@ -155,6 +163,7 @@ entity Voltfox {
             bone: "leg_fr";
             primitive: "capsule";
             semantic_role: "front-right-leg";
+            z_order: 6;
             x: 0.0; y: 0.0; z: 0.0;
             size_x: 4.0; size_y: 10.0; size_z: 4.0;
             color: "#242038";
@@ -164,6 +173,7 @@ entity Voltfox {
             bone: "leg_hl";
             primitive: "capsule";
             semantic_role: "hind-left-leg";
+            z_order: 3;
             x: 0.0; y: 0.0; z: 0.0;
             size_x: 5.0; size_y: 10.0; size_z: 5.0;
             color: "#242038";
@@ -173,6 +183,7 @@ entity Voltfox {
             bone: "leg_hr";
             primitive: "capsule";
             semantic_role: "hind-right-leg";
+            z_order: 3;
             x: 0.0; y: 0.0; z: 0.0;
             size_x: 5.0; size_y: 10.0; size_z: 5.0;
             color: "#242038";
@@ -182,6 +193,7 @@ entity Voltfox {
             bone: "tail";
             primitive: "segmented_curve";
             semantic_role: "tail";
+            z_order: 4;
             x: 0.0; y: 0.0; z: 0.0;
             size_x: 3.0; size_y: 8.0; size_z: 3.0;
             color: "#56F1FF";
@@ -193,16 +205,45 @@ entity Voltfox {
             primitive: "aura_contour";
             semantic_role: "energy-aura";
             x: 0.0; y: 0.0; z: 0.0;
+            z_order: -10;
             size_x: 30.0; size_y: 30.0; size_z: 1.0;
             color: "#9067C6";
             emissive: true;
         }
     }
 
-    // Note: Storm form overrides use the storm appearance genes
-    // (storm_primary_color, storm_accent_color) for visual differentiation.
-    // Per-part form_morphology_overrides will be wired via the Canonicalizer
-    // in a future iteration.
+    // ── Storm form morphology overrides ──
+    form_morphology storm {
+        override torso {
+            size_x: 20.0;
+            size_y: 16.0;
+            z_order: 5;
+        }
+        override head {
+            size_x: 12.0;
+            size_y: 11.0;
+            z_order: 8;
+        }
+        override aura {
+            size_x: 38.0;
+            size_y: 38.0;
+            emissive: true;
+            electrical_marking: true;
+            z_order: -10;
+        }
+        override tail {
+            size_y: 12.0;
+            electrical_marking: true;
+        }
+        override left_ear {
+            size_y: 8.0;
+            rotation_degrees: -25.0;
+        }
+        override right_ear {
+            size_y: 8.0;
+            rotation_degrees: 25.0;
+        }
+    }
 
     // ── Abilities ──
     ability directional_lightning {

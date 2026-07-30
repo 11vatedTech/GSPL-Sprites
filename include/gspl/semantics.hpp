@@ -19,6 +19,7 @@ struct CanonicalPart {
     std::string bone_id;
     std::string primitive;
     std::string semantic_role;
+    std::int32_t z_order{};
     double x{}, y{}, z{};
     double size_x{1}, size_y{1}, size_z{1};
     std::string color;
