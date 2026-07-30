@@ -480,9 +480,34 @@ Projection2dDefinition synthesize_morphology_projection2d(
       } else if (part.primitive == "segmented_curve") {
         draw_segmented_curve(pcx, pcy, pry * 3, 6, total_rot, color);
       } else if (part.primitive == "aura_contour") {
-        // Aura: large ellipse at reduced alpha
-        std::uint32_t aura_color = (color & 0x00FFFFFF) | ((color & 0xFF) / 3);
-        draw_rotated_ellipse(canvas, pcx, pcy, prx * 2, pry * 2, total_rot, bsx, bsy, aura_color);
+        // Aura: hollow elliptical contour ring with proper rotation and nonuniform scale
+        int aerx = std::max(static_cast<int>(prx * 2 * bsx), 4);
+        int aery = std::max(static_cast<int>(pry * 2 * bsy), 4);
+        int ainner_x = aerx * 2 / 3;
+        int ainner_y = aery * 2 / 3;
+        double arad = total_rot * 3.141592653589793 / 180.0;
+        double acos_r = std::cos(arad), asin_r = std::sin(arad);
+        int abb = std::max(aerx, aery) + 2;
+        for (int dy = -abb; dy <= abb; ++dy) {
+          for (int dx = -abb; dx <= abb; ++dx) {
+            double lx = dx * acos_r - dy * asin_r;
+            double ly = dx * asin_r + dy * acos_r;
+            double outer_dist = lx*lx / (aerx*aerx) + ly*ly / (aery*aery);
+            double inner_dist = lx*lx / (ainner_x*ainner_x) + ly*ly / (ainner_y*ainner_y);
+            if (outer_dist <= 1.0 && inner_dist > 1.0) {
+              int apx = pcx + dx, apy = pcy + dy;
+              if (apx >= 0 && apx < canvas_w && apy >= 0 && apy < canvas_h) {
+                double dist = std::sqrt(static_cast<double>(dx*dx + dy*dy));
+                double maxd = std::sqrt(static_cast<double>(abb*abb * 2));
+                std::uint8_t aura_alpha = static_cast<std::uint8_t>(
+                    static_cast<int>((color & 0xFF) * (0.6 - 0.3 * dist / maxd)));
+                std::uint32_t aura_rgba = with_alpha(color, aura_alpha);
+                std::size_t aidx = (static_cast<std::size_t>(apy) * canvas_w + static_cast<std::size_t>(apx)) * 4;
+                blend_source_over(&canvas.pixels[aidx], aura_rgba);
+              }
+            }
+          }
+        }
       } else {
         // Default: ellipse
         draw_rotated_ellipse(canvas, pcx, pcy, prx, pry, total_rot, bsx, bsy, color);
@@ -1396,20 +1421,28 @@ LivingAnimation2dBuildResult synthesize_living_animation2d(const SpriteSeed& see
           }
         }
       } else if (part.primitive == "aura_contour") {
-        // Aura: hollow ring between inner and outer radii, fading alpha with distance
-        int aur_r = std::max(static_cast<int>(prx * 2 * bsx), 4);
-        int aur_inner = aur_r * 2 / 3;
-        int aur_bb = aur_r + 2;
-        for (int dy = -aur_bb; dy <= aur_bb; ++dy) {
-          for (int dx = -aur_bb; dx <= aur_bb; ++dx) {
-            double dist2 = static_cast<double>(dx * dx + dy * dy);
-            if (dist2 >= static_cast<double>(aur_inner * aur_inner) && dist2 <= static_cast<double>(aur_r * aur_r)) {
-              double dist = std::sqrt(dist2);
-              double ring_f = (dist - aur_inner) / static_cast<double>(aur_r - aur_inner);
-              std::uint8_t aura_alpha = static_cast<std::uint8_t>((static_cast<int>((color & 0xFF) * (1.0 - ring_f * 0.5))));
-              std::uint32_t aura_rgba = with_alpha(color, aura_alpha);
+        // Aura: elliptical contour ring with full rotation, nonuniform scale, and distance-fading alpha
+        int aerx = std::max(static_cast<int>(prx * 2 * bsx), 4);
+        int aery = std::max(static_cast<int>(pry * 2 * bsy), 4);
+        int ainner_x = aerx * 2 / 3;
+        int ainner_y = aery * 2 / 3;
+        double arad = total_rot * 3.141592653589793 / 180.0;
+        double acos_r = std::cos(arad), asin_r = std::sin(arad);
+        int abb = std::max(aerx, aery) + 2;
+        for (int dy = -abb; dy <= abb; ++dy) {
+          for (int dx = -abb; dx <= abb; ++dx) {
+            double lx = dx * acos_r - dy * asin_r;
+            double ly = dx * asin_r + dy * acos_r;
+            double outer_dist = lx*lx / (aerx*aerx) + ly*ly / (aery*aery);
+            double inner_dist = lx*lx / (ainner_x*ainner_x) + ly*ly / (ainner_y*ainner_y);
+            if (outer_dist <= 1.0 && inner_dist > 1.0) {
               int apx = pcx + dx, apy = pcy + dy;
               if (apx >= 0 && apx < canvas_w && apy >= 0 && apy < canvas_h) {
+                double dist = std::sqrt(static_cast<double>(dx*dx + dy*dy));
+                double maxd = std::sqrt(static_cast<double>(abb*abb * 2));
+                std::uint8_t aura_alpha = static_cast<std::uint8_t>(
+                    static_cast<int>((color & 0xFF) * (0.6 - 0.3 * dist / maxd)));
+                std::uint32_t aura_rgba = with_alpha(color, aura_alpha);
                 std::size_t aidx = (static_cast<std::size_t>(apy) * canvas_w + static_cast<std::size_t>(apx)) * 4;
                 blend_source_over(&canvas.pixels[aidx], aura_rgba);
               }
