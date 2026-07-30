@@ -1582,6 +1582,9 @@ LivingAnimation2dBuildResult synthesize_living_animation2d(const SpriteSeed& see
         }
       }
     }
+    // Record transformation start index for clip building
+    if (!result.transformation_frames.empty())
+      base_first["ascend"] = static_cast<std::uint32_t>(result.base_frames.size());
   }
 
   auto storm_first = gen_form_frames(storm_morph, "storm", storm_pal, result.storm_frames, storm_pf);
