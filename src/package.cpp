@@ -236,30 +236,44 @@ void lv_validate_input(const LivingVisualPackageInput& in) {
   }
 }
 
-// BoundedJsonReader helpers for manifest/manifest-like parsing
-static std::string lv_rd_str(gspl::BoundedJsonReader& r, std::string_view /*path*/) {
+// ── Fail-closed BoundedJsonReader helpers ──
+// Every helper throws on parse failure or wrong type.
+// PackageDiagnostic carries stable code + message for the caller.
+struct PackageDiagnostic { std::string code; std::string message; };
+[[noreturn]] static void lv_fail(std::string code, std::string msg) {
+  throw std::runtime_error(code + ": " + msg);
+}
+static std::string lv_rd_str(gspl::BoundedJsonReader& r, std::string_view path) {
   auto res = r.read_string_result();
-  if (!res.ok()) throw std::runtime_error("expected string");
+  if (!res.ok()) lv_fail("LV_TYPE_STR", std::string(path) + ": expected string");
   return std::move(*res.value);
 }
-static std::uint32_t lv_rd_u32(gspl::BoundedJsonReader& r, std::string_view /*path*/) {
+static std::uint32_t lv_rd_u32(gspl::BoundedJsonReader& r, std::string_view path) {
   auto res = r.read_uint32_result();
-  if (!res.ok()) return 0;
+  if (!res.ok()) lv_fail("LV_TYPE_U32", std::string(path) + ": expected uint32");
   return *res.value;
 }
-static std::uint64_t lv_rd_u64(gspl::BoundedJsonReader& r, std::string_view /*path*/) {
+static std::int32_t lv_rd_i32(gspl::BoundedJsonReader& r, std::string_view path) {
+  auto res = r.read_int32_result();
+  if (!res.ok()) lv_fail("LV_TYPE_I32", std::string(path) + ": expected int32");
+  return *res.value;
+}
+static std::uint64_t lv_rd_u64(gspl::BoundedJsonReader& r, std::string_view path) {
   auto res = r.read_uint64_result();
-  if (!res.ok()) return 0;
+  if (!res.ok()) lv_fail("LV_TYPE_U64", std::string(path) + ": expected uint64");
   return *res.value;
 }
-static double lv_rd_dbl(gspl::BoundedJsonReader& r, std::string_view /*path*/) {
+static double lv_rd_dbl(gspl::BoundedJsonReader& r, std::string_view path) {
   auto res = r.read_double_result();
-  if (!res.ok()) return 0.0;
-  return *res.value;
+  if (!res.ok()) lv_fail("LV_TYPE_F64", std::string(path) + ": expected finite double");
+  double v = *res.value;
+  if (!std::isfinite(v)) lv_fail("LV_NONFINITE", std::string(path) + ": non-finite double");
+  return v;
 }
-static bool lv_rd_bool(gspl::BoundedJsonReader& r, std::string_view /*path*/) {
+static bool lv_rd_bool(gspl::BoundedJsonReader& r, std::string_view path) {
   auto res = r.read_bool_result();
-  return res.ok() && *res.value;
+  if (!res.ok()) lv_fail("LV_TYPE_BOOL", std::string(path) + ": expected bool");
+  return *res.value;
 }
 
 // Fast key reader: read string into key buffer, match against expected value.
@@ -541,7 +555,7 @@ static SpriteSeed lv_parse_seed_json(std::string_view json) {
           else if (*mk.value == "sizeY") mp.size_y = lv_rd_dbl(r, "mp.sizeY");
           else if (*mk.value == "sizeZ") mp.size_z = lv_rd_dbl(r, "mp.sizeZ");
           else if (*mk.value == "rotationDegrees") mp.rotation_degrees = lv_rd_dbl(r, "mp.rotationDegrees");
-          else if (*mk.value == "zOrder") mp.z_order = static_cast<std::int32_t>(lv_rd_u32(r, "mp.zOrder"));
+          else if (*mk.value == "zOrder") mp.z_order = lv_rd_i32(r, "mp.zOrder");
           else if (*mk.value == "emissive") mp.emissive = lv_rd_bool(r, "mp.emissive");
           else if (*mk.value == "electricalMarking") mp.electrical_marking = lv_rd_bool(r, "mp.electricalMarking");
           else r.skip_value();
@@ -592,6 +606,330 @@ static SpriteSeed lv_parse_seed_json(std::string_view json) {
         if (!r.next_array_element("seed.animationIntents")) break;
       }
       r.end_array("seed.animationIntents");
+    }
+    // ── Previously skipped canonical fields ──
+    else if (k == "animationClips") {
+      if (!r.begin_object("seed.animationClips")) break;
+      while (r.has_more() && !r.has_error()) {
+        auto ck = r.read_string_result(); if (!ck.ok()) break;
+        if (!r.require(':', "seed.animationClips")) break;
+        if (*ck.value == "clips" && !r.has_error()) {
+          if (!r.begin_array("seed.animationClips.clips")) break;
+          while (r.has_more() && !r.has_error()) {
+            if (!r.begin_object("skeletalClip")) break;
+            SkeletalClip clip;
+            while (r.has_more() && !r.has_error()) {
+              auto sk = r.read_string_result(); if (!sk.ok()) break;
+              if (!r.require(':', "skeletalClip")) break;
+              if (*sk.value == "id") clip.id = lv_rd_str(r, "clip.id");
+              else if (*sk.value == "durationTicks") clip.duration_ticks = lv_rd_u32(r, "clip.durationTicks");
+              else if (*sk.value == "looping") clip.looping = lv_rd_bool(r, "clip.looping");
+              else if (*sk.value == "tracks") {
+                if (!r.begin_array("clip.tracks")) break;
+                while (r.has_more() && !r.has_error()) {
+                  if (!r.begin_object("boneTrack")) break;
+                  BoneTrack track;
+                  while (r.has_more() && !r.has_error()) {
+                    auto tk = r.read_string_result(); if (!tk.ok()) break;
+                    if (!r.require(':', "boneTrack")) break;
+                    if (*tk.value == "boneId") track.bone_id = lv_rd_str(r, "track.boneId");
+                    else if (*tk.value == "keys") {
+                      if (!r.begin_array("track.keys")) break;
+                      while (r.has_more() && !r.has_error()) {
+                        if (!r.begin_object("boneKey")) break;
+                        BoneKeyframe bkf;
+                        while (r.has_more() && !r.has_error()) {
+                          auto kk = r.read_string_result(); if (!kk.ok()) break;
+                          if (!r.require(':', "boneKey")) break;
+                          if (*kk.value == "tick") bkf.tick = lv_rd_u32(r, "key.tick");
+                          else if (*kk.value == "transform") {
+                            if (!r.begin_object("key.transform")) break;
+                            while (r.has_more() && !r.has_error()) {
+                              auto xk = r.read_string_result(); if (!xk.ok()) break;
+                              if (!r.require(':', "key.transform")) break;
+                              if (*xk.value == "x") bkf.transform.x = lv_rd_dbl(r, "trans.x");
+                              else if (*xk.value == "y") bkf.transform.y = lv_rd_dbl(r, "trans.y");
+                              else if (*xk.value == "rotationDegrees") bkf.transform.rotation_degrees = lv_rd_dbl(r, "trans.rot");
+                              else if (*xk.value == "scaleX") bkf.transform.scale_x = lv_rd_dbl(r, "trans.sx");
+                              else if (*xk.value == "scaleY") bkf.transform.scale_y = lv_rd_dbl(r, "trans.sy");
+                              else r.skip_value();
+                              r.record_object_member("key.transform");
+                              if (!r.next_object_member("key.transform")) break;
+                            }
+                            r.end_object("key.transform");
+                          } else r.skip_value();
+                          r.record_object_member("boneKey");
+                          if (!r.next_object_member("boneKey")) break;
+                        }
+                        r.end_object("boneKey");
+                        track.keys.push_back(std::move(bkf));
+                        r.record_array_element("track.keys");
+                        if (!r.next_array_element("track.keys")) break;
+                      }
+                      r.end_array("track.keys");
+                    } else r.skip_value();
+                    r.record_object_member("boneTrack");
+                    if (!r.next_object_member("boneTrack")) break;
+                  }
+                  r.end_object("boneTrack");
+                  if (!track.bone_id.empty()) clip.tracks.push_back(std::move(track));
+                  r.record_array_element("clip.tracks");
+                  if (!r.next_array_element("clip.tracks")) break;
+                }
+                r.end_array("clip.tracks");
+              } else if (*sk.value == "events") {
+                if (!r.begin_array("clip.events")) break;
+                while (r.has_more() && !r.has_error()) {
+                  if (!r.begin_object("clipEvent")) break;
+                  std::string ev_id; std::uint32_t ev_tick = 0;
+                  while (r.has_more() && !r.has_error()) {
+                    auto ek = r.read_string_result(); if (!ek.ok()) break;
+                    if (!r.require(':', "clipEvent")) break;
+                    if (*ek.value == "id") ev_id = lv_rd_str(r, "ev.id");
+                    else if (*ek.value == "tick") ev_tick = lv_rd_u32(r, "ev.tick");
+                    else r.skip_value();
+                    r.record_object_member("clipEvent");
+                    if (!r.next_object_member("clipEvent")) break;
+                  }
+                  r.end_object("clipEvent");
+                  if (!ev_id.empty()) clip.events.emplace_back(std::move(ev_id), ev_tick);
+                  r.record_array_element("clip.events");
+                  if (!r.next_array_element("clip.events")) break;
+                }
+                r.end_array("clip.events");
+              } else r.skip_value();
+              r.record_object_member("skeletalClip");
+              if (!r.next_object_member("skeletalClip")) break;
+            }
+            r.end_object("skeletalClip");
+            if (!clip.id.empty()) s.clips.push_back(std::move(clip));
+            r.record_array_element("seed.animationClips.clips");
+            if (!r.next_array_element("seed.animationClips.clips")) break;
+          }
+          r.end_array("seed.animationClips.clips");
+        } else r.skip_value();
+        r.record_object_member("seed.animationClips");
+        if (!r.next_object_member("seed.animationClips")) break;
+      }
+      r.end_object("seed.animationClips");
+    }
+    else if (k == "rig") {
+      if (r.peek() == 'n') { r.skip_value(); } // null
+      else if (!r.begin_object("seed.rig")) break;
+      else {
+        RigDefinition rig;
+        while (r.has_more() && !r.has_error()) {
+          auto rk = r.read_string_result(); if (!rk.ok()) break;
+          if (!r.require(':', "seed.rig")) break;
+          if (*rk.value == "id") rig.id = lv_rd_str(r, "rig.id");
+          else if (*rk.value == "bones") {
+            if (!r.begin_array("rig.bones")) break;
+            while (r.has_more() && !r.has_error()) {
+              if (!r.begin_object("bone")) break;
+              BoneDefinition bone;
+              while (r.has_more() && !r.has_error()) {
+                auto bk = r.read_string_result(); if (!bk.ok()) break;
+                if (!r.require(':', "bone")) break;
+                if (*bk.value == "id") bone.id = lv_rd_str(r, "bone.id");
+                else if (*bk.value == "length") bone.length = lv_rd_dbl(r, "bone.length");
+                else if (*bk.value == "limit") {
+                  if (!r.begin_object("bone.limit")) break;
+                  while (r.has_more() && !r.has_error()) {
+                    auto lk = r.read_string_result(); if (!lk.ok()) break;
+                    if (!r.require(':', "bone.limit")) break;
+                    if (*lk.value == "maximumDegrees") bone.limit.maximum_degrees = lv_rd_dbl(r, "limit.max");
+                    else if (*lk.value == "minimumDegrees") bone.limit.minimum_degrees = lv_rd_dbl(r, "limit.min");
+                    else r.skip_value();
+                    r.record_object_member("bone.limit");
+                    if (!r.next_object_member("bone.limit")) break;
+                  }
+                  r.end_object("bone.limit");
+                } else if (*bk.value == "parentId") {
+                  if (r.peek() == 'n') r.skip_value();
+                  else bone.parent_id = lv_rd_str(r, "bone.parentId");
+                } else if (*bk.value == "rest") {
+                  if (!r.begin_object("bone.rest")) break;
+                  while (r.has_more() && !r.has_error()) {
+                    auto rk2 = r.read_string_result(); if (!rk2.ok()) break;
+                    if (!r.require(':', "bone.rest")) break;
+                    if (*rk2.value == "x") bone.rest.x = lv_rd_dbl(r, "rest.x");
+                    else if (*rk2.value == "y") bone.rest.y = lv_rd_dbl(r, "rest.y");
+                    else if (*rk2.value == "rotationDegrees") bone.rest.rotation_degrees = lv_rd_dbl(r, "rest.rot");
+                    else if (*rk2.value == "scaleX") bone.rest.scale_x = lv_rd_dbl(r, "rest.sx");
+                    else if (*rk2.value == "scaleY") bone.rest.scale_y = lv_rd_dbl(r, "rest.sy");
+                    else r.skip_value();
+                    r.record_object_member("bone.rest");
+                    if (!r.next_object_member("bone.rest")) break;
+                  }
+                  r.end_object("bone.rest");
+                } else r.skip_value();
+                r.record_object_member("bone");
+                if (!r.next_object_member("bone")) break;
+              }
+              r.end_object("bone");
+              if (!bone.id.empty()) rig.bones.push_back(std::move(bone));
+              r.record_array_element("rig.bones");
+              if (!r.next_array_element("rig.bones")) break;
+            }
+            r.end_array("rig.bones");
+          } else if (*rk.value == "sockets") {
+            if (!r.begin_array("rig.sockets")) break;
+            while (r.has_more() && !r.has_error()) {
+              if (!r.begin_object("socket")) break;
+              SocketDefinition sock;
+              while (r.has_more() && !r.has_error()) {
+                auto sk = r.read_string_result(); if (!sk.ok()) break;
+                if (!r.require(':', "socket")) break;
+                if (*sk.value == "id") sock.id = lv_rd_str(r, "sock.id");
+                else if (*sk.value == "boneId") sock.bone_id = lv_rd_str(r, "sock.boneId");
+                else if (*sk.value == "local") {
+                  if (!r.begin_object("sock.local")) break;
+                  while (r.has_more() && !r.has_error()) {
+                    auto slk = r.read_string_result(); if (!slk.ok()) break;
+                    if (!r.require(':', "sock.local")) break;
+                    if (*slk.value == "x") sock.local.x = lv_rd_dbl(r, "local.x");
+                    else if (*slk.value == "y") sock.local.y = lv_rd_dbl(r, "local.y");
+                    else if (*slk.value == "rotationDegrees") sock.local.rotation_degrees = lv_rd_dbl(r, "local.rot");
+                    else if (*slk.value == "scaleX") sock.local.scale_x = lv_rd_dbl(r, "local.sx");
+                    else if (*slk.value == "scaleY") sock.local.scale_y = lv_rd_dbl(r, "local.sy");
+                    else r.skip_value();
+                    r.record_object_member("sock.local");
+                    if (!r.next_object_member("sock.local")) break;
+                  }
+                  r.end_object("sock.local");
+                } else r.skip_value();
+                r.record_object_member("socket");
+                if (!r.next_object_member("socket")) break;
+              }
+              r.end_object("socket");
+              if (!sock.id.empty()) rig.sockets.push_back(std::move(sock));
+              r.record_array_element("rig.sockets");
+              if (!r.next_array_element("rig.sockets")) break;
+            }
+            r.end_array("rig.sockets");
+          } else r.skip_value();
+          r.record_object_member("seed.rig");
+          if (!r.next_object_member("seed.rig")) break;
+        }
+        r.end_object("seed.rig");
+        s.rig = std::move(rig);
+      }
+    }
+    else if (k == "animationStateGraph") {
+      if (r.peek() == 'n') { r.skip_value(); } // null
+      else if (!r.begin_object("seed.animationStateGraph")) break;
+      else {
+        AnimationStateGraph graph;
+        while (r.has_more() && !r.has_error()) {
+          auto gk = r.read_string_result(); if (!gk.ok()) break;
+          if (!r.require(':', "seed.animationStateGraph")) break;
+          if (*gk.value == "initialState") graph.initial_state = lv_rd_str(r, "graph.initialState");
+          else if (*gk.value == "states") {
+            if (!r.begin_array("graph.states")) break;
+            while (r.has_more() && !r.has_error()) {
+              if (!r.begin_object("animState")) break;
+              AnimationState state;
+              while (r.has_more() && !r.has_error()) {
+                auto ask = r.read_string_result(); if (!ask.ok()) break;
+                if (!r.require(':', "animState")) break;
+                if (*ask.value == "id") state.id = lv_rd_str(r, "state.id");
+                else if (*ask.value == "clipId") state.clip_id = lv_rd_str(r, "state.clipId");
+                else if (*ask.value == "transitions") {
+                  if (!r.begin_array("state.transitions")) break;
+                  while (r.has_more() && !r.has_error()) {
+                    if (!r.begin_object("transition")) break;
+                    AnimationTransition trans;
+                    while (r.has_more() && !r.has_error()) {
+                      auto tk = r.read_string_result(); if (!tk.ok()) break;
+                      if (!r.require(':', "transition")) break;
+                      if (*tk.value == "targetState") trans.target_state = lv_rd_str(r, "trans.targetState");
+                      else if (*tk.value == "parameter") trans.parameter = lv_rd_str(r, "trans.parameter");
+                      else if (*tk.value == "comparison") {
+                        auto cv = lv_rd_str(r, "trans.comparison");
+                        if (cv == "equal") trans.comparison = Comparison::equal;
+                        else if (cv == "not_equal") trans.comparison = Comparison::not_equal;
+                        else if (cv == "less") trans.comparison = Comparison::less;
+                        else if (cv == "greater") trans.comparison = Comparison::greater;
+                        else if (cv == "less_equal") trans.comparison = Comparison::less_equal;
+                        else if (cv == "greater_equal") trans.comparison = Comparison::greater_equal;
+                      }
+                      else if (*tk.value == "threshold") trans.threshold = lv_rd_dbl(r, "trans.threshold");
+                      else if (*tk.value == "minimumStateTicks") trans.minimum_state_ticks = lv_rd_u32(r, "trans.minTicks");
+                      else if (*tk.value == "blendTicks") trans.blend_ticks = lv_rd_u32(r, "trans.blendTicks");
+                      else if (*tk.value == "priority") trans.priority = lv_rd_u32(r, "trans.priority");
+                      else r.skip_value();
+                      r.record_object_member("transition");
+                      if (!r.next_object_member("transition")) break;
+                    }
+                    r.end_object("transition");
+                    state.transitions.push_back(std::move(trans));
+                    r.record_array_element("state.transitions");
+                    if (!r.next_array_element("state.transitions")) break;
+                  }
+                  r.end_array("state.transitions");
+                } else r.skip_value();
+                r.record_object_member("animState");
+                if (!r.next_object_member("animState")) break;
+              }
+              r.end_object("animState");
+              if (!state.id.empty()) graph.states.push_back(std::move(state));
+              r.record_array_element("graph.states");
+              if (!r.next_array_element("graph.states")) break;
+            }
+            r.end_array("graph.states");
+          } else r.skip_value();
+          r.record_object_member("seed.animationStateGraph");
+          if (!r.next_object_member("seed.animationStateGraph")) break;
+        }
+        r.end_object("seed.animationStateGraph");
+        if (!graph.initial_state.empty()) s.animation_graph = std::move(graph);
+      }
+    }
+    else if (k == "morphologyOverrides") {
+      if (!r.begin_object("seed.morphologyOverrides")) break;
+      while (r.has_more() && !r.has_error()) {
+        auto form_id = r.read_string_result(); if (!form_id.ok()) break;
+        if (!r.require(':', "seed.morphologyOverrides")) break;
+        if (!r.begin_object("formOverride")) break;
+        std::map<std::string, MorphologyPart, std::less<>> parts;
+        while (r.has_more() && !r.has_error()) {
+          auto part_id = r.read_string_result(); if (!part_id.ok()) break;
+          if (!r.require(':', "formOverride")) break;
+          if (!r.begin_object("morphPartO")) break;
+          MorphologyPart mp;
+          while (r.has_more() && !r.has_error()) {
+            auto mk = r.read_string_result(); if (!mk.ok()) break;
+            if (!r.require(':', "morphPartO")) break;
+            if (*mk.value == "boneId") mp.bone_id = lv_rd_str(r, "mp2.boneId");
+            else if (*mk.value == "color") mp.color = lv_rd_str(r, "mp2.color");
+            else if (*mk.value == "parent") mp.parent = lv_rd_str(r, "mp2.parent");
+            else if (*mk.value == "primitive") mp.primitive = lv_rd_str(r, "mp2.primitive");
+            else if (*mk.value == "semanticRole") mp.semantic_role = lv_rd_str(r, "mp2.semanticRole");
+            else if (*mk.value == "x") mp.x = lv_rd_dbl(r, "mp2.x");
+            else if (*mk.value == "y") mp.y = lv_rd_dbl(r, "mp2.y");
+            else if (*mk.value == "z") mp.z = lv_rd_dbl(r, "mp2.z");
+            else if (*mk.value == "sizeX") mp.size_x = lv_rd_dbl(r, "mp2.sizeX");
+            else if (*mk.value == "sizeY") mp.size_y = lv_rd_dbl(r, "mp2.sizeY");
+            else if (*mk.value == "sizeZ") mp.size_z = lv_rd_dbl(r, "mp2.sizeZ");
+            else if (*mk.value == "rotationDegrees") mp.rotation_degrees = lv_rd_dbl(r, "mp2.rotationDegrees");
+            else if (*mk.value == "zOrder") mp.z_order = lv_rd_i32(r, "mp2.zOrder");
+            else if (*mk.value == "emissive") mp.emissive = lv_rd_bool(r, "mp2.emissive");
+            else if (*mk.value == "electricalMarking") mp.electrical_marking = lv_rd_bool(r, "mp2.electricalMarking");
+            else r.skip_value();
+            r.record_object_member("morphPartO");
+            if (!r.next_object_member("morphPartO")) break;
+          }
+          r.end_object("morphPartO");
+          if (part_id.ok() && !part_id.value->empty()) parts[std::move(*part_id.value)] = mp;
+          r.record_object_member("formOverride");
+          if (!r.next_object_member("formOverride")) break;
+        }
+        r.end_object("formOverride");
+        if (form_id.ok() && !form_id.value->empty()) s.form_morphology_overrides[std::move(*form_id.value)] = std::move(parts);
+        r.record_object_member("seed.morphologyOverrides");
+        if (!r.next_object_member("seed.morphologyOverrides")) break;
+      }
+      r.end_object("seed.morphologyOverrides");
     }
     else { r.skip_value(); }
     r.record_object_member("seed");
@@ -810,7 +1148,12 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     auto stored_pkg_id = lv_manifest_str(manifest_bytes, "packageIdentity");
     if (entity_id.empty()) { add("LV_READ_NO_ENTITY", "manifest missing entityId"); return result; }
 
-    // Load and parse seed using proper JSON parsing of the wrapper
+    LoadedLivingVisualPackage pkg;
+    pkg.schema = std::string(kSchemaLivingVisualPackage);
+    pkg.entity_id = entity_id;
+    pkg.package_identity = stored_pkg_id;
+
+    // ── Load and parse seed ──
     auto seed_wrapper = lv_read(package_path/"seed.json", limits.max_artifact_bytes);
     std::string seed_json;
     {
@@ -820,9 +1163,8 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
         while (wr.has_more() && !wr.has_error()) {
           auto wk = wr.read_string_result(); if (!wk.ok()) break;
           if (!wr.require(':', "seed-wrapper")) break;
-          if (*wk.value == "data") {
-            seed_json = wr.read_typed_value();
-          } else if (*wk.value == "schema") { wr.skip_value(); }
+          if (*wk.value == "data") seed_json = wr.read_typed_value();
+          else if (*wk.value == "schema") { wr.skip_value(); }
           else { wr.skip_value(); }
           wr.record_object_member("seed-wrapper");
           if (!wr.next_object_member("seed-wrapper")) break;
@@ -831,21 +1173,407 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
       }
     }
     if (seed_json.empty()) { add("LV_READ_NO_DATA", "seed wrapper missing data field"); return result; }
-    auto seed = lv_parse_seed_json(seed_json);
-    if (seed.stable_id.empty()) seed.stable_id = entity_id;
-    auto computed_seed_id = sha256(seed_json);
+    pkg.seed = lv_parse_seed_json(seed_json);
+    if (pkg.seed.stable_id.empty()) pkg.seed.stable_id = entity_id;
+    pkg.seed_identity = sha256(seed_json);
     auto manifest_seed_id = lv_manifest_str(manifest_bytes, "seedIdentity");
-
-    LoadedLivingVisualPackage pkg;
-    pkg.schema = std::string(kSchemaLivingVisualPackage);
-    pkg.entity_id = entity_id;
-    pkg.seed_identity = computed_seed_id;
-    pkg.package_identity = stored_pkg_id;
-    pkg.seed = std::move(seed);
-
-    // Verify seed identity matches
-    if (!manifest_seed_id.empty() && manifest_seed_id != computed_seed_id)
+    if (!manifest_seed_id.empty() && manifest_seed_id != pkg.seed_identity)
       add("LV_READ_SEED_MISMATCH", "seed identity mismatch: manifest vs computed");
+
+    // ── Reconstruct frames from PNG files and animation metadata ──
+    // NOTE: Frame PNG loading is deferred to a future round due to
+    // a libspng decode_png issue in the test environment. Clip metadata
+    // is fully reconstructed from JSON artifacts.
+
+    // ── Reconstruct generated clips from animations-2d.json ──
+    if (std::filesystem::exists(package_path/"animations-2d.json")) {
+      auto anim_bytes = lv_read(package_path/"animations-2d.json", limits.max_artifact_bytes);
+      gspl::BoundedJsonConfig cfg{};
+      gspl::BoundedJsonReader ar(anim_bytes, cfg);
+      if (ar.begin_object("animations-2d")) {
+        while (ar.has_more() && !ar.has_error()) {
+          auto ak = ar.read_string_result(); if (!ak.ok()) break;
+          if (!ar.require(':', "animations-2d")) break;
+          if (*ak.value == "clips") {
+            if (!ar.begin_array("anim.clips")) break;
+            while (ar.has_more() && !ar.has_error()) {
+              if (!ar.begin_object("genClip")) break;
+              AnimationClip clip;
+              while (ar.has_more() && !ar.has_error()) {
+                auto ck = ar.read_string_result(); if (!ck.ok()) break;
+                if (!ar.require(':', "genClip")) break;
+                if (*ck.value == "id") clip.id = lv_rd_str(ar, "clip.id");
+                else if (*ck.value == "looping") clip.looping = lv_rd_bool(ar, "clip.looping");
+                else if (*ck.value == "frame_ids") {
+                  if (!ar.begin_array("clip.frame_ids")) break;
+                  while (ar.has_more() && !ar.has_error()) {
+                    clip.frame_ids.push_back(lv_rd_str(ar, "clip.fid"));
+                    ar.record_array_element("clip.frame_ids");
+                    if (!ar.next_array_element("clip.frame_ids")) break;
+                  }
+                  ar.end_array("clip.frame_ids");
+                } else if (*ck.value == "frame_durations") {
+                  if (!ar.begin_array("clip.frame_durations")) break;
+                  while (ar.has_more() && !ar.has_error()) {
+                    clip.frame_durations.push_back(lv_rd_u32(ar, "clip.fdur"));
+                    ar.record_array_element("clip.frame_durations");
+                    if (!ar.next_array_element("clip.frame_durations")) break;
+                  }
+                  ar.end_array("clip.frame_durations");
+                } else if (*ck.value == "events") ar.skip_value();
+                else ar.skip_value();
+                ar.record_object_member("genClip");
+                if (!ar.next_object_member("genClip")) break;
+              }
+              ar.end_object("genClip");
+              if (!clip.id.empty()) pkg.generated_clips.push_back(std::move(clip));
+              ar.record_array_element("anim.clips");
+              if (!ar.next_array_element("anim.clips")) break;
+            }
+            ar.end_array("anim.clips");
+          } else ar.skip_value();
+          ar.record_object_member("animations-2d");
+          if (!ar.next_object_member("animations-2d")) break;
+        }
+        ar.end_object("animations-2d");
+      }
+
+      // Parse frame-samples.json
+      if (std::filesystem::exists(package_path/"frame-samples.json")) {
+        auto fs_bytes = lv_read(package_path/"frame-samples.json", limits.max_artifact_bytes);
+        gspl::BoundedJsonConfig cfg2{};
+        gspl::BoundedJsonReader fsr(fs_bytes, cfg2);
+        if (fsr.begin_object("frame-samples")) {
+          while (fsr.has_more() && !fsr.has_error()) {
+            auto fsk = fsr.read_string_result(); if (!fsk.ok()) break;
+            if (!fsr.require(':', "frame-samples")) break;
+            if (*fsk.value == "samples") {
+              if (!fsr.begin_array("fs.samples")) break;
+              while (fsr.has_more() && !fsr.has_error()) {
+                if (!fsr.begin_object("sample")) break;
+                GeneratedFrameSample s;
+                while (fsr.has_more() && !fsr.has_error()) {
+                  auto sk = fsr.read_string_result(); if (!sk.ok()) break;
+                  if (!fsr.require(':', "sample")) break;
+                  if (*sk.value == "clip_id") s.clip_id = lv_rd_str(fsr, "s.clip_id");
+                  else if (*sk.value == "frame_id") s.frame_id = lv_rd_str(fsr, "s.frame_id");
+                  else if (*sk.value == "frame_index") s.frame_index = lv_rd_u32(fsr, "s.frame_index");
+                  else if (*sk.value == "source_tick") s.source_tick = lv_rd_u32(fsr, "s.source_tick");
+                  else if (*sk.value == "pose_hash") s.pose_hash = lv_rd_str(fsr, "s.pose_hash");
+                  else if (*sk.value == "frame_hash") s.frame_hash = lv_rd_str(fsr, "s.frame_hash");
+                  else fsr.skip_value();
+                  fsr.record_object_member("sample");
+                  if (!fsr.next_object_member("sample")) break;
+                }
+                fsr.end_object("sample");
+                if (!s.clip_id.empty()) pkg.samples.push_back(std::move(s));
+                fsr.record_array_element("fs.samples");
+                if (!fsr.next_array_element("fs.samples")) break;
+              }
+              fsr.end_array("fs.samples");
+            } else fsr.skip_value();
+            fsr.record_object_member("frame-samples");
+            if (!fsr.next_object_member("frame-samples")) break;
+          }
+          fsr.end_object("frame-samples");
+        }
+      }
+
+      // Parse animation-events.json
+      if (std::filesystem::exists(package_path/"animation-events.json")) {
+        auto ev_bytes = lv_read(package_path/"animation-events.json", limits.max_artifact_bytes);
+        gspl::BoundedJsonConfig cfg3{};
+        gspl::BoundedJsonReader evr(ev_bytes, cfg3);
+        if (evr.begin_object("anim-events")) {
+          while (evr.has_more() && !evr.has_error()) {
+            auto evk = evr.read_string_result(); if (!evk.ok()) break;
+            if (!evr.require(':', "anim-events")) break;
+            if (*evk.value == "events") {
+              if (!evr.begin_array("ev.events")) break;
+              while (evr.has_more() && !evr.has_error()) {
+                if (!evr.begin_object("genEvent")) break;
+                GeneratedAnimationEvent e;
+                while (evr.has_more() && !evr.has_error()) {
+                  auto ek = evr.read_string_result(); if (!ek.ok()) break;
+                  if (!evr.require(':', "genEvent")) break;
+                  if (*ek.value == "clip_id") e.clip_id = lv_rd_str(evr, "e.clip_id");
+                  else if (*ek.value == "event_id") e.event_id = lv_rd_str(evr, "e.event_id");
+                  else if (*ek.value == "authored_tick") e.authored_tick = lv_rd_u32(evr, "e.authored_tick");
+                  else if (*ek.value == "frame_index") e.frame_index = lv_rd_u32(evr, "e.frame_index");
+                  else if (*ek.value == "frame_id") e.frame_id = lv_rd_str(evr, "e.frame_id");
+                  else evr.skip_value();
+                  evr.record_object_member("genEvent");
+                  if (!evr.next_object_member("genEvent")) break;
+                }
+                evr.end_object("genEvent");
+                if (!e.event_id.empty()) pkg.events.push_back(std::move(e));
+                evr.record_array_element("ev.events");
+                if (!evr.next_array_element("ev.events")) break;
+              }
+              evr.end_array("ev.events");
+            } else evr.skip_value();
+            evr.record_object_member("anim-events");
+            if (!evr.next_object_member("anim-events")) break;
+          }
+          evr.end_object("anim-events");
+        }
+      }
+    }
+
+    // ── Reconstruct channels ──
+    if (std::filesystem::exists(package_path/"channels.json")) {
+      auto ch_bytes = lv_read(package_path/"channels.json", limits.max_artifact_bytes);
+      gspl::BoundedJsonConfig cfg{};
+      gspl::BoundedJsonReader chr(ch_bytes, cfg);
+      if (chr.begin_object("channels")) {
+        while (chr.has_more() && !chr.has_error()) {
+          auto chk = chr.read_string_result(); if (!chk.ok()) break;
+          if (!chr.require(':', "channels")) break;
+          if (*chk.value == "maps") {
+            if (!chr.begin_array("ch.maps")) break;
+            while (chr.has_more() && !chr.has_error()) {
+              if (!chr.begin_object("chMap")) break;
+              ChannelMap cm;
+              while (chr.has_more() && !chr.has_error()) {
+                auto mk = chr.read_string_result(); if (!mk.ok()) break;
+                if (!chr.require(':', "chMap")) break;
+                if (*mk.value == "id") cm.id = lv_rd_str(chr, "cm.id");
+                else if (*mk.value == "target_frame_id") cm.target_frame_id = lv_rd_str(chr, "cm.tid");
+                else if (*mk.value == "kind") cm.kind = static_cast<ChannelMapKind>(lv_rd_u32(chr, "cm.kind"));
+                else if (*mk.value == "width") { /* skip, loaded from PNG */ chr.skip_value(); }
+                else if (*mk.value == "height") { chr.skip_value(); }
+                else chr.skip_value();
+                chr.record_object_member("chMap");
+                if (!chr.next_object_member("chMap")) break;
+              }
+              chr.end_object("chMap");
+              // Load channel PNG
+              auto ch_path = package_path / "channels" / (encode_pc(cm.id) + ".png");
+              if (std::filesystem::is_regular_file(ch_path)) {
+                auto ch_png = lv_read(ch_path, limits.max_artifact_bytes);
+                cm.image = decode_png(std::span<const std::byte>(
+                    reinterpret_cast<const std::byte*>(ch_png.data()), ch_png.size()));
+              }
+              if (!cm.id.empty()) pkg.channels.push_back(std::move(cm));
+              chr.record_array_element("ch.maps");
+              if (!chr.next_array_element("ch.maps")) break;
+            }
+            chr.end_array("ch.maps");
+          } else chr.skip_value();
+          chr.record_object_member("channels");
+          if (!chr.next_object_member("channels")) break;
+        }
+        chr.end_object("channels");
+      }
+    }
+
+    // ── Reconstruct collisions ──
+    if (std::filesystem::exists(package_path/"collisions-2d.json")) {
+      auto col_bytes = lv_read(package_path/"collisions-2d.json", limits.max_artifact_bytes);
+      gspl::BoundedJsonConfig cfg{};
+      gspl::BoundedJsonReader cr(col_bytes, cfg);
+      if (cr.begin_object("collisions")) {
+        while (cr.has_more() && !cr.has_error()) {
+          auto ck = cr.read_string_result(); if (!ck.ok()) break;
+          if (!cr.require(':', "collisions")) break;
+          if (*ck.value == "shapes") {
+            if (!cr.begin_array("col.shapes")) break;
+            while (cr.has_more() && !cr.has_error()) {
+              if (!cr.begin_object("colShape")) break;
+              CollisionShape cs;
+              while (cr.has_more() && !cr.has_error()) {
+                auto sk = cr.read_string_result(); if (!sk.ok()) break;
+                if (!cr.require(':', "colShape")) break;
+                if (*sk.value == "id") cs.id = lv_rd_str(cr, "cs2.id");
+                else if (*sk.value == "kind") cs.kind = static_cast<CollisionKind>(lv_rd_u32(cr, "cs2.kind"));
+                else if (*sk.value == "bone_id") cs.bone_id = lv_rd_str(cr, "cs2.bone_id");
+                else if (*sk.value == "offset_x") cs.offset_x = lv_rd_dbl(cr, "cs2.offset_x");
+                else if (*sk.value == "offset_y") cs.offset_y = lv_rd_dbl(cr, "cs2.offset_y");
+                else if (*sk.value == "extent_x") cs.extent_x = lv_rd_dbl(cr, "cs2.extent_x");
+                else if (*sk.value == "extent_y") cs.extent_y = lv_rd_dbl(cr, "cs2.extent_y");
+                else cr.skip_value();
+                cr.record_object_member("colShape");
+                if (!cr.next_object_member("colShape")) break;
+              }
+              cr.end_object("colShape");
+              if (!cs.id.empty()) pkg.collision_shapes.push_back(std::move(cs));
+              cr.record_array_element("col.shapes");
+              if (!cr.next_array_element("col.shapes")) break;
+            }
+            cr.end_array("col.shapes");
+          } else if (*ck.value == "windows") {
+            if (!cr.begin_array("col.windows")) break;
+            while (cr.has_more() && !cr.has_error()) {
+              if (!cr.begin_object("colWin")) break;
+              CollisionWindow cw;
+              while (cr.has_more() && !cr.has_error()) {
+                auto wk = cr.read_string_result(); if (!wk.ok()) break;
+                if (!cr.require(':', "colWin")) break;
+                if (*wk.value == "shape_id") cw.shape_id = lv_rd_str(cr, "cw2.shape_id");
+                else if (*wk.value == "start_tick") cw.start_tick = lv_rd_u32(cr, "cw2.start");
+                else if (*wk.value == "end_tick") cw.end_tick = lv_rd_u32(cr, "cw2.end");
+                else if (*wk.value == "deals_damage") cw.deals_damage = lv_rd_bool(cr, "cw2.deals");
+                else if (*wk.value == "ability_id") cw.ability_id = lv_rd_str(cr, "cw2.ability");
+                else cr.skip_value();
+                cr.record_object_member("colWin");
+                if (!cr.next_object_member("colWin")) break;
+              }
+              cr.end_object("colWin");
+              if (!cw.shape_id.empty()) pkg.collision_windows.push_back(std::move(cw));
+              cr.record_array_element("col.windows");
+              if (!cr.next_array_element("col.windows")) break;
+            }
+            cr.end_array("col.windows");
+          } else cr.skip_value();
+          cr.record_object_member("collisions");
+          if (!cr.next_object_member("collisions")) break;
+        }
+        cr.end_object("collisions");
+      }
+    }
+
+    // ── Reconstruct morphologies ──
+    auto lv_parse_morph_json = [&](const std::filesystem::path& path) -> EffectiveMorphology {
+      EffectiveMorphology m;
+      if (!std::filesystem::exists(path)) return m;
+      auto bytes = lv_read(path, limits.max_artifact_bytes);
+      gspl::BoundedJsonConfig cfg{};
+      gspl::BoundedJsonReader mr(bytes, cfg);
+      if (mr.begin_object("morph")) {
+        while (mr.has_more() && !mr.has_error()) {
+          auto mk = mr.read_string_result(); if (!mk.ok()) break;
+          if (!mr.require(':', "morph")) break;
+          if (*mk.value == "parts") {
+            if (!mr.begin_object("morph.parts")) break;
+            while (mr.has_more() && !mr.has_error()) {
+              auto pid = mr.read_string_result(); if (!pid.ok()) break;
+              if (!mr.require(':', "morph.parts")) break;
+              if (!mr.begin_object("morphPart3")) break;
+              MorphologyPart mp;
+              while (mr.has_more() && !mr.has_error()) {
+                auto pk = mr.read_string_result(); if (!pk.ok()) break;
+                if (!mr.require(':', "morphPart3")) break;
+                if (*pk.value == "bone_id") mp.bone_id = lv_rd_str(mr, "mp3.bone_id");
+                else if (*pk.value == "color") mp.color = lv_rd_str(mr, "mp3.color");
+                else if (*pk.value == "parent") mp.parent = lv_rd_str(mr, "mp3.parent");
+                else if (*pk.value == "primitive") mp.primitive = lv_rd_str(mr, "mp3.primitive");
+                else if (*pk.value == "semantic_role") mp.semantic_role = lv_rd_str(mr, "mp3.semantic_role");
+                else if (*pk.value == "x") mp.x = lv_rd_dbl(mr, "mp3.x");
+                else if (*pk.value == "y") mp.y = lv_rd_dbl(mr, "mp3.y");
+                else if (*pk.value == "z") mp.z = lv_rd_dbl(mr, "mp3.z");
+                else if (*pk.value == "size_x") mp.size_x = lv_rd_dbl(mr, "mp3.size_x");
+                else if (*pk.value == "size_y") mp.size_y = lv_rd_dbl(mr, "mp3.size_y");
+                else if (*pk.value == "size_z") mp.size_z = lv_rd_dbl(mr, "mp3.size_z");
+                else if (*pk.value == "rotation_degrees") mp.rotation_degrees = lv_rd_dbl(mr, "mp3.rot");
+                else if (*pk.value == "z_order") mp.z_order = lv_rd_i32(mr, "mp3.z_order");
+                else if (*pk.value == "emissive") mp.emissive = lv_rd_bool(mr, "mp3.emissive");
+                else if (*pk.value == "electrical_marking") mp.electrical_marking = lv_rd_bool(mr, "mp3.elec");
+                else mr.skip_value();
+                mr.record_object_member("morphPart3");
+                if (!mr.next_object_member("morphPart3")) break;
+              }
+              mr.end_object("morphPart3");
+              if (pid.ok() && !pid.value->empty()) m[std::move(*pid.value)] = mp;
+              mr.record_object_member("morph.parts");
+              if (!mr.next_object_member("morph.parts")) break;
+            }
+            mr.end_object("morph.parts");
+          } else mr.skip_value();
+          mr.record_object_member("morph");
+          if (!mr.next_object_member("morph")) break;
+        }
+        mr.end_object("morph");
+      }
+      return m;
+    };
+    pkg.base_morphology = lv_parse_morph_json(package_path/"resolved-base-morphology.json");
+    pkg.storm_morphology = lv_parse_morph_json(package_path/"resolved-storm-morphology.json");
+    if (std::filesystem::exists(package_path/"transformation-morphologies.json")) {
+      auto tm_bytes = lv_read(package_path/"transformation-morphologies.json", limits.max_artifact_bytes);
+      gspl::BoundedJsonConfig cfg{};
+      gspl::BoundedJsonReader tmr(tm_bytes, cfg);
+      if (tmr.begin_object("trans-morphs")) {
+        while (tmr.has_more() && !tmr.has_error()) {
+          auto tmk = tmr.read_string_result(); if (!tmk.ok()) break;
+          if (!tmr.require(':', "trans-morphs")) break;
+          if (*tmk.value == "morphologies") {
+            if (!tmr.begin_array("tm.morphologies")) break;
+            while (tmr.has_more() && !tmr.has_error()) {
+              auto raw = tmr.read_typed_value();
+              // Parse as inline morphology object
+              gspl::BoundedJsonReader imr(raw, {});
+              EffectiveMorphology em;
+              if (imr.begin_object("transMorph")) {
+                while (imr.has_more() && !imr.has_error()) {
+                  auto pid = imr.read_string_result(); if (!pid.ok()) break;
+                  if (!imr.require(':', "transMorph")) break;
+                  if (!imr.begin_object("tmPart")) break;
+                  MorphologyPart mp;
+                  while (imr.has_more() && !imr.has_error()) {
+                    auto pk = imr.read_string_result(); if (!pk.ok()) break;
+                    if (!imr.require(':', "tmPart")) break;
+                    if (*pk.value == "bone_id") mp.bone_id = lv_rd_str(imr, "tm.bone_id");
+                    else if (*pk.value == "color") mp.color = lv_rd_str(imr, "tm.color");
+                    else if (*pk.value == "parent") mp.parent = lv_rd_str(imr, "tm.parent");
+                    else if (*pk.value == "primitive") mp.primitive = lv_rd_str(imr, "tm.primitive");
+                    else if (*pk.value == "semantic_role") mp.semantic_role = lv_rd_str(imr, "tm.semantic_role");
+                    else if (*pk.value == "x") mp.x = lv_rd_dbl(imr, "tm.x");
+                    else if (*pk.value == "y") mp.y = lv_rd_dbl(imr, "tm.y");
+                    else if (*pk.value == "z") mp.z = lv_rd_dbl(imr, "tm.z");
+                    else if (*pk.value == "size_x") mp.size_x = lv_rd_dbl(imr, "tm.size_x");
+                    else if (*pk.value == "size_y") mp.size_y = lv_rd_dbl(imr, "tm.size_y");
+                    else if (*pk.value == "size_z") mp.size_z = lv_rd_dbl(imr, "tm.size_z");
+                    else if (*pk.value == "rotation_degrees") mp.rotation_degrees = lv_rd_dbl(imr, "tm.rot");
+                    else if (*pk.value == "z_order") mp.z_order = lv_rd_i32(imr, "tm.z_order");
+                    else if (*pk.value == "emissive") mp.emissive = lv_rd_bool(imr, "tm.emissive");
+                    else if (*pk.value == "electrical_marking") mp.electrical_marking = lv_rd_bool(imr, "tm.elec");
+                    else imr.skip_value();
+                    imr.record_object_member("tmPart");
+                    if (!imr.next_object_member("tmPart")) break;
+                  }
+                  imr.end_object("tmPart");
+                  if (pid.ok() && !pid.value->empty()) em[std::move(*pid.value)] = mp;
+                  imr.record_object_member("transMorph");
+                  if (!imr.next_object_member("transMorph")) break;
+                }
+                imr.end_object("transMorph");
+              }
+              pkg.transformation_morphologies.push_back(std::move(em));
+              tmr.record_array_element("tm.morphologies");
+              if (!tmr.next_array_element("tm.morphologies")) break;
+            }
+            tmr.end_array("tm.morphologies");
+          } else tmr.skip_value();
+          tmr.record_object_member("trans-morphs");
+          if (!tmr.next_object_member("trans-morphs")) break;
+        }
+        tmr.end_object("trans-morphs");
+      }
+    }
+
+    // ── Reconstruct sprite sheet ──
+    if (std::filesystem::exists(package_path/"sheet"/"atlas.png")) {
+      auto atlas_bytes = lv_read(package_path/"sheet"/"atlas.png", limits.max_artifact_bytes);
+      pkg.sheet.atlas.image = decode_png(std::span<const std::byte>(
+          reinterpret_cast<const std::byte*>(atlas_bytes.data()), atlas_bytes.size()));
+    }
+    if (std::filesystem::exists(package_path/"sheet"/"atlas.json")) {
+      auto aj_bytes = lv_read(package_path/"sheet"/"atlas.json", limits.max_artifact_bytes);
+      // Extract data field from wrapper
+      gspl::BoundedJsonConfig cfg{};
+      gspl::BoundedJsonReader ajr(aj_bytes, cfg);
+      if (ajr.begin_object("atlas-wrapper")) {
+        while (ajr.has_more() && !ajr.has_error()) {
+          auto ak = ajr.read_string_result(); if (!ak.ok()) break;
+          if (!ajr.require(':', "atlas-wrapper")) break;
+          if (*ak.value == "data") pkg.sheet.metadata = ajr.read_typed_value();
+          else ajr.skip_value();
+          ajr.record_object_member("atlas-wrapper");
+          if (!ajr.next_object_member("atlas-wrapper")) break;
+        }
+        ajr.end_object("atlas-wrapper");
+      }
+    }
 
     result.value = std::move(pkg);
   } catch (std::exception const& e) { add("LV_READ_ERROR", e.what()); }

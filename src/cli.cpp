@@ -138,11 +138,7 @@ int Cli::run(CliOptions const& options) {
         std::cout << "}\n";
         return 0;
     }
-    if (options.input_files.empty()) {
-        std::cerr << "gsplc: no input files\n";
-        return 1;
-    }
-    // --verify-package <path>: verify existing package without compiling
+    // --verify-package <path>: verify existing package without compiling (no source input required)
     if (options.verify_package && !options.verify_package_path.empty()) {
         auto ver = ::gspl::sprites::verify_living_visual_package(options.verify_package_path);
         if (!ver.ok()) {
@@ -153,6 +149,10 @@ int Cli::run(CliOptions const& options) {
         if (options.verbose)
             std::cout << "Package verified: " << options.verify_package_path << " (" << ver.frame_count << " frames, " << ver.clip_count << " clips)" << std::endl;
         return 0;
+    }
+    if (options.input_files.empty()) {
+        std::cerr << "gsplc: no input files\n";
+        return 1;
     }
     bool all_ok = true;
     for (auto const& file : options.input_files) {

@@ -41,6 +41,7 @@ int main() try {
   fs::remove_all(pkg_dir);
 
   std::string expected_seed_id;
+  std::string expected_seed_json;
   std::string expected_pkg_id;
 
   {
@@ -52,7 +53,8 @@ int main() try {
     gspl::sprites::SpriteSeed seed;
     seed = gspl::SpriteSeedLowering::lower(ctx.compilation_context().canonical);
     check(!seed.stable_id.empty(), "seed has id");
-    expected_seed_id = gspl::sprites::sha256(gspl::sprites::canonicalize(seed));
+    expected_seed_json = gspl::sprites::canonicalize(seed);
+    expected_seed_id = gspl::sprites::sha256(expected_seed_json);
 
     gspl::sprites::LivingAnimation2dBuildResult living = gspl::sprites::synthesize_living_animation2d(seed);
     check(living.ok(), "synthesis ok");
@@ -109,6 +111,12 @@ int main() try {
 
       // Verify seed identity matches expected (recorded before object destruction)
       check(pkg.seed_identity == expected_seed_id, "seed identity matches expected");
+
+      // Canonical seed round-trip: prove byte-identical reconstruction
+      auto reconstructed_seed_json = gspl::sprites::canonicalize(pkg.seed);
+      check(reconstructed_seed_json == expected_seed_json, "canonical seed round-trip byte-identical");
+      check(gspl::sprites::sha256(reconstructed_seed_json) == expected_seed_id, "reconstructed seed SHA matches");
+
       check(!pkg.seed.abilities.empty(), "seed has abilities");
       check(!pkg.seed.forms.empty(), "seed has forms");
       check(!pkg.seed.morphology.empty(), "seed has morphology");
