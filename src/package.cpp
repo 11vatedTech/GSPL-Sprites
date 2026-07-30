@@ -1044,6 +1044,21 @@ void build_living_visual_package(const LivingVisualPackageInput& input, const st
       for (std::size_t i=0; i<input.samples.size(); ++i) { if (i) o << ","; o << "\"" << lv_escape(input.samples[i].frame_hash) << "\""; }
       o << "]}"; lv_write(staging/"frame-hashes.json", o.str());
     }
+    // frames.json — governed frame metadata
+    { std::ostringstream o; o << "{\"schema\":\"gspl.frames-2d/0.1\",\"frames\":[";
+      for (std::size_t i=0; i<input.frames.size(); ++i) {
+        if (i) o << ","; auto const& f = input.frames[i];
+        o << "{\"id\":\"" << lv_escape(f.id)
+          << "\",\"path\":\"frames/" << lv_escape(encode_pc(f.id)) << ".png\""
+          << ",\"width\":" << f.image.width << ",\"height\":" << f.image.height
+          << ",\"color_space\":\"" << (f.image.color_space == ColorSpace::srgb ? "srgb" : "data") << "\""
+          << ",\"alpha_mode\":\"" << (f.image.alpha_mode == AlphaMode::opaque ? "opaque" : "straight") << "\""
+          << ",\"pivot_x\":" << f.pivot_x << ",\"pivot_y\":" << f.pivot_y
+          << ",\"duration_ticks\":" << f.duration_ticks
+          << ",\"frame_hash\":\"" << lv_escape(f.frame_hash) << "\"}";
+      }
+      o << "]}"; lv_write(staging/"frames.json", o.str());
+    }
     // Generated events
     { std::ostringstream o; o << "{\"schema\":\"" << kSchemaGeneratedAnimationEvents << "\",\"events\":[";
       for (std::size_t i=0; i<input.events.size(); ++i) {
@@ -1098,6 +1113,7 @@ void build_living_visual_package(const LivingVisualPackageInput& input, const st
     add_artifact("sheet/atlas.png"); add_artifact("sheet/atlas.json");
     add_artifact("source-skeletal-animations.json"); add_artifact("animations-2d.json");
     add_artifact("frame-samples.json"); add_artifact("pose-hashes.json"); add_artifact("frame-hashes.json");
+    add_artifact("frames.json");
     add_artifact("animation-events.json");
     for (auto const& ch : input.channels) add_artifact("channels/"+encode_pc(ch.id)+".png");
     add_artifact("channels.json"); add_artifact("collisions-2d.json");
@@ -1180,10 +1196,77 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     if (!manifest_seed_id.empty() && manifest_seed_id != pkg.seed_identity)
       add("LV_READ_SEED_MISMATCH", "seed identity mismatch: manifest vs computed");
 
-    // ── Reconstruct frames from PNG files and animation metadata ──
-    // NOTE: Frame PNG loading is deferred to a future round due to
-    // a libspng decode_png issue in the test environment. Clip metadata
-    // is fully reconstructed from JSON artifacts.
+    // ── Reconstruct frames from frames.json + PNG files ──
+    if (std::filesystem::exists(package_path/"frames.json")) {
+      auto fm_bytes = lv_read(package_path/"frames.json", limits.max_artifact_bytes);
+      gspl::BoundedJsonConfig fcfg{};
+      gspl::BoundedJsonReader fmr(fm_bytes, fcfg);
+      if (fmr.begin_object("frames-json")) {
+        while (fmr.has_more() && !fmr.has_error()) {
+          auto fk = fmr.read_string_result(); if (!fk.ok()) break;
+          if (!fmr.require(':', "frames-json")) break;
+          if (*fk.value == "frames") {
+            if (!fmr.begin_array("frames-json.frames")) break;
+            while (fmr.has_more() && !fmr.has_error()) {
+              if (!fmr.begin_object("frame")) break;
+              FrameSource fs;
+              std::uint32_t declared_w = 0, declared_h = 0;
+              while (fmr.has_more() && !fmr.has_error()) {
+                auto fsk = fmr.read_string_result(); if (!fsk.ok()) break;
+                if (!fmr.require(':', "frame")) break;
+                if (*fsk.value == "id") fs.id = lv_rd_str(fmr, "frame.id");
+                else if (*fsk.value == "path") { fmr.skip_value(); }
+                else if (*fsk.value == "width") declared_w = lv_rd_u32(fmr, "frame.width");
+                else if (*fsk.value == "height") declared_h = lv_rd_u32(fmr, "frame.height");
+                else if (*fsk.value == "pivot_x") fs.pivot_x = lv_rd_i32(fmr, "frame.pivot_x");
+                else if (*fsk.value == "pivot_y") fs.pivot_y = lv_rd_i32(fmr, "frame.pivot_y");
+                else if (*fsk.value == "duration_ticks") fs.duration_ticks = lv_rd_u32(fmr, "frame.duration");
+                else if (*fsk.value == "frame_hash") fs.frame_hash = lv_rd_str(fmr, "frame.hash");
+                else if (*fsk.value == "color_space" || *fsk.value == "alpha_mode" || *fsk.value == "schema") { fmr.skip_value(); }
+                else fmr.skip_value();
+                fmr.record_object_member("frame");
+                if (!fmr.next_object_member("frame")) break;
+              }
+              fmr.end_object("frame");
+              // Load frame PNG
+              auto frame_path = package_path / "frames" / (encode_pc(fs.id) + ".png");
+              if (std::filesystem::is_regular_file(frame_path)) {
+                try {
+                  auto png_bytes = lv_read(frame_path, limits.max_artifact_bytes);
+                  ImageLimits img_lim{};
+                  img_lim.max_width = limits.max_image_width;
+                  img_lim.max_height = limits.max_image_height;
+                  img_lim.max_decoded_bytes = limits.max_decoded_pixel_bytes;
+                  img_lim.max_input_bytes = limits.max_artifact_bytes;
+                  fs.image = decode_png(std::span<const std::byte>(
+                      reinterpret_cast<const std::byte*>(png_bytes.data()), png_bytes.size()), img_lim);
+                  if (fs.image.width != declared_w || fs.image.height != declared_h)
+                    add("LV_READ_FRAME_DIMS", "frame dimensions mismatch: " + fs.id);
+                  // Recompute frame hash from decoded pixels and verify
+                  auto computed_hash = compute_frame_hash(fs.image);
+                  if (!fs.frame_hash.empty() && computed_hash != fs.frame_hash)
+                    add("LV_READ_FRAME_HASH", "frame hash mismatch: " + fs.id);
+                  else if (fs.frame_hash.empty()) fs.frame_hash = computed_hash;
+                } catch (std::exception const& ex) {
+                  add("LV_READ_FRAME_PNG", std::string("failed to decode frame PNG: ") + fs.id + " — " + ex.what());
+                }
+              } else {
+                add("LV_READ_FRAME_MISSING", "frame PNG file missing: " + fs.id);
+              }
+              if (!fs.id.empty()) pkg.frames.push_back(std::move(fs));
+              fmr.record_array_element("frames-json.frames");
+              if (!fmr.next_array_element("frames-json.frames")) break;
+            }
+            fmr.end_array("frames-json.frames");
+          } else fmr.skip_value();
+          fmr.record_object_member("frames-json");
+          if (!fmr.next_object_member("frames-json")) break;
+        }
+        fmr.end_object("frames-json");
+      }
+      if (pkg.frames.size() != 48)
+        add("LV_READ_FRAME_COUNT", "expected 48 reconstructed frames, got " + std::to_string(pkg.frames.size()));
+    }
 
     // ── Reconstruct generated clips from animations-2d.json ──
     if (std::filesystem::exists(package_path/"animations-2d.json")) {
@@ -1347,12 +1430,17 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
                 if (!chr.next_object_member("chMap")) break;
               }
               chr.end_object("chMap");
-              // Load channel PNG
+              // Load channel PNG with explicit limits
               auto ch_path = package_path / "channels" / (encode_pc(cm.id) + ".png");
               if (std::filesystem::is_regular_file(ch_path)) {
                 auto ch_png = lv_read(ch_path, limits.max_artifact_bytes);
+                ImageLimits ch_lim{};
+                ch_lim.max_width = limits.max_image_width;
+                ch_lim.max_height = limits.max_image_height;
+                ch_lim.max_decoded_bytes = limits.max_decoded_pixel_bytes;
+                ch_lim.max_input_bytes = limits.max_artifact_bytes;
                 cm.image = decode_png(std::span<const std::byte>(
-                    reinterpret_cast<const std::byte*>(ch_png.data()), ch_png.size()));
+                    reinterpret_cast<const std::byte*>(ch_png.data()), ch_png.size()), ch_lim);
               }
               if (!cm.id.empty()) pkg.channels.push_back(std::move(cm));
               chr.record_array_element("ch.maps");
@@ -1554,8 +1642,13 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     // ── Reconstruct sprite sheet ──
     if (std::filesystem::exists(package_path/"sheet"/"atlas.png")) {
       auto atlas_bytes = lv_read(package_path/"sheet"/"atlas.png", limits.max_artifact_bytes);
+      ImageLimits atlas_lim{};
+      atlas_lim.max_width = limits.max_image_width;
+      atlas_lim.max_height = limits.max_image_height;
+      atlas_lim.max_decoded_bytes = limits.max_decoded_pixel_bytes;
+      atlas_lim.max_input_bytes = limits.max_artifact_bytes;
       pkg.sheet.atlas.image = decode_png(std::span<const std::byte>(
-          reinterpret_cast<const std::byte*>(atlas_bytes.data()), atlas_bytes.size()));
+          reinterpret_cast<const std::byte*>(atlas_bytes.data()), atlas_bytes.size()), atlas_lim);
     }
     if (std::filesystem::exists(package_path/"sheet"/"atlas.json")) {
       auto aj_bytes = lv_read(package_path/"sheet"/"atlas.json", limits.max_artifact_bytes);
@@ -1698,7 +1791,7 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
       "seed.json", "seed-identity.txt",
       "source-skeletal-animations.json", "animations-2d.json",
       "frame-samples.json", "animation-events.json",
-      "pose-hashes.json", "frame-hashes.json",
+      "pose-hashes.json", "frame-hashes.json", "frames.json",
       "channels.json", "collisions-2d.json",
       "resolved-base-morphology.json", "resolved-storm-morphology.json",
       "transformation-morphologies.json",

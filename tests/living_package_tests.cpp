@@ -43,6 +43,8 @@ int main() try {
   std::string expected_seed_id;
   std::string expected_seed_json;
   std::string expected_pkg_id;
+  std::set<std::string> expected_frame_ids;
+  std::map<std::string, std::string> expected_frame_hash_map;
 
   {
     gspl::GsplContext ctx;
@@ -66,6 +68,12 @@ int main() try {
     check(!lv.storm_morphology.empty(), "storm morphology");
     check(lv.transformation_morphologies.size() == 10, "10 trans morphs");
 
+    // Record expected frame identities before destruction
+    for (auto const& f : lv.all_frames) {
+      expected_frame_ids.insert(f.id);
+      expected_frame_hash_map[f.id] = f.frame_hash;
+    }
+
     gspl::sprites::LivingVisualPackageInput pkg_input;
     pkg_input.seed = seed;
     pkg_input.frames = lv.all_frames;
@@ -83,6 +91,7 @@ int main() try {
     gspl::sprites::build_living_visual_package(pkg_input, pkg_dir);
     check(fs::exists(pkg_dir / "manifest.json"), "manifest exists");
     check(fs::exists(pkg_dir / "seed.json"), "seed exists");
+    check(fs::exists(pkg_dir / "frames.json"), "frames.json exists");
     check(fs::exists(pkg_dir / "animations-2d.json"), "animations-2d exists");
     check(fs::exists(pkg_dir / "animation-events.json"), "events exist");
     check(fs::exists(pkg_dir / "frame-samples.json"), "samples exist");
@@ -122,6 +131,31 @@ int main() try {
       check(!pkg.seed.morphology.empty(), "seed has morphology");
       check(!pkg.seed.transformations.empty(), "seed has transformations");
       check(!pkg.seed.collision_shapes.empty(), "seed has collision_shapes");
+
+      // Verify frame reconstruction from disk PNGs
+      check(pkg.frames.size() == 48, "reconstructed 48 frames");
+      std::set<std::string> reconstructed_fids;
+      for (auto const& f : pkg.frames) {
+        check(!f.id.empty(), "reconstructed frame has id");
+        check(!f.frame_hash.empty(), "reconstructed frame has hash");
+        check(f.image.width > 0, "reconstructed frame has width");
+        check(f.image.height > 0, "reconstructed frame has height");
+        check(expected_frame_ids.contains(f.id), "reconstructed frame id was expected");
+        reconstructed_fids.insert(f.id);
+      }
+      check(reconstructed_fids == expected_frame_ids, "all expected frame IDs reconstructed");
+
+      // Verify frame hashes by ID: each frame hash must match expected
+      for (auto const& f : pkg.frames) {
+        auto it = expected_frame_hash_map.find(f.id);
+        check(it != expected_frame_hash_map.end() && it->second == f.frame_hash, "reconstructed frame hash matches expected by ID");
+      }
+
+      check(pkg.generated_clips.size() == 9, "reconstructed 9 clips");
+      check(pkg.samples.size() == 48, "reconstructed 48 samples");
+      check(!pkg.base_morphology.empty(), "reconstructed base morphology");
+      check(!pkg.storm_morphology.empty(), "reconstructed storm morphology");
+      check(pkg.transformation_morphologies.size() == 10, "reconstructed 10 trans morphs");
     }
   }
 
