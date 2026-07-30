@@ -1,7 +1,11 @@
 #include "gspl_sprites/living_runtime.hpp"
+#include "gspl_sprites/runtime_persistence.hpp"
+#include "gspl_sprites/core.hpp"
 
+#include <cstdint>
 #include <iostream>
 #include <stdexcept>
+#include <string>
 
 using namespace gspl::sprites;
 namespace {
@@ -28,6 +32,70 @@ LivingRuntimeProgram program() {
         {{"release", 0}}},
        {"observe", "idle", 1, {}, {}, 1, 0, 0, true, {}}}};
 }
+
+void test_persistence_and_replay() {
+  // Test save/restore round-trip and replay against persisted state
+  auto def = program();
+  LivingRuntimeState initial, state;
+  (void)step_living_runtime(def, state); // tick 1, starts observe
+  (void)step_living_runtime(def, state); // tick 2, completes observe, re-selects
+
+  // Serialize the state
+  std::string serialized = serialize_living_runtime_state(def, state);
+  check(!serialized.empty(), "serialized state is empty");
+  check(serialized.find("tick=") != std::string::npos,
+        "serialized state missing tick");
+  check(serialized.find("active=") != std::string::npos,
+        "serialized state missing active");
+
+  // Deserialize into a new state
+  auto restored = deserialize_living_runtime_state(def, serialized, 65536);
+  check(state.tick == restored.tick,
+        "tick mismatch after save/restore round-trip");
+  check(state.energy == restored.energy,
+        "energy mismatch after save/restore round-trip");
+  check(state.next_sequence == restored.next_sequence,
+        "next_sequence mismatch after save/restore round-trip");
+
+  // Re-serialize and check canonical form
+  std::string reserialized = serialize_living_runtime_state(def, restored);
+  check(serialized == reserialized,
+        "save/restore round-trip is not canonical");
+
+  // Build replay frames from the initial state up to tick 5
+  LivingRuntimeState replay_state = initial;
+  std::vector<RuntimeReplayFrame> frames;
+  for (std::uint64_t t = 0; t < 5; ++t) {
+    RuntimeReplayFrame frame;
+    frame.tick = t;
+    frame.variables = {};
+    frame.observations = {};
+    frame.interrupt_active_action = false;
+    frames.push_back(std::move(frame));
+  }
+
+  RuntimeReplayLimits limits;
+  limits.maximum_ticks = 100;
+  limits.maximum_events = 1000;
+  limits.maximum_frames = 100;
+  auto replay_result = replay_living_runtime(def, initial, frames, 5, limits);
+  check(replay_result.final_state.tick == 5,
+        "replay did not reach tick 5");
+  check(!replay_result.events.empty(),
+        "replay produced no events");
+
+  // Run a fresh live execution to tick 5 and compare final state hashes
+  LivingRuntimeState live_state = initial;
+  for (std::uint64_t t = 0; t < 5; ++t)
+    (void)step_living_runtime(def, live_state);
+  std::string live_identity = sha256(serialize_living_runtime_state(def, live_state));
+  check(live_identity == replay_result.final_state_identity,
+        "replay final state does not match live execution");
+  check(std::all_of(replay_result.events.begin(), replay_result.events.end(),
+                    [&](const RuntimeEvent& e) { return e.tick < 5; }),
+        "replay event has tick >= end_tick");
+}
+
 } // namespace
 
 int main() {
@@ -91,6 +159,10 @@ int main() {
       state_rejected = true;
     }
     check(state_rejected, "invalid runtime snapshot accepted");
+
+    // Run persistence and replay test
+    test_persistence_and_replay();
+
     std::cout << "all gspl sprites living runtime tests passed\n";
     return 0;
   } catch (const std::exception &error) {
