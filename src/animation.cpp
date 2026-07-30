@@ -5,6 +5,7 @@
 #include <charconv>
 #include <cmath>
 #include <deque>
+#include <functional>
 #include <map>
 #include <set>
 #include <sstream>
@@ -123,7 +124,24 @@ Transform2d sample_track(const BoneTrack& track, std::uint32_t tick) {
   return {std::lerp(left.transform.x, right.transform.x, amount), std::lerp(left.transform.y, right.transform.y, amount), interpolate_angle(left.transform.rotation_degrees, right.transform.rotation_degrees, amount), std::lerp(left.transform.scale_x, right.transform.scale_x, amount), std::lerp(left.transform.scale_y, right.transform.scale_y, amount)};
 }
 
-EvaluatedPose evaluate_pose(const SkeletalClip& clip, const RigDefinition& rig, std::uint32_t tick) {
+Transform2d apply_animation_delta(const Transform2d& rest, const Transform2d& delta) {
+  return {rest.x + delta.x, rest.y + delta.y,
+          rest.rotation_degrees + delta.rotation_degrees,
+          rest.scale_x * delta.scale_x,
+          rest.scale_y * delta.scale_y};
+}
+
+PoseEvaluationResult evaluate_pose(const SkeletalClip& clip, const RigDefinition& rig, std::uint32_t tick) {
+  PoseEvaluationResult result;
+  auto add = [&](std::string code, std::string message) {
+    result.validation.diagnostics.push_back(Diagnostic{std::move(code), std::move(message)});
+  };
+
+  // Validate clip first
+  auto clip_validation = validate_skeletal_clip(clip, rig);
+  for (auto& d : clip_validation.diagnostics) add(std::move(d.code), std::move(d.message));
+  if (!clip_validation.ok()) return result;
+
   // Resolve tick: loop or clamp based on clip settings
   std::uint32_t effective_tick = tick;
   if (clip.duration_ticks > 0) {
@@ -134,57 +152,103 @@ EvaluatedPose evaluate_pose(const SkeletalClip& clip, const RigDefinition& rig, 
     }
   }
 
-  // Build bone ID → BoneDefinition map
+  // Build bone index and track map
   std::map<std::string, const BoneDefinition*, std::less<>> bone_map;
-  for (const auto& bone : rig.bones) bone_map[bone.id] = &bone;
-
-  // Build bone ID → BoneTrack map from the selected clip only
+  for (const auto& bone : rig.bones) {
+    if (!bone_map.emplace(bone.id, &bone).second)
+      add("POSE_DUPLICATE_BONE", "duplicate bone id: " + bone.id);
+  }
   std::map<std::string, const BoneTrack*, std::less<>> track_map;
-  for (const auto& track : clip.tracks) track_map[track.bone_id] = &track;
+  for (const auto& track : clip.tracks) {
+    if (!bone_map.contains(track.bone_id))
+      add("POSE_UNKNOWN_BONE", "track references unknown bone: " + track.bone_id);
+    if (!track_map.emplace(track.bone_id, &track).second)
+      add("POSE_DUPLICATE_TRACK", "duplicate track for bone: " + track.bone_id);
+  }
+  if (!result.validation.ok()) return result;
 
+  // Evaluate local transforms: rest + animation delta
   EvaluatedPose pose;
-
-  // Evaluate local transforms: sample each bone's track at the effective tick
   for (const auto& bone : rig.bones) {
     auto trk_it = track_map.find(bone.id);
     if (trk_it != track_map.end() && !trk_it->second->keys.empty()) {
-      pose.local[bone.id] = sample_track(*trk_it->second, effective_tick);
+      auto sampled = sample_track(*trk_it->second, effective_tick);
+      pose.local[bone.id] = apply_animation_delta(bone.rest, sampled);
     } else {
-      // No track for this bone — use rest pose
       pose.local[bone.id] = bone.rest;
     }
   }
 
-  // Compute world transforms: parent→child hierarchy
-  // Compose: world_child = world_parent × local_child
-  // For 2D: translate by parent's world pos + local offset, rotate by sum, scale by product
+  // Compose world transforms using recursive memoization with visit states
+  // affine composition: world_child = parent_world × local_child
+  //   wx = parent.x + local.x*cos_r*parent.sx - local.y*sin_r*parent.sy
+  //   wy = parent.y + local.x*sin_r*parent.sx + local.y*cos_r*parent.sy
+  //   wrot = parent.rot + local.rot
+  //   wsx = parent.sx * local.sx
+  //   wsy = parent.sy * local.sy
   auto compose = [](const Transform2d& parent, const Transform2d& local) -> Transform2d {
-    // Rotate local offset by parent rotation, then add parent translation
     double rad = parent.rotation_degrees * 3.141592653589793 / 180.0;
     double cos_r = std::cos(rad), sin_r = std::sin(rad);
-    double wx = parent.x + local.x * cos_r - local.y * sin_r;
-    double wy = parent.y + local.x * sin_r + local.y * cos_r;
+    double wx = parent.x + local.x * cos_r * parent.scale_x - local.y * sin_r * parent.scale_y;
+    double wy = parent.y + local.x * sin_r * parent.scale_x + local.y * cos_r * parent.scale_y;
     return {wx, wy,
             parent.rotation_degrees + local.rotation_degrees,
             parent.scale_x * local.scale_x,
             parent.scale_y * local.scale_y};
   };
 
-  // Process bones in order (root first; rig bones are ordered parent-before-child)
-  for (const auto& bone : rig.bones) {
-    auto local_it = pose.local.find(bone.id);
-    if (local_it == pose.local.end()) continue;
+  enum class VisitState { unvisited, visiting, complete };
+  std::map<std::string, VisitState, std::less<>> visit;
+  for (const auto& bone : rig.bones) visit[bone.id] = VisitState::unvisited;
+
+  std::function<std::optional<Transform2d>(std::string_view)> resolve;
+  resolve = [&](std::string_view bone_id) -> std::optional<Transform2d> {
+    auto vit = visit.find(std::string(bone_id));
+    if (vit == visit.end()) {
+      add("POSE_MISSING_BONE", "unknown bone in hierarchy: " + std::string(bone_id));
+      return std::nullopt;
+    }
+    if (vit->second == VisitState::visiting) {
+      add("POSE_CYCLE", "bone hierarchy cycle detected at: " + std::string(bone_id));
+      return std::nullopt;
+    }
+    if (vit->second == VisitState::complete) {
+      auto wit = pose.world.find(std::string(bone_id));
+      if (wit != pose.world.end()) return wit->second;
+      return std::nullopt;
+    }
+    vit->second = VisitState::visiting;
+
+    auto local_it = pose.local.find(std::string(bone_id));
+    if (local_it == pose.local.end()) {
+      add("POSE_NO_LOCAL", "no local transform for bone: " + std::string(bone_id));
+      vit->second = VisitState::complete;
+      return std::nullopt;
+    }
     Transform2d world = local_it->second;
-    if (bone.parent_id) {
-      auto parent_it = pose.world.find(*bone.parent_id);
-      if (parent_it != pose.world.end()) {
-        world = compose(parent_it->second, world);
+
+    auto bit = bone_map.find(std::string(bone_id));
+    if (bit != bone_map.end() && bit->second->parent_id) {
+      auto parent_world = resolve(*bit->second->parent_id);
+      if (parent_world) {
+        world = compose(*parent_world, world);
+      } else {
+        vit->second = VisitState::complete;
+        return std::nullopt;
       }
     }
-    pose.world[bone.id] = world;
+    pose.world[std::string(bone_id)] = world;
+    vit->second = VisitState::complete;
+    return world;
+  };
+
+  for (const auto& bone : rig.bones) {
+    resolve(bone.id);
   }
 
-  return pose;
+  if (!result.validation.ok()) return result;
+  result.value = std::move(pose);
+  return result;
 }
 
 ValidationResult validate_state_graph(const AnimationStateGraph& graph, std::span<const SkeletalClip> clips) {

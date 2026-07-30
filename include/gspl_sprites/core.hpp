@@ -48,6 +48,9 @@ struct MorphologyPart {
   std::string parent;
   bool emissive{};
   bool electrical_marking{};
+  std::string bone_id;        // explicit skeleton attachment
+  std::string primitive{"ellipse"}; // rendering primitive: ellipse, capsule, triangle, segmented_curve, aura_contour
+  std::string semantic_role;   // semantic part role: front-left-leg, energy-aura, etc.
 };
 
 struct TransformationSeed {

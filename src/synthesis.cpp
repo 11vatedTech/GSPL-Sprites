@@ -366,23 +366,125 @@ Projection2dDefinition synthesize_morphology_projection2d(
   auto render_frame_posed = [&](const EvaluatedPose& pose) -> ImageRgba8 {
     ImageRgba8 canvas(canvas_w, canvas_h, ColorSpace::srgb, AlphaMode::straight,
                       std::vector<std::uint8_t>(static_cast<std::size_t>(canvas_w) * canvas_h * 4, 0));
+    // Draw capsule: a line segment with width (rounded rectangle)
+    auto draw_capsule = [&](int cx, int cy, int len, int width, double rotation_deg, std::uint32_t rgba) {
+      std::uint8_t r = (rgba >> 24) & 0xFF, g = (rgba >> 16) & 0xFF, b = (rgba >> 8) & 0xFF, a = rgba & 0xFF;
+      double rad = rotation_deg * 3.141592653589793 / 180.0;
+      double cos_r = std::cos(rad), sin_r = std::sin(rad);
+      int half_w = std::max(width / 2, 1);
+      int half_len = std::max(len / 2, 1);
+      int bb = std::max(half_len, half_w) + 2;
+      for (int dy = -bb; dy <= bb; ++dy) {
+        for (int dx = -bb; dx <= bb; ++dx) {
+          double lx = dx * cos_r + dy * (-sin_r);
+          double ly = dx * sin_r + dy * cos_r;
+          // Check if point lies within the capsule (rounded rectangle)
+          double dx_rect = std::max(std::abs(lx) - (half_len - half_w), 0.0);
+          if (dx_rect * dx_rect + ly * ly <= half_w * half_w) {
+            int px = cx + dx, py = cy + dy;
+            if (px >= 0 && px < canvas_w && py >= 0 && py < canvas_h) {
+              std::size_t idx = (static_cast<std::size_t>(py) * canvas_w + static_cast<std::size_t>(px)) * 4;
+              canvas.pixels[idx] = r; canvas.pixels[idx+1] = g; canvas.pixels[idx+2] = b; canvas.pixels[idx+3] = a;
+            }
+          }
+        }
+      }
+    };
+    // Draw triangle: isosceles pointing up (rotation applied)
+    auto draw_triangle = [&](int cx, int cy, int w, int h, double rotation_deg, std::uint32_t rgba) {
+      std::uint8_t r = (rgba >> 24) & 0xFF, g = (rgba >> 16) & 0xFF, b = (rgba >> 8) & 0xFF, a = rgba & 0xFF;
+      double rad = rotation_deg * 3.141592653589793 / 180.0;
+      double cos_r = std::cos(rad), sin_r = std::sin(rad);
+      int bb = std::max(w, h) / 2 + 2;
+      double hw = w * 0.5, hh = h * 0.5;
+      for (int dy = -bb; dy <= bb; ++dy) {
+        for (int dx = -bb; dx <= bb; ++dx) {
+          double lx = dx * cos_r + dy * (-sin_r);
+          double ly = dx * sin_r + dy * cos_r;
+          // Point-in-triangle: apex at (0,-hh), base at (hw,hh) and (-hw,hh)
+          double ax = 0, ay = -hh;
+          double bx = -hw, by = hh;
+          double cx2 = hw, cy2 = hh;
+          double d1 = (lx - bx) * (ay - by) - (ax - bx) * (ly - by);
+          double d2 = (lx - cx2) * (by - cy2) - (bx - cx2) * (ly - cy2);
+          double d3 = (lx - ax) * (cy2 - ay) - (cx2 - ax) * (ly - ay);
+          bool neg = (d1 < 0) || (d2 < 0) || (d3 < 0);
+          bool pos = (d1 > 0) || (d2 > 0) || (d3 > 0);
+          if (!(neg && pos)) {
+            int px = cx + dx, py = cy + dy;
+            if (px >= 0 && px < canvas_w && py >= 0 && py < canvas_h) {
+              std::size_t idx = (static_cast<std::size_t>(py) * canvas_w + static_cast<std::size_t>(px)) * 4;
+              canvas.pixels[idx] = r; canvas.pixels[idx+1] = g; canvas.pixels[idx+2] = b; canvas.pixels[idx+3] = a;
+            }
+          }
+        }
+      }
+    };
+    // Draw segmented curve: series of connected circles
+    auto draw_segmented_curve = [&](int cx, int cy, int len, int segments, double rotation_deg, std::uint32_t rgba) {
+      std::uint8_t r = (rgba >> 24) & 0xFF, g = (rgba >> 16) & 0xFF, b = (rgba >> 8) & 0xFF, a = rgba & 0xFF;
+      double rad = rotation_deg * 3.141592653589793 / 180.0;
+      double cos_r = std::cos(rad), sin_r = std::sin(rad);
+      int sr = std::max(len / (segments * 2), 1);
+      for (int seg = 0; seg < segments; ++seg) {
+        double t = static_cast<double>(seg) / (segments - 1) - 0.5;
+        double sx = cx + t * len * cos_r;
+        double sy = cy + t * len * sin_r;
+        int scx = static_cast<int>(sx), scy = static_cast<int>(sy);
+        for (int dy = -sr; dy <= sr; ++dy) {
+          for (int dx = -sr; dx <= sr; ++dx) {
+            if (dx*dx + dy*dy <= sr*sr) {
+              int px = scx + dx, py = scy + dy;
+              if (px >= 0 && px < canvas_w && py >= 0 && py < canvas_h) {
+                std::size_t idx = (static_cast<std::size_t>(py) * canvas_w + static_cast<std::size_t>(px)) * 4;
+                canvas.pixels[idx] = r; canvas.pixels[idx+1] = g; canvas.pixels[idx+2] = b; canvas.pixels[idx+3] = a;
+              }
+            }
+          }
+        }
+      }
+    };
     for (const auto& [name, part] : sorted_parts) {
       const bool is_eye_or_ear = (name.find("eye") != std::string::npos ||
                                    name.find("ear") != std::string::npos);
       std::uint32_t color = resolve_color(part, is_eye_or_ear);
-      // Look up world transform for the bone bound to this part (by name match)
-      auto wit = pose.world.find(name);
+      // Bone attachment: use part.bone_id if set, fallback to part name
+      std::string target_bone = part.bone_id.empty() ? name : part.bone_id;
+      auto wit = pose.world.find(target_bone);
+      // Bone world transform (identity if no bone found)
       double bx = 0, by = 0, brot = 0, bsx = 1.0, bsy = 1.0;
       if (wit != pose.world.end()) {
         bx = wit->second.x; by = wit->second.y;
         brot = wit->second.rotation_degrees;
         bsx = wit->second.scale_x; bsy = wit->second.scale_y;
       }
-      const int pcx = canvas_w / 2 + static_cast<int>((part.x + bx) * 3);
-      const int pcy = canvas_h / 2 - static_cast<int>((part.y + by) * 3);
+      // Affine composition: part center = bone_world × part_local_offset
+      // The part's (x, y) is the local offset from its bone origin
+      // Bone rotation rotates this offset; bone scale scales it
+      double rad = brot * 3.141592653589793 / 180.0;
+      double cos_r = std::cos(rad), sin_r = std::sin(rad);
+      double wx = bx + part.x * cos_r * bsx - part.y * sin_r * bsy;
+      double wy = by + part.x * sin_r * bsx + part.y * cos_r * bsy;
+      const int pcx = canvas_w / 2 + static_cast<int>(wx * 3);
+      const int pcy = canvas_h / 2 - static_cast<int>(wy * 3);
       const int prx = (std::max)(static_cast<int>(part.size_x * 1.5), 2);
       const int pry = (std::max)(static_cast<int>(part.size_y * 1.5), 2);
-      draw_rotated_ellipse(canvas, pcx, pcy, prx, pry, brot + part.rotation_degrees, bsx, bsy, color);
+      double total_rot = brot + part.rotation_degrees;
+      // Select primitive based on part.primitive field
+      if (part.primitive == "capsule") {
+        draw_capsule(pcx, pcy, pry * 2, prx, total_rot, color);
+      } else if (part.primitive == "triangle") {
+        draw_triangle(pcx, pcy, prx * 2, pry * 2, total_rot, color);
+      } else if (part.primitive == "segmented_curve") {
+        draw_segmented_curve(pcx, pcy, pry * 3, 6, total_rot, color);
+      } else if (part.primitive == "aura_contour") {
+        // Aura: large ellipse at reduced alpha
+        std::uint32_t aura_color = (color & 0x00FFFFFF) | ((color & 0xFF) / 3);
+        draw_rotated_ellipse(canvas, pcx, pcy, prx * 2, pry * 2, total_rot, bsx, bsy, aura_color);
+      } else {
+        // Default: ellipse
+        draw_rotated_ellipse(canvas, pcx, pcy, prx, pry, total_rot, bsx, bsy, color);
+      }
     }
     return canvas;
   };
@@ -394,10 +496,12 @@ Projection2dDefinition synthesize_morphology_projection2d(
                               std::string_view clip_label, std::uint32_t frame_dur) {
     for (std::uint32_t i = 0; i < count; ++i) {
       std::uint32_t tick = clip.duration_ticks > 0 ? (i * clip.duration_ticks / count) : i;
-      auto pose = evaluate_pose(clip, rig, tick);
-      frames.push_back({pf + "." + std::string(clip_label) + "." + std::to_string(i),
-                        render_frame_posed(pose),
-                        canvas_w / 2, canvas_h / 2, frame_dur});
+      auto pose_result = evaluate_pose(clip, rig, tick);
+      if (pose_result.ok()) {
+        frames.push_back({pf + "." + std::string(clip_label) + "." + std::to_string(i),
+                          render_frame_posed(*pose_result.value),
+                          canvas_w / 2, canvas_h / 2, frame_dur});
+      }
     }
   };
 
@@ -420,7 +524,7 @@ Projection2dDefinition synthesize_morphology_projection2d(
   if (walk_clip) gen_clip_frames(*walk_clip, 6, "walk", 3);
   if (attack_clip) gen_clip_frames(*attack_clip, 6, "attack", 2);
   if (hit_clip) gen_clip_frames(*hit_clip, 3, "hit", 2);
-  if (transform_clip) gen_clip_frames(*transform_clip, 5, "transform", 2);
+  if (transform_clip) gen_clip_frames(*transform_clip, 10, "transform", 2);
 
   for (auto& f : frames) f.frame_hash = compute_frame_hash(f.image);
 

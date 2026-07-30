@@ -76,24 +76,36 @@ entity Voltfox {
     morphology {
         part torso {
             parent: "root";
+            bone: "torso";
+            primitive: "ellipse";
+            semantic_role: "torso";
             x: 0.0; y: 0.0; z: 0.0;
             size_x: 18.0; size_y: 14.0; size_z: 10.0;
             color: "#242038";
         }
         part head {
             parent: "torso";
+            bone: "head";
+            primitive: "ellipse";
+            semantic_role: "head";
             x: 0.0; y: -14.0; z: 2.0;
             size_x: 10.0; size_y: 9.0; size_z: 8.0;
             color: "#242038";
         }
         part muzzle {
             parent: "head";
+            bone: "head";
+            primitive: "ellipse";
+            semantic_role: "muzzle";
             x: 0.0; y: -5.0; z: 4.0;
             size_x: 6.0; size_y: 4.0; size_z: 3.0;
             color: "#56F1FF";
         }
         part left_ear {
             parent: "head";
+            bone: "head";
+            primitive: "triangle";
+            semantic_role: "left-ear";
             x: -5.0; y: -3.0; z: -2.0;
             size_x: 4.0; size_y: 6.0; size_z: 2.0;
             color: "#242038";
@@ -101,6 +113,9 @@ entity Voltfox {
         }
         part right_ear {
             parent: "head";
+            bone: "head";
+            primitive: "triangle";
+            semantic_role: "right-ear";
             x: 5.0; y: -3.0; z: -2.0;
             size_x: 4.0; size_y: 6.0; size_z: 2.0;
             color: "#242038";
@@ -108,6 +123,9 @@ entity Voltfox {
         }
         part left_eye {
             parent: "head";
+            bone: "head";
+            primitive: "ellipse";
+            semantic_role: "left-eye";
             x: -3.0; y: -1.0; z: 5.0;
             size_x: 2.0; size_y: 2.0; size_z: 1.0;
             color: "#56F1FF";
@@ -115,6 +133,9 @@ entity Voltfox {
         }
         part right_eye {
             parent: "head";
+            bone: "head";
+            primitive: "ellipse";
+            semantic_role: "right-eye";
             x: 3.0; y: -1.0; z: 5.0;
             size_x: 2.0; size_y: 2.0; size_z: 1.0;
             color: "#56F1FF";
@@ -122,30 +143,45 @@ entity Voltfox {
         }
         part left_front_leg {
             parent: "torso";
+            bone: "leg_fl";
+            primitive: "capsule";
+            semantic_role: "front-left-leg";
             x: -6.0; y: 8.0; z: 0.0;
             size_x: 4.0; size_y: 10.0; size_z: 4.0;
             color: "#242038";
         }
         part right_front_leg {
             parent: "torso";
+            bone: "leg_fr";
+            primitive: "capsule";
+            semantic_role: "front-right-leg";
             x: 6.0; y: 8.0; z: 0.0;
             size_x: 4.0; size_y: 10.0; size_z: 4.0;
             color: "#242038";
         }
         part left_hind_leg {
             parent: "torso";
+            bone: "leg_hl";
+            primitive: "capsule";
+            semantic_role: "hind-left-leg";
             x: -6.0; y: -2.0; z: -2.0;
             size_x: 5.0; size_y: 10.0; size_z: 5.0;
             color: "#242038";
         }
         part right_hind_leg {
             parent: "torso";
+            bone: "leg_hr";
+            primitive: "capsule";
+            semantic_role: "hind-right-leg";
             x: 6.0; y: -2.0; z: -2.0;
             size_x: 5.0; size_y: 10.0; size_z: 5.0;
             color: "#242038";
         }
         part tail {
             parent: "torso";
+            bone: "tail";
+            primitive: "segmented_curve";
+            semantic_role: "tail";
             x: 0.0; y: 10.0; z: -6.0;
             size_x: 3.0; size_y: 8.0; size_z: 3.0;
             color: "#56F1FF";
@@ -153,6 +189,9 @@ entity Voltfox {
         }
         part aura {
             parent: "root";
+            bone: "aura_bone";
+            primitive: "aura_contour";
+            semantic_role: "energy-aura";
             x: 0.0; y: 0.0; z: -10.0;
             size_x: 30.0; size_y: 30.0; size_z: 1.0;
             color: "#9067C6";

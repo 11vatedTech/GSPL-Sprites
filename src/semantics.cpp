@@ -2107,19 +2107,58 @@ void Canonicalizer::lower_generic_block(GenericBlock const& block, CanonicalEnti
                             }
                             return "";
                         };
-                        auto pd = [&](std::string const& key, double def = 0.0) -> double {
+                        // Fail-closed numeric parsing: produce diagnostics on malformed input
+                        auto fail = [&](std::string const& msg) {
+                            out.diagnostics.add_error(DiagnosticCode::GSPL_GENE_INVALID_VALUE,
+                                "clip=" + clip.name + " track=" + track.bone +
+                                " tick=" + child_gb->name + ": " + msg, SourceSpan{});
+                        };
+                        auto pd = [&](std::string const& key, double def, bool required) -> std::optional<double> {
                             auto v = get_key_attr(key);
-                            if (v.empty()) return def;
-                            double result = def;
+                            if (v.empty()) {
+                                if (required) fail("missing required field '" + key + "'");
+                                return required ? std::nullopt : std::optional<double>(def);
+                            }
+                            double result = 0.0;
                             auto [ptr, ec] = std::from_chars(v.data(), v.data() + v.size(), result);
-                            if (ec != std::errc{}) return def;
+                            if (ec != std::errc{}) {
+                                fail("invalid numeric value for '" + key + "': " + v);
+                                return std::nullopt;
+                            }
+                            if (ptr != v.data() + v.size()) {
+                                fail("trailing characters in '" + key + "': " + v);
+                                return std::nullopt;
+                            }
+                            if (!std::isfinite(result)) {
+                                fail("non-finite value for '" + key + "'");
+                                return std::nullopt;
+                            }
                             return result;
                         };
-                        kf.x = pd("x");
-                        kf.y = pd("y");
-                        kf.rotation_degrees = pd("rotation_degrees");
-                        kf.scale_x = pd("scale_x", 1.0);
-                        kf.scale_y = pd("scale_y", 1.0);
+                        auto ox = pd("x", 0.0, true);
+                        auto oy = pd("y", 0.0, true);
+                        auto orot = pd("rotation_degrees", 0.0, true);
+                        auto osx = pd("scale_x", 1.0, true);
+                        auto osy = pd("scale_y", 1.0, true);
+                        if (!ox || !oy || !orot || !osx || !osy) continue;
+                        if (*osx <= 0.0) { fail("scale_x must be strictly positive"); continue; }
+                        if (*osy <= 0.0) { fail("scale_y must be strictly positive"); continue; }
+                        // Check for duplicate/unsupported fields
+                        std::set<std::string> seen;
+                        for (auto const& a : child_gb->attributes) {
+                            auto const* attr = dynamic_cast<AttributeNode const*>(a.get());
+                            if (attr) {
+                                if (!seen.insert(attr->key).second)
+                                    fail("duplicate field '" + attr->key + "'");
+                                else if (attr->key != "x" && attr->key != "y" &&
+                                         attr->key != "rotation_degrees" &&
+                                         attr->key != "scale_x" && attr->key != "scale_y")
+                                    fail("unsupported keyframe field '" + attr->key + "'");
+                            }
+                        }
+                        kf.x = *ox; kf.y = *oy;
+                        kf.rotation_degrees = *orot;
+                        kf.scale_x = *osx; kf.scale_y = *osy;
                         track.keys.push_back(std::move(kf));
                     }
                 }

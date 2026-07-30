@@ -55,9 +55,15 @@ struct EvaluatedPose {
   std::map<std::string, Transform2d, std::less<>> local;
   std::map<std::string, Transform2d, std::less<>> world;
 };
-[[nodiscard]] EvaluatedPose evaluate_pose(const SkeletalClip& clip,
-                                           const RigDefinition& rig,
-                                           std::uint32_t tick);
+struct PoseEvaluationResult {
+  std::optional<EvaluatedPose> value;
+  ValidationResult validation;
+  bool ok() const { return value.has_value() && validation.ok(); }
+};
+[[nodiscard]] Transform2d apply_animation_delta(const Transform2d& rest, const Transform2d& delta);
+[[nodiscard]] PoseEvaluationResult evaluate_pose(const SkeletalClip& clip,
+                                                   const RigDefinition& rig,
+                                                   std::uint32_t tick);
 
 enum class Comparison { equal, not_equal, less, less_equal, greater, greater_equal };
 struct AnimationTransition {
