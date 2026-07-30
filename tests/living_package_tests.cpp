@@ -81,12 +81,14 @@ int main() try {
   check(fs::exists(pkg_dir / "collisions-2d.json"), "collisions exist");
 
   auto verify = gspl::sprites::verify_living_visual_package(pkg_dir);
+
   check(verify.ok(), "verification ok");
   check(verify.frame_count == 48, "verify: 48 frames");
   check(verify.clip_count == 9, "verify: 9 clips");
   check(verify.sample_count == 48, "verify: 48 samples");
 
   auto read = gspl::sprites::read_living_visual_package(pkg_dir);
+
   check(read.ok(), "read ok");
 
   fs::remove_all(pkg_dir);
