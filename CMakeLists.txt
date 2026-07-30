@@ -443,6 +443,13 @@ target_compile_definitions(gspl_sprites_headless_evidence_tests PRIVATE
   GSPL_SPRITES_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 add_test(NAME gspl_sprites_headless_evidence_tests COMMAND gspl_sprites_headless_evidence_tests)
 
+add_executable(gspl_sprites_voltfox_phase_isolation_tests tests/voltfox_phase_isolation_tests.cpp)
+target_link_libraries(gspl_sprites_voltfox_phase_isolation_tests PRIVATE gspl_sprites_core)
+target_compile_definitions(gspl_sprites_voltfox_phase_isolation_tests PRIVATE
+  GSPL_SPRITES_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+add_test(NAME gspl_sprites_voltfox_phase_isolation_tests
+  COMMAND gspl_sprites_voltfox_phase_isolation_tests)
+
 add_executable(gspl_sprites_utf8_tests tests/utf8_tests.cpp)
 target_link_libraries(gspl_sprites_utf8_tests PRIVATE gspl_sprites_core)
 add_test(NAME gspl_sprites_utf8_tests COMMAND gspl_sprites_utf8_tests)
