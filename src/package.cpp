@@ -127,7 +127,7 @@ std::string_view artifact_kind_string(LivingArtifactKind kind) noexcept {
   case LivingArtifactKind::sprite_atlas: return "sprite-atlas";
   case LivingArtifactKind::sprite_atlas_metadata: return "sprite-atlas-metadata";
   }
-  return "unknown";
+  return "";  // unreachable — validated model ensures valid enum before serialization
 }
 
 std::string_view artifact_schema_for_kind(LivingArtifactKind kind) noexcept {
@@ -425,26 +425,7 @@ static bool lv_rd_bool(gspl::BoundedJsonReader& r, std::string_view path) {
   return *res.value;
 }
 
-// Fast key reader: read string into key buffer, match against expected value.
-// Used for manifest-level introspection (not deep seed parsing).
-static std::string lv_manifest_str(std::string_view json, std::string_view key) {
-  gspl::BoundedJsonConfig cfg{};
-  gspl::BoundedJsonReader r(json, cfg);
-  if (!r.begin_object("manifest")) return {};
-  while (r.has_more() && !r.has_error()) {
-    auto k = r.read_string_result();
-    if (!k.ok()) break;
-    if (!r.require(':', "manifest")) break;
-    if (*k.value == key) {
-      auto v = r.read_string_result();
-      return v.ok() ? std::move(*v.value) : std::string{};
-    }
-    r.skip_value();
-    r.record_object_member("manifest");
-    if (!r.next_object_member("manifest")) break;
-  }
-  return {};
-}
+
 // Full SpriteSeed deserialization from canonical JSON using BoundedJsonReader
 static SpriteSeed lv_parse_seed_json(std::string_view json) {
   SpriteSeed s;
@@ -1262,7 +1243,7 @@ void build_living_visual_package(const LivingVisualPackageInput& input, const st
     manifest.format = std::string(kSchemaLivingVisualPackage);
     manifest.identity_version = std::string(kIdentityPreimageVersion);
     manifest.entity_id = input.seed.stable_id;
-    manifest.canonical_entity_identity = std::string("local:") + seed_id;
+    manifest.canonical_entity_identity = sha256(std::string("gspl.canonical-entity.identity/0.1\n") + seed_id);
     manifest.seed_identity = seed_id;
     manifest.frame_count = static_cast<std::uint32_t>(input.frames.size());
     manifest.clip_count = static_cast<std::uint32_t>(input.generated_clips.size());
@@ -1290,30 +1271,43 @@ void build_living_visual_package(const LivingVisualPackageInput& input, const st
       manifest.artifacts.push_back(std::move(rec));
     };
 
+    // ── Compute governed provenance identities ──
+    auto compute_domain_id = [](std::string_view domain, std::string_view preimage) -> std::string {
+      return sha256(std::string(domain) + "\n" + std::string(preimage));
+    };
+    std::string frame_set_id = compute_domain_id("gspl.frame-set.identity/0.1", seed_id);
+    std::string sample_table_id = compute_domain_id("gspl.sample-table.identity/0.1", seed_id);
+    std::string pose_table_id = compute_domain_id("gspl.pose-table.identity/0.1", seed_id);
+    std::string event_sched_id = compute_domain_id("gspl.event-schedule.identity/0.1", seed_id);
+    std::string clip_set_id = compute_domain_id("gspl.generated-clip-set.identity/0.1", seed_id);
+    std::string channel_set_id = compute_domain_id("gspl.channel-set.identity/0.1", seed_id);
+    std::string collision_set_id = compute_domain_id("gspl.collision-set.identity/0.1", seed_id);
+    std::string morph_set_id = compute_domain_id("gspl.morphology-set.identity/0.1", seed_id);
+    std::string atlas_id = compute_domain_id("gspl.sprite-atlas.identity/0.1", seed_id);
+    std::string source_anim_id = compute_domain_id("gspl.source-animation-set.identity/0.1", seed_id);
+
     // Seed artifacts
     add_artifact("seed.json", LivingArtifactKind::living_seed, {}, seed_id);
     add_artifact("seed-identity.txt", LivingArtifactKind::seed_identity, {}, seed_id);
 
     // Frame metadata + images
-    std::string frame_set_id = "frames:sha256:" + sha256(canonicalize(input.seed));
     for (auto const& f : input.frames) {
       auto fpath = "frames/" + encode_pc(f.id) + ".png";
-      auto fhash = sha256(lv_read(staging/fpath, 512ULL*1024*1024));
       add_artifact(fpath, LivingArtifactKind::frame_image, {"frames.json"}, f.frame_hash);
     }
     add_artifact("frames.json", LivingArtifactKind::frame_metadata, {}, frame_set_id);
 
     // Source skeletal animations
     add_artifact("source-skeletal-animations.json", LivingArtifactKind::source_skeletal_animations,
-                 {"seed.json"}, seed_id);
+                 {"seed.json"}, source_anim_id);
 
     // Generated 2D animations
     add_artifact("animations-2d.json", LivingArtifactKind::generated_animation,
-                 {"frames.json", "source-skeletal-animations.json"}, seed_id);
+                 {"frames.json", "source-skeletal-animations.json"}, clip_set_id);
 
     // Frame samples
     add_artifact("frame-samples.json", LivingArtifactKind::frame_samples,
-                 {"animations-2d.json", "frames.json"}, seed_id);
+                 {"animations-2d.json", "frames.json"}, sample_table_id);
 
     // Frame hashes
     add_artifact("frame-hashes.json", LivingArtifactKind::frame_hashes,
@@ -1321,32 +1315,39 @@ void build_living_visual_package(const LivingVisualPackageInput& input, const st
 
     // Pose hashes
     add_artifact("pose-hashes.json", LivingArtifactKind::pose_hashes,
-                 {"frame-samples.json"}, seed_id);
+                 {"frame-samples.json"}, pose_table_id);
 
     // Generated events
     add_artifact("animation-events.json", LivingArtifactKind::generated_events,
-                 {"animations-2d.json", "frame-samples.json"}, seed_id);
+                 {"animations-2d.json", "frame-samples.json"}, event_sched_id);
 
     // Channels
-    for (auto const& ch : input.channels)
+    for (auto const& ch : input.channels) {
+      auto ch_hash = sha256(std::string("gspl.channel-pixel.identity/0.1\n") + seed_id + ":" + ch.id);
       add_artifact("channels/" + encode_pc(ch.id) + ".png", LivingArtifactKind::channel_image,
-                   {"channels.json", ("frames/" + encode_pc(ch.target_frame_id) + ".png")}, seed_id);
-    add_artifact("channels.json", LivingArtifactKind::channel_metadata, {"frames.json"}, seed_id);
+                   {"channels.json", ("frames/" + encode_pc(ch.target_frame_id) + ".png")}, ch_hash);
+    }
+    add_artifact("channels.json", LivingArtifactKind::channel_metadata, {"frames.json"}, channel_set_id);
 
     // Collisions
-    add_artifact("collisions-2d.json", LivingArtifactKind::collision_metadata, {"seed.json"}, seed_id);
+    add_artifact("collisions-2d.json", LivingArtifactKind::collision_metadata, {"seed.json"}, collision_set_id);
 
     // Morphologies
-    add_artifact("resolved-base-morphology.json", LivingArtifactKind::effective_morphology, {"seed.json"}, seed_id);
-    add_artifact("resolved-storm-morphology.json", LivingArtifactKind::effective_morphology, {"seed.json"}, seed_id);
+    add_artifact("resolved-base-morphology.json", LivingArtifactKind::effective_morphology, {"seed.json"}, morph_set_id);
+    add_artifact("resolved-storm-morphology.json", LivingArtifactKind::effective_morphology, {"seed.json"}, morph_set_id);
     add_artifact("transformation-morphologies.json", LivingArtifactKind::transformation_morphologies,
-                 {"seed.json"}, seed_id);
+                 {"seed.json"}, morph_set_id);
 
-    // Atlas
-    add_artifact("sheet/atlas.png", LivingArtifactKind::sprite_atlas,
-                 {"sheet/atlas.json"}, seed_id);
+    // Atlas — depends on all frame images + atlas metadata
+    {
+      std::vector<std::string> atlas_deps = {"sheet/atlas.json"};
+      for (auto const& f : input.frames)
+        atlas_deps.push_back("frames/" + encode_pc(f.id) + ".png");
+      std::sort(atlas_deps.begin(), atlas_deps.end());
+      add_artifact("sheet/atlas.png", LivingArtifactKind::sprite_atlas, std::move(atlas_deps), atlas_id);
+    }
     add_artifact("sheet/atlas.json", LivingArtifactKind::sprite_atlas_metadata,
-                 {"frames.json"}, seed_id);
+                 {"frames.json"}, atlas_id);
 
     manifest.artifact_count = static_cast<std::uint32_t>(manifest.artifacts.size());
 
@@ -1385,15 +1386,37 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
   try {
     if (!std::filesystem::exists(package_path) || !std::filesystem::is_directory(package_path))
       { add("LV_READ_NO_DIR", "package path not a directory"); return result; }
+
+    // ── Parse manifest through the typed strict parser ──
     auto manifest_bytes = lv_read(package_path/"manifest.json", limits.max_manifest_bytes);
-    auto entity_id = lv_manifest_str(manifest_bytes, "entityId");
-    auto stored_pkg_id = lv_manifest_str(manifest_bytes, "packageIdentity");
-    if (entity_id.empty()) { add("LV_READ_NO_ENTITY", "manifest missing entityId"); return result; }
+    auto manifest_parse = parse_living_package_manifest(manifest_bytes, limits);
+    if (!manifest_parse.ok()) {
+      for (auto const& d : manifest_parse.diagnostics.diagnostics)
+        result.diagnostics.diagnostics.push_back(d);
+      add("LV_READ_MANIFEST_PARSE", "typed manifest parse/validation failed");
+      return result;
+    }
+
+    // Require canonical manifest bytes — reject noncanonical ordering
+    auto canonical_bytes = canonicalize_manifest(*manifest_parse.value, true);
+    if (canonical_bytes != manifest_bytes)
+      { add("LV_READ_MANIFEST_NONCANONICAL", "manifest bytes are not canonical"); return result; }
+
+    // Independently recompute package identity
+    auto manifest_preimage = canonicalize_manifest(*manifest_parse.value, false);
+    auto computed_pkg_id = sha256(std::string(kIdentityPreimageVersion) + "\n" + manifest_preimage);
+    if (computed_pkg_id != manifest_parse.value->package_identity)
+      add("LV_READ_PKG_ID", "package identity recomputation mismatch");
+
+    auto& m = *manifest_parse.value;
 
     LoadedLivingVisualPackage pkg;
-    pkg.schema = std::string(kSchemaLivingVisualPackage);
-    pkg.entity_id = entity_id;
-    pkg.package_identity = stored_pkg_id;
+    pkg.schema = m.format;
+    pkg.entity_id = m.entity_id;
+    pkg.canonical_entity_identity = m.canonical_entity_identity;
+    pkg.seed_identity = m.seed_identity;
+    pkg.package_identity = m.package_identity;
+    pkg.manifest = std::move(m);
 
     // ── Load and parse seed ──
     auto seed_wrapper = lv_read(package_path/"seed.json", limits.max_artifact_bytes);
@@ -1416,10 +1439,9 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     }
     if (seed_json.empty()) { add("LV_READ_NO_DATA", "seed wrapper missing data field"); return result; }
     pkg.seed = lv_parse_seed_json(seed_json);
-    if (pkg.seed.stable_id.empty()) pkg.seed.stable_id = entity_id;
+    if (pkg.seed.stable_id.empty()) pkg.seed.stable_id = pkg.entity_id;
     pkg.seed_identity = sha256(seed_json);
-    auto manifest_seed_id = lv_manifest_str(manifest_bytes, "seedIdentity");
-    if (!manifest_seed_id.empty() && manifest_seed_id != pkg.seed_identity)
+    if (pkg.manifest.seed_identity != pkg.seed_identity)
       add("LV_READ_SEED_MISMATCH", "seed identity mismatch: manifest vs computed");
 
     // ── Reconstruct frames from frames.json + PNG files ──
@@ -2143,7 +2165,7 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
     }
     auto& pkg = *read_result.value;
 
-    // Populate verification counts from reconstructed data (not manifest counters)
+    // Populate verification counts from reconstructed data
     result.package_identity = pkg.package_identity;
     result.seed_identity = pkg.seed_identity;
     result.frame_count = static_cast<std::uint32_t>(pkg.frames.size());
@@ -2154,117 +2176,117 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
     result.collision_shape_count = static_cast<std::uint32_t>(pkg.collision_shapes.size());
     result.collision_window_count = static_cast<std::uint32_t>(pkg.collision_windows.size());
 
+    // Compare reconstructed counts with typed manifest
+    if (result.frame_count != pkg.manifest.frame_count)
+      add("LV_VERIFY_FRAME_CNT", "frame count mismatch: manifest=" + std::to_string(pkg.manifest.frame_count) + " reconstructed=" + std::to_string(result.frame_count));
+    if (result.clip_count != pkg.manifest.clip_count)
+      add("LV_VERIFY_CLIP_CNT", "clip count mismatch");
+    if (result.sample_count != pkg.manifest.sample_count)
+      add("LV_VERIFY_SAMPLE_CNT", "sample count mismatch");
+    if (result.event_count != pkg.manifest.event_count)
+      add("LV_VERIFY_EVENT_CNT", "event count mismatch");
+    if (result.channel_count != pkg.manifest.channel_count)
+      add("LV_VERIFY_CHANNEL_CNT", "channel count mismatch");
+    if (result.collision_shape_count != pkg.manifest.collision_shape_count)
+      add("LV_VERIFY_CSHAPE_CNT", "collision shape count mismatch");
+    if (result.collision_window_count != pkg.manifest.collision_window_count)
+      add("LV_VERIFY_CWIN_CNT", "collision window count mismatch");
+
     // Governance counts
     if (result.frame_count != 48) add("LV_VERIFY_FRAME_COUNT", "expected 48 frames");
     if (result.clip_count != 9) add("LV_VERIFY_CLIP_COUNT", "expected 9 clips");
     if (result.sample_count != 48) add("LV_VERIFY_SAMPLE_COUNT", "expected 48 samples");
 
-    // Verify package identity from manifest — independently recompute using structured parsing
-    if (std::filesystem::exists(package_path/"manifest.json")) {
-      auto manifest_bytes = lv_read(package_path/"manifest.json", 4ULL*1024*1024);
-      std::string stored_pkg_id;
-      std::string manifest_preimage;
-      {
-        gspl::BoundedJsonConfig cfg{};
-        gspl::BoundedJsonReader mr(manifest_bytes, cfg);
-        if (mr.begin_object("manifest")) {
-          // Build canonical preimage by re-serializing all fields except packageIdentity
-          std::ostringstream pre;
-          pre << "{";
-          bool first = true;
-          while (mr.has_more() && !mr.has_error()) {
-            auto mk = mr.read_string_result(); if (!mk.ok()) break;
-            if (!mr.require(':', "manifest")) break;
-            if (*mk.value == "packageIdentity") {
-              // Read the identity value: read_typed_value returns "<hash>" with quotes for strings
-              auto raw_val = mr.read_typed_value();
-              if (raw_val.size() >= 2 && raw_val.front() == '"' && raw_val.back() == '"')
-                stored_pkg_id = raw_val.substr(1, raw_val.size() - 2);
-              else
-                stored_pkg_id = raw_val;
-            } else {
-              // Re-emit this field exactly as parsed (read_typed_value includes quotes for strings)
-              if (!first) pre << ",";
-              first = false;
-              auto raw_val = mr.read_typed_value();
-              pre << "\"" << lv_escape(*mk.value) << "\":" << raw_val;
-            }
-            mr.record_object_member("manifest");
-            if (!mr.next_object_member("manifest")) break;
+    // Package identity already verified by reader (parse + canonicalize + recompute)
+    // Verify encoded artifact hashes from typed manifest records
+    {
+      std::set<std::string> declared;
+      for (auto const& art : pkg.manifest.artifacts) {
+        if (!declared.insert(art.path).second)
+          { add("LV_VERIFY_DUP_PATH", "duplicate artifact path: "+art.path); continue; }
+        if (!lowercase_sha256(art.sha256))
+          { add("LV_VERIFY_BAD_HASH", "malformed sha256 for: "+art.path); continue; }
+
+        // Path confinement: validate path before filesystem access
+        if (art.path.empty() || art.path.size() > rlim.max_path_bytes)
+          { add("LV_VERIFY_PATH_LEN", "path length invalid: "+art.path); continue; }
+        if (art.path[0] == '/' || art.path.find(":") != std::string::npos || art.path.find("\\") != std::string::npos)
+          { add("LV_VERIFY_PATH_UNSAFE", "unsafe path: "+art.path); continue; }
+        {
+          std::size_t s = 0; bool bad = false;
+          while (s < art.path.size()) {
+            auto e = art.path.find('/', s);
+            auto part = art.path.substr(s, e == std::string::npos ? art.path.size()-s : e-s);
+            if (part.empty() || part == "." || part == "..") { bad = true; break; }
+            if (part.back() == ' ' || part.back() == '.') { bad = true; break; }
+            if (e == std::string::npos) break;
+            s = e + 1;
           }
-          pre << "}";
-          mr.end_object("manifest");
-          if (!mr.has_error()) manifest_preimage = pre.str();
+          if (bad) { add("LV_VERIFY_PATH_UNSAFE", "unsafe path component: "+art.path); continue; }
+        }
+
+        // Canonicalize and check confinement
+        auto full = package_path / art.path;
+        auto canon = std::filesystem::weakly_canonical(full);
+        auto root_canon = std::filesystem::weakly_canonical(package_path);
+        std::string cs = canon.string(), rs = root_canon.string();
+        if (cs.size() < rs.size() || cs.compare(0, rs.size(), rs) != 0)
+          { add("LV_VERIFY_PATH_ESCAPE", "path escapes package root: "+art.path); continue; }
+        if (cs.size() > rs.size() && cs[rs.size()] != '/' && cs[rs.size()] != '\\')
+          { add("LV_VERIFY_PATH_ESCAPE", "path escapes package root: "+art.path); continue; }
+
+        // Symlink check per component
+        {
+          auto cur = package_path;
+          std::size_t start = 0;
+          bool symlink_found = false;
+          while (start < art.path.size()) {
+            auto end = art.path.find('/', start);
+            auto part = art.path.substr(start, end == std::string::npos ? art.path.size()-start : end-start);
+            cur /= part;
+            if (std::filesystem::exists(cur)) {
+              auto st = std::filesystem::symlink_status(cur);
+              if (std::filesystem::is_symlink(st)) { symlink_found = true; break; }
+            }
+            if (end == std::string::npos) break;
+            start = end + 1;
+          }
+          if (symlink_found) { add("LV_VERIFY_SYMLINK", "symlink in artifact path: "+art.path); continue; }
+        }
+
+        if (!std::filesystem::is_regular_file(full))
+          { add("LV_VERIFY_MISSING", "declared artifact missing: "+art.path); continue; }
+
+        // Verify byte size
+        auto fsz = std::filesystem::file_size(full);
+        if (fsz != art.byte_size)
+          add("LV_VERIFY_SIZE", "byte size mismatch for " + art.path + ": manifest=" + std::to_string(art.byte_size) + " disk=" + std::to_string(fsz));
+
+        // Verify SHA-256
+        try {
+          auto file_bytes = lv_read(full, rlim.max_artifact_bytes);
+          if (sha256(file_bytes) != art.sha256)
+            add("LV_VERIFY_HASH", "artifact hash mismatch: "+art.path);
+        } catch (...) { add("LV_VERIFY_READ_ERR", "cannot read artifact: "+art.path); }
+      }
+
+      // Undeclared files check
+      if (options.require_no_undeclared_files) {
+        for (auto const& e : std::filesystem::recursive_directory_iterator(package_path)) {
+          if (e.is_regular_file()) {
+            if (std::filesystem::is_symlink(std::filesystem::symlink_status(e.path())))
+              { add("LV_VERIFY_SYMLINK_FILE", "symlink file in package: " + e.path().filename().string()); continue; }
+            auto rel = e.path().lexically_relative(package_path).generic_string();
+            if (rel != "manifest.json" && !declared.contains(rel))
+              add("LV_VERIFY_UNDECLARED", "undeclared file: "+rel);
+          }
         }
       }
-      if (!stored_pkg_id.empty() && !manifest_preimage.empty()) {
-        auto recomputed_id = sha256(std::string(kIdentityPreimageVersion) + "\n" + manifest_preimage);
-        if (stored_pkg_id != recomputed_id)
-          add("LV_VERIFY_PKG_ID_RECOMPUTE", "package identity recomputation mismatch");
-        if (stored_pkg_id != pkg.package_identity)
-          add("LV_VERIFY_PKG_ID_READER", "package identity: manifest vs reader mismatch");
-      } else {
-        add("LV_VERIFY_PKG_ID_MISSING", "package identity missing or malformed");
-      }
-    }
 
-    // Verify encoded artifact hashes from manifest
-    if (std::filesystem::exists(package_path/"manifest.json")) {
-      auto manifest_bytes = lv_read(package_path/"manifest.json", 4ULL*1024*1024);
-      gspl::BoundedJsonConfig cfg{};
-      gspl::BoundedJsonReader mr(manifest_bytes, cfg);
-      if (mr.begin_object("manifest")) {
-        while (mr.has_more() && !mr.has_error()) {
-          auto mk = mr.read_string_result(); if (!mk.ok()) break;
-          if (!mr.require(':', "manifest")) break;
-          if (*mk.value == "artifacts") {
-            if (!mr.begin_array("m.artifacts")) break;
-            std::set<std::string> declared;
-            while (mr.has_more() && !mr.has_error()) {
-              if (!mr.begin_object("artifact")) break;
-              std::string path, hash;
-              while (mr.has_more() && !mr.has_error()) {
-                auto ak = mr.read_string_result(); if (!ak.ok()) break;
-                if (!mr.require(':', "artifact")) break;
-                if (*ak.value == "path") path = lv_rd_str(mr, "a.path");
-                else if (*ak.value == "sha256") hash = lv_rd_str(mr, "a.sha256");
-                else mr.skip_value();
-                mr.record_object_member("artifact");
-                if (!mr.next_object_member("artifact")) break;
-              }
-              mr.end_object("artifact");
-              if (!path.empty() && !declared.insert(path).second)
-                add("LV_VERIFY_DUP_PATH", "duplicate artifact path: "+path);
-              else if (!path.empty() && !hash.empty()) {
-                auto artifact_path = package_path/path;
-                if (std::filesystem::is_regular_file(artifact_path)) {
-                  try {
-                    auto file_bytes = lv_read(artifact_path, 512ULL*1024*1024);
-                    if (sha256(file_bytes) != hash)
-                      add("LV_VERIFY_HASH", "artifact hash mismatch: "+path);
-                  } catch (...) { add("LV_VERIFY_READ_ERR", "cannot read: "+path); }
-                }
-              }
-              mr.record_array_element("m.artifacts");
-              if (!mr.next_array_element("m.artifacts")) break;
-            }
-            mr.end_array("m.artifacts");
-
-            // Undeclared files check
-            if (options.require_no_undeclared_files) {
-              for (auto const& e : std::filesystem::recursive_directory_iterator(package_path)) {
-                if (e.is_regular_file() && !e.is_symlink()) {
-                  auto rel = e.path().lexically_relative(package_path).generic_string();
-                  if (rel != "manifest.json" && !declared.contains(rel))
-                    add("LV_VERIFY_UNDECLARED", "undeclared file: "+rel);
-                }
-              }
-            }
-          } else mr.skip_value();
-          mr.record_object_member("manifest");
-          if (!mr.next_object_member("manifest")) break;
-        }
-        mr.end_object("manifest");
+      // Check for missing declared files
+      for (auto const& art : pkg.manifest.artifacts) {
+        if (!std::filesystem::is_regular_file(package_path / art.path))
+          add("LV_VERIFY_DECLARED_MISSING", "declared artifact missing from disk: " + art.path);
       }
     }
   } catch (std::exception const& e) { add("LV_VERIFY_ERROR", e.what()); }
@@ -2348,17 +2370,21 @@ LivingPackageManifestParseResult parse_living_package_manifest(std::string_view 
                 if (!r.next_array_element("a.deps")) break;
               }
               r.end_array("a.deps");
-            } else r.skip_value();
+            } else { add("LV_PARSE_UNKNOWN_ART", "unknown artifact field: " + *ak.value); r.skip_value(); }
             r.record_object_member("parse.artifact");
             if (!r.next_object_member("parse.artifact")) break;
           }
           r.end_object("parse.artifact");
+          // Require all artifact fields exactly once
+          for (auto const& req : {"path","kind","schema","byteSize","sha256","dependencies","provenanceIdentity"}) {
+            if (!art_seen.contains(req)) add("LV_PARSE_MISS_ART", std::string("missing artifact field: ") + req);
+          }
           m.artifacts.push_back(std::move(rec));
           r.record_array_element("parse.artifacts");
           if (!r.next_array_element("parse.artifacts")) break;
         }
         r.end_array("parse.artifacts");
-      } else { r.skip_value(); }
+      } else { add("LV_PARSE_UNKNOWN_TOP", "unknown top-level field: " + k); r.skip_value(); }
       r.record_object_member("manifest-parse");
       if (!r.next_object_member("manifest-parse")) break;
     }
@@ -2367,13 +2393,16 @@ LivingPackageManifestParseResult parse_living_package_manifest(std::string_view 
     if (r.has_error())
       { add("LV_PARSE_ERROR", "manifest JSON parse error"); return result; }
 
-    if (!seen_fields.contains("format")) add("LV_PARSE_MISS_FORMAT", "missing format");
-    if (!seen_fields.contains("identityVersion")) add("LV_PARSE_MISS_IDV", "missing identityVersion");
-    if (!seen_fields.contains("packageIdentity")) add("LV_PARSE_MISS_PKGID", "missing packageIdentity");
-    if (!seen_fields.contains("entityId")) add("LV_PARSE_MISS_ENTITY", "missing entityId");
-    if (!seen_fields.contains("canonicalEntityIdentity")) add("LV_PARSE_MISS_CANON", "missing canonicalEntityIdentity");
-    if (!seen_fields.contains("seedIdentity")) add("LV_PARSE_MISS_SEED", "missing seedIdentity");
-    if (!seen_fields.contains("artifacts")) add("LV_PARSE_MISS_ARTIFACTS", "missing artifacts");
+    // Require all top-level fields exactly once
+    for (auto const& req : {"format","identityVersion","packageIdentity","entityId","canonicalEntityIdentity","seedIdentity","frameCount","clipCount","sampleCount","eventCount","channelCount","collisionShapeCount","collisionWindowCount","transformationMorphologyCount","artifactCount","artifacts"}) {
+      if (!seen_fields.contains(req)) { add("LV_PARSE_MISS_FIELD", std::string("missing top-level field: ") + req); }
+    }
+
+    if (!result.diagnostics.ok()) return result;
+
+    // Validate the parsed model before returning success
+    auto vres = validate_manifest_model(m, limits);
+    for (auto const& d : vres.diagnostics) result.diagnostics.diagnostics.push_back(d);
 
     if (!result.diagnostics.ok()) return result;
     result.value = std::move(m);

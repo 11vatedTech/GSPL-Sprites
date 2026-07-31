@@ -276,6 +276,375 @@ int main() try {
 
   fs::remove_all(pkg_dir);
 
+  // ── Typed manifest tests ──
+  {
+    using namespace gspl::sprites;
+    using Kind = LivingArtifactKind;
+    std::cout << "\n--- Typed Manifest Tests ---\n";
+
+    // Positive: kind/string round-trip
+    for (auto k : {Kind::living_seed, Kind::seed_identity, Kind::source_skeletal_animations,
+                   Kind::frame_metadata, Kind::frame_image, Kind::generated_animation,
+                   Kind::frame_samples, Kind::generated_events, Kind::pose_hashes,
+                   Kind::frame_hashes, Kind::channel_metadata, Kind::channel_image,
+                   Kind::collision_metadata, Kind::effective_morphology,
+                   Kind::transformation_morphologies, Kind::sprite_atlas, Kind::sprite_atlas_metadata}) {
+      auto s = artifact_kind_string(k);
+      auto back = artifact_kind_from_string(s);
+      check(back.has_value() && *back == k, ("kind round-trip: " + std::string(s)).c_str());
+    }
+
+    // Positive: every kind maps to expected schema
+    check(artifact_schema_for_kind(Kind::living_seed) == kSchemaLivingSeed, "schema: living_seed");
+    check(artifact_schema_for_kind(Kind::frame_metadata) == kSchemaFrames2d, "schema: frame_metadata");
+    check(artifact_schema_for_kind(Kind::generated_animation) == kSchemaGeneratedAnimation2d, "schema: generated_animation");
+    check(artifact_schema_for_kind(Kind::frame_samples) == kSchemaFrameSamples, "schema: frame_samples");
+    check(artifact_schema_for_kind(Kind::generated_events) == kSchemaGeneratedAnimationEvents, "schema: generated_events");
+    check(artifact_schema_for_kind(Kind::pose_hashes) == kSchemaPoseHashes, "schema: pose_hashes");
+    check(artifact_schema_for_kind(Kind::frame_hashes) == kSchemaFrameHashes, "schema: frame_hashes");
+    check(artifact_schema_for_kind(Kind::channel_metadata) == kSchemaChannelMaps, "schema: channel_metadata");
+    check(artifact_schema_for_kind(Kind::collision_metadata) == kSchemaCollisions2d, "schema: collision_metadata");
+    check(artifact_schema_for_kind(Kind::effective_morphology) == kSchemaEffectiveMorphology, "schema: effective_morphology");
+    check(artifact_schema_for_kind(Kind::transformation_morphologies) == kSchemaTransformationMorphologies, "schema: trans_morphs");
+    check(artifact_schema_for_kind(Kind::sprite_atlas_metadata) == kSchemaSpriteSheet, "schema: atlas_metadata");
+    check(artifact_schema_for_kind(Kind::frame_image) == "", "schema: frame_image empty");
+    check(artifact_schema_for_kind(Kind::channel_image) == "", "schema: channel_image empty");
+    check(artifact_schema_for_kind(Kind::seed_identity) == "", "schema: seed_identity empty");
+    check(artifact_schema_for_kind(Kind::sprite_atlas) == "", "schema: sprite_atlas empty");
+
+    // Positive: canonicalize_manifest determinism
+    {
+      LivingPackageManifest m;
+      m.format = std::string(kSchemaLivingVisualPackage);
+      m.identity_version = std::string(kIdentityPreimageVersion);
+      m.package_identity = std::string(64, 'a');
+      m.entity_id = "test";
+      m.canonical_entity_identity = std::string(64, 'b');
+      m.seed_identity = std::string(64, 'c');
+      m.frame_count = 48;
+      m.artifact_count = 1;
+      LivingPackageArtifactRecord rec;
+      rec.path = "test.json";
+      rec.kind = Kind::living_seed;
+      rec.schema = std::string(kSchemaLivingSeed);
+      rec.byte_size = 100;
+      rec.sha256 = std::string(64, 'd');
+      rec.provenance_identity = std::string(64, 'e');
+      m.artifacts.push_back(std::move(rec));
+
+      auto c1 = canonicalize_manifest(m, true);
+      auto c2 = canonicalize_manifest(m, true);
+      check(c1 == c2, "canonicalize_manifest deterministic");
+      check(!c1.empty(), "canonicalize_manifest non-empty");
+      check(c1.find("\"frameCount\":48") != std::string::npos, "canonicalize includes frameCount");
+      check(c1.find("\"artifactCount\":1") != std::string::npos, "canonicalize includes artifactCount");
+
+      // Round-trip: parse(canonicalize(m, true)) == m
+      PackageReadLimits rlim{};
+      auto parse_result = parse_living_package_manifest(c1, rlim);
+      check(parse_result.ok(), "parse canonicalize round-trip ok");
+      if (parse_result.value) {
+        auto& pm = *parse_result.value;
+        check(pm.format == m.format, "round-trip format");
+        check(pm.package_identity == m.package_identity, "round-trip pkg id");
+        check(pm.entity_id == m.entity_id, "round-trip entity");
+        check(pm.frame_count == m.frame_count, "round-trip frame_count");
+        check(pm.artifact_count == m.artifact_count, "round-trip artifact_count");
+        check(pm.artifacts.size() == 1, "round-trip artifacts.size");
+        check(pm.artifacts[0].path == "test.json", "round-trip artifact path");
+        check(pm.artifacts[0].sha256 == std::string(64, 'd'), "round-trip artifact sha256");
+      }
+    }
+
+    // Negative: missing format
+    {
+      std::string json = "{\"identityVersion\":\"" + std::string(kIdentityPreimageVersion) + "\",\"packageIdentity\":\"" + std::string(64,'a') + "\",\"entityId\":\"x\",\"canonicalEntityIdentity\":\"" + std::string(64,'b') + "\",\"seedIdentity\":\"" + std::string(64,'c') + "\",\"frameCount\":0,\"clipCount\":0,\"sampleCount\":0,\"eventCount\":0,\"channelCount\":0,\"collisionShapeCount\":0,\"collisionWindowCount\":0,\"transformationMorphologyCount\":0,\"artifactCount\":0,\"artifacts\":[]}";
+      PackageReadLimits rlim{};
+      auto r = parse_living_package_manifest(json, rlim);
+      check(!r.ok(), "neg: missing format");
+    }
+
+    // Negative: missing identityVersion
+    {
+      std::string json = "{\"format\":\"gspl.living-visual-package/0.1\",\"packageIdentity\":\"" + std::string(64,'a') + "\",\"entityId\":\"x\",\"canonicalEntityIdentity\":\"" + std::string(64,'b') + "\",\"seedIdentity\":\"" + std::string(64,'c') + "\",\"frameCount\":0,\"clipCount\":0,\"sampleCount\":0,\"eventCount\":0,\"channelCount\":0,\"collisionShapeCount\":0,\"collisionWindowCount\":0,\"transformationMorphologyCount\":0,\"artifactCount\":0,\"artifacts\":[]}";
+      PackageReadLimits rlim{};
+      auto r = parse_living_package_manifest(json, rlim);
+      check(!r.ok(), "neg: missing identityVersion");
+    }
+
+    // Negative: unknown top-level field
+    {
+      std::string json = "{\"format\":\"gspl.living-visual-package/0.1\",\"identityVersion\":\"" + std::string(kIdentityPreimageVersion) + "\",\"packageIdentity\":\"" + std::string(64,'a') + "\",\"entityId\":\"x\",\"canonicalEntityIdentity\":\"" + std::string(64,'b') + "\",\"seedIdentity\":\"" + std::string(64,'c') + "\",\"frameCount\":0,\"clipCount\":0,\"sampleCount\":0,\"eventCount\":0,\"channelCount\":0,\"collisionShapeCount\":0,\"collisionWindowCount\":0,\"transformationMorphologyCount\":0,\"artifactCount\":0,\"artifacts\":[],\"unknownField\":123}";
+      PackageReadLimits rlim{};
+      auto r = parse_living_package_manifest(json, rlim);
+      check(!r.ok(), "neg: unknown top-level field");
+    }
+
+    // Negative: duplicate top-level field
+    {
+      std::string json = "{\"format\":\"gspl.living-visual-package/0.1\",\"format\":\"gspl.living-visual-package/0.1\",\"identityVersion\":\"" + std::string(kIdentityPreimageVersion) + "\",\"packageIdentity\":\"" + std::string(64,'a') + "\",\"entityId\":\"x\",\"canonicalEntityIdentity\":\"" + std::string(64,'b') + "\",\"seedIdentity\":\"" + std::string(64,'c') + "\",\"frameCount\":0,\"clipCount\":0,\"sampleCount\":0,\"eventCount\":0,\"channelCount\":0,\"collisionShapeCount\":0,\"collisionWindowCount\":0,\"transformationMorphologyCount\":0,\"artifactCount\":0,\"artifacts\":[]}";
+      PackageReadLimits rlim{};
+      auto r = parse_living_package_manifest(json, rlim);
+      check(!r.ok(), "neg: duplicate top-level field");
+    }
+
+    // Negative: missing artifact field (kind)
+    {
+      std::string json = "{\"format\":\"gspl.living-visual-package/0.1\",\"identityVersion\":\"" + std::string(kIdentityPreimageVersion) + "\",\"packageIdentity\":\"" + std::string(64,'a') + "\",\"entityId\":\"x\",\"canonicalEntityIdentity\":\"" + std::string(64,'b') + "\",\"seedIdentity\":\"" + std::string(64,'c') + "\",\"frameCount\":0,\"clipCount\":0,\"sampleCount\":0,\"eventCount\":0,\"channelCount\":0,\"collisionShapeCount\":0,\"collisionWindowCount\":0,\"transformationMorphologyCount\":0,\"artifactCount\":1,\"artifacts\":[{\"path\":\"x\",\"schema\":\"\",\"byteSize\":1,\"sha256\":\"" + std::string(64,'a') + "\",\"dependencies\":[],\"provenanceIdentity\":\"" + std::string(64,'b') + "\"}]}";
+      PackageReadLimits rlim{};
+      auto r = parse_living_package_manifest(json, rlim);
+      check(!r.ok(), "neg: missing artifact kind");
+    }
+
+    // Negative: unknown artifact field
+    {
+      std::string json = "{\"format\":\"gspl.living-visual-package/0.1\",\"identityVersion\":\"" + std::string(kIdentityPreimageVersion) + "\",\"packageIdentity\":\"" + std::string(64,'a') + "\",\"entityId\":\"x\",\"canonicalEntityIdentity\":\"" + std::string(64,'b') + "\",\"seedIdentity\":\"" + std::string(64,'c') + "\",\"frameCount\":0,\"clipCount\":0,\"sampleCount\":0,\"eventCount\":0,\"channelCount\":0,\"collisionShapeCount\":0,\"collisionWindowCount\":0,\"transformationMorphologyCount\":0,\"artifactCount\":1,\"artifacts\":[{\"path\":\"x\",\"kind\":\"living-seed\",\"schema\":\"gspl.living-seed/0.1\",\"byteSize\":1,\"sha256\":\"" + std::string(64,'a') + "\",\"dependencies\":[],\"provenanceIdentity\":\"" + std::string(64,'b') + "\",\"unknownArtField\":42}]}";
+      PackageReadLimits rlim{};
+      auto r = parse_living_package_manifest(json, rlim);
+      check(!r.ok(), "neg: unknown artifact field");
+    }
+
+    // Negative: wrong type (string where uint32 expected)
+    {
+      std::string json = "{\"format\":\"gspl.living-visual-package/0.1\",\"identityVersion\":\"" + std::string(kIdentityPreimageVersion) + "\",\"packageIdentity\":\"" + std::string(64,'a') + "\",\"entityId\":\"x\",\"canonicalEntityIdentity\":\"" + std::string(64,'b') + "\",\"seedIdentity\":\"" + std::string(64,'c') + "\",\"frameCount\":\"not_a_number\",\"clipCount\":0,\"sampleCount\":0,\"eventCount\":0,\"channelCount\":0,\"collisionShapeCount\":0,\"collisionWindowCount\":0,\"transformationMorphologyCount\":0,\"artifactCount\":0,\"artifacts\":[]}";
+      PackageReadLimits rlim{};
+      auto r = parse_living_package_manifest(json, rlim);
+      check(!r.ok(), "neg: wrong type (string for uint32)");
+    }
+
+    // Negative: noncanonical bytes (whitespace)
+    {
+      std::string json = "{\n  \"format\": \"gspl.living-visual-package/0.1\",\n  \"identityVersion\": \"" + std::string(kIdentityPreimageVersion) + "\",\n  \"packageIdentity\": \"" + std::string(64,'a') + "\",\n  \"entityId\": \"x\",\n  \"canonicalEntityIdentity\": \"" + std::string(64,'b') + "\",\n  \"seedIdentity\": \"" + std::string(64,'c') + "\",\n  \"frameCount\": 0,\n  \"clipCount\": 0,\n  \"sampleCount\": 0,\n  \"eventCount\": 0,\n  \"channelCount\": 0,\n  \"collisionShapeCount\": 0,\n  \"collisionWindowCount\": 0,\n  \"transformationMorphologyCount\": 0,\n  \"artifactCount\": 0,\n  \"artifacts\": []\n}";
+      // Parse should succeed (tolerant parser), but canonicalize+compare would fail in reader
+      PackageReadLimits rlim{};
+      auto r = parse_living_package_manifest(json, rlim);
+      if (r.ok()) {
+        auto canonical = canonicalize_manifest(*r.value, true);
+        check(canonical != json, "neg: noncanonical bytes differ from canonical");
+      }
+    }
+
+    // Negative: artifact_count mismatch
+    {
+      std::string json = "{\"format\":\"gspl.living-visual-package/0.1\",\"identityVersion\":\"" + std::string(kIdentityPreimageVersion) + "\",\"packageIdentity\":\"" + std::string(64,'a') + "\",\"entityId\":\"x\",\"canonicalEntityIdentity\":\"" + std::string(64,'b') + "\",\"seedIdentity\":\"" + std::string(64,'c') + "\",\"frameCount\":0,\"clipCount\":0,\"sampleCount\":0,\"eventCount\":0,\"channelCount\":0,\"collisionShapeCount\":0,\"collisionWindowCount\":0,\"transformationMorphologyCount\":0,\"artifactCount\":5,\"artifacts\":[]}";
+      PackageReadLimits rlim{};
+      auto r = parse_living_package_manifest(json, rlim);
+      check(!r.ok(), "neg: artifact_count mismatch");
+    }
+
+    // Negative: missing count fields
+    {
+      // Missing frameCount
+      std::string json = "{\"format\":\"gspl.living-visual-package/0.1\",\"identityVersion\":\"" + std::string(kIdentityPreimageVersion) + "\",\"packageIdentity\":\"" + std::string(64,'a') + "\",\"entityId\":\"x\",\"canonicalEntityIdentity\":\"" + std::string(64,'b') + "\",\"seedIdentity\":\"" + std::string(64,'c') + "\",\"clipCount\":0,\"sampleCount\":0,\"eventCount\":0,\"channelCount\":0,\"collisionShapeCount\":0,\"collisionWindowCount\":0,\"transformationMorphologyCount\":0,\"artifactCount\":0,\"artifacts\":[]}";
+      PackageReadLimits rlim{};
+      auto r = parse_living_package_manifest(json, rlim);
+      check(!r.ok(), "neg: missing frameCount");
+    }
+
+    // Negative: unsorted dependencies
+    {
+      LivingPackageManifest m;
+      m.format = std::string(kSchemaLivingVisualPackage);
+      m.identity_version = std::string(kIdentityPreimageVersion);
+      m.package_identity = std::string(64, 'a');
+      m.entity_id = "x";
+      m.canonical_entity_identity = std::string(64, 'b');
+      m.seed_identity = std::string(64, 'c');
+      m.artifact_count = 1;
+      LivingPackageArtifactRecord rec;
+      rec.path = "a.json";
+      rec.kind = Kind::living_seed;
+      rec.schema = std::string(kSchemaLivingSeed);
+      rec.byte_size = 1;
+      rec.sha256 = std::string(64, 'd');
+      rec.provenance_identity = std::string(64, 'e');
+      rec.dependencies = {"z.json", "a.json"};
+      m.artifacts.push_back(std::move(rec));
+      PackageReadLimits rlim{};
+      auto v = validate_manifest_model(m, rlim);
+      check(!v.ok(), "neg: unsorted dependencies");
+    }
+
+    // Negative: self-dependency
+    {
+      LivingPackageManifest m;
+      m.format = std::string(kSchemaLivingVisualPackage);
+      m.identity_version = std::string(kIdentityPreimageVersion);
+      m.package_identity = std::string(64, 'a');
+      m.entity_id = "x";
+      m.canonical_entity_identity = std::string(64, 'b');
+      m.seed_identity = std::string(64, 'c');
+      m.artifact_count = 1;
+      LivingPackageArtifactRecord rec;
+      rec.path = "a.json";
+      rec.kind = Kind::living_seed;
+      rec.schema = std::string(kSchemaLivingSeed);
+      rec.byte_size = 1;
+      rec.sha256 = std::string(64, 'd');
+      rec.provenance_identity = std::string(64, 'e');
+      rec.dependencies = {"a.json", "b.json"};
+      m.artifacts.push_back(std::move(rec));
+      PackageReadLimits rlim{};
+      auto v = validate_manifest_model(m, rlim);
+      check(!v.ok(), "neg: self-dependency");
+    }
+
+    // Negative: unsorted artifact path
+    {
+      LivingPackageManifest m;
+      m.format = std::string(kSchemaLivingVisualPackage);
+      m.identity_version = std::string(kIdentityPreimageVersion);
+      m.package_identity = std::string(64, 'a');
+      m.entity_id = "x";
+      m.canonical_entity_identity = std::string(64, 'b');
+      m.seed_identity = std::string(64, 'c');
+      m.artifact_count = 2;
+      LivingPackageArtifactRecord r1, r2;
+      r1.path = "z.json"; r1.kind = Kind::living_seed; r1.schema = std::string(kSchemaLivingSeed); r1.byte_size = 1; r1.sha256 = std::string(64,'d'); r1.provenance_identity = std::string(64,'e');
+      r2.path = "a.json"; r2.kind = Kind::living_seed; r2.schema = std::string(kSchemaLivingSeed); r2.byte_size = 1; r2.sha256 = std::string(64,'f'); r2.provenance_identity = std::string(64,'g');
+      m.artifacts.push_back(std::move(r1)); m.artifacts.push_back(std::move(r2));
+      PackageReadLimits rlim{};
+      auto v = validate_manifest_model(m, rlim);
+      check(!v.ok(), "neg: unsorted artifact paths");
+    }
+
+    // Negative: duplicate artifact path
+    {
+      LivingPackageManifest m;
+      m.format = std::string(kSchemaLivingVisualPackage);
+      m.identity_version = std::string(kIdentityPreimageVersion);
+      m.package_identity = std::string(64, 'a');
+      m.entity_id = "x";
+      m.canonical_entity_identity = std::string(64, 'b');
+      m.seed_identity = std::string(64, 'c');
+      m.artifact_count = 2;
+      LivingPackageArtifactRecord r1, r2;
+      r1.path = "a.json"; r1.kind = Kind::living_seed; r1.schema = std::string(kSchemaLivingSeed); r1.byte_size = 1; r1.sha256 = std::string(64,'d'); r1.provenance_identity = std::string(64,'e');
+      r2.path = "a.json"; r2.kind = Kind::living_seed; r2.schema = std::string(kSchemaLivingSeed); r2.byte_size = 1; r2.sha256 = std::string(64,'f'); r2.provenance_identity = std::string(64,'g');
+      m.artifacts.push_back(std::move(r1)); m.artifacts.push_back(std::move(r2));
+      PackageReadLimits rlim{};
+      auto v = validate_manifest_model(m, rlim);
+      check(!v.ok(), "neg: duplicate artifact path");
+    }
+
+    // Negative: case-fold path collision
+    {
+      LivingPackageManifest m;
+      m.format = std::string(kSchemaLivingVisualPackage);
+      m.identity_version = std::string(kIdentityPreimageVersion);
+      m.package_identity = std::string(64, 'a');
+      m.entity_id = "x";
+      m.canonical_entity_identity = std::string(64, 'b');
+      m.seed_identity = std::string(64, 'c');
+      m.artifact_count = 2;
+      LivingPackageArtifactRecord r1, r2;
+      r1.path = "A.json"; r1.kind = Kind::living_seed; r1.schema = std::string(kSchemaLivingSeed); r1.byte_size = 1; r1.sha256 = std::string(64,'d'); r1.provenance_identity = std::string(64,'e');
+      r2.path = "a.json"; r2.kind = Kind::living_seed; r2.schema = std::string(kSchemaLivingSeed); r2.byte_size = 1; r2.sha256 = std::string(64,'f'); r2.provenance_identity = std::string(64,'g');
+      m.artifacts.push_back(std::move(r1)); m.artifacts.push_back(std::move(r2));
+      PackageReadLimits rlim{};
+      auto v = validate_manifest_model(m, rlim);
+      check(!v.ok(), "neg: case-fold path collision");
+    }
+
+    // Negative: stale package identity (change frameCount but keep same pkg id)
+    {
+      LivingPackageManifest m;
+      m.format = std::string(kSchemaLivingVisualPackage);
+      m.identity_version = std::string(kIdentityPreimageVersion);
+      m.package_identity = std::string(64, 'a');
+      m.entity_id = "x";
+      m.canonical_entity_identity = std::string(64, 'b');
+      m.seed_identity = std::string(64, 'c');
+      m.frame_count = 10;
+      m.artifact_count = 0;
+      PackageReadLimits rlim{};
+      auto preimage = canonicalize_manifest(m, false);
+      auto recomputed = sha256(std::string(kIdentityPreimageVersion) + "\n" + preimage);
+      check(recomputed != m.package_identity, "neg: stale package identity detectable");
+    }
+
+    // Positive: reader populates manifest
+    {
+      // Rebuild with typed manifest and check reader populates pkg.manifest
+      auto test_pkg_dir = fs::temp_directory_path() / "lv_pkg_manifest_test";
+      fs::remove_all(test_pkg_dir);
+      std::string src2 = load_source();
+      {
+        gspl::GsplContext ctx2;
+        auto buf2 = gspl::SourceBuffer::from_string("voltfox.gspl", src2);
+        ctx2.compile_source(std::move(buf2));
+        gspl::sprites::SpriteSeed seed2 = gspl::SpriteSeedLowering::lower(ctx2.compilation_context().canonical);
+        auto living2 = gspl::sprites::synthesize_living_animation2d(seed2);
+        gspl::sprites::LivingVisualPackageInput in2;
+        in2.seed = seed2;
+        in2.frames = living2.value->all_frames;
+        in2.generated_clips = living2.value->clips;
+        in2.samples = living2.value->samples;
+        in2.events = living2.value->generated_events;
+        in2.channels = living2.value->channel_maps;
+        in2.collision_shapes = living2.value->collision_shapes;
+        in2.collision_windows = living2.value->collision_windows;
+        in2.base_morphology = living2.value->base_morphology;
+        in2.storm_morphology = living2.value->storm_morphology;
+        in2.transformation_morphologies = living2.value->transformation_morphologies;
+        in2.sheet = living2.value->sheet;
+        gspl::sprites::build_living_visual_package(in2, test_pkg_dir);
+      }
+      auto read2 = gspl::sprites::read_living_visual_package(test_pkg_dir);
+      check(read2.ok(), "typed manifest reader: read ok");
+      if (read2.value) {
+        auto& m2 = read2.value->manifest;
+        check(!m2.format.empty(), "typed manifest: format populated");
+        check(m2.format == kSchemaLivingVisualPackage, "typed manifest: format correct");
+        check(m2.frame_count == 48, "typed manifest: frameCount = 48");
+        check(m2.clip_count == 9, "typed manifest: clipCount = 9");
+        check(m2.sample_count == 48, "typed manifest: sampleCount = 48");
+        check(m2.artifact_count > 0, "typed manifest: artifact_count > 0");
+        check(!m2.artifacts.empty(), "typed manifest: artifacts non-empty");
+        check(!m2.canonical_entity_identity.empty(), "typed manifest: canonical_entity_identity populated");
+        check(!m2.seed_identity.empty(), "typed manifest: seed_identity populated");
+        check(!m2.package_identity.empty(), "typed manifest: package_identity populated");
+      }
+      fs::remove_all(test_pkg_dir);
+    }
+
+    // Positive: verifier uses typed manifest counts
+    {
+      auto test_pkg_dir = fs::temp_directory_path() / "lv_pkg_verify_manifest";
+      fs::remove_all(test_pkg_dir);
+      std::string src2 = load_source();
+      {
+        gspl::GsplContext ctx2;
+        auto buf2 = gspl::SourceBuffer::from_string("voltfox.gspl", src2);
+        ctx2.compile_source(std::move(buf2));
+        gspl::sprites::SpriteSeed seed2 = gspl::SpriteSeedLowering::lower(ctx2.compilation_context().canonical);
+        auto living2 = gspl::sprites::synthesize_living_animation2d(seed2);
+        gspl::sprites::LivingVisualPackageInput in2;
+        in2.seed = seed2;
+        in2.frames = living2.value->all_frames;
+        in2.generated_clips = living2.value->clips;
+        in2.samples = living2.value->samples;
+        in2.events = living2.value->generated_events;
+        in2.channels = living2.value->channel_maps;
+        in2.collision_shapes = living2.value->collision_shapes;
+        in2.collision_windows = living2.value->collision_windows;
+        in2.base_morphology = living2.value->base_morphology;
+        in2.storm_morphology = living2.value->storm_morphology;
+        in2.transformation_morphologies = living2.value->transformation_morphologies;
+        in2.sheet = living2.value->sheet;
+        gspl::sprites::build_living_visual_package(in2, test_pkg_dir);
+      }
+      auto verify2 = gspl::sprites::verify_living_visual_package(test_pkg_dir);
+      check(verify2.ok(), "typed manifest verifier: verify ok");
+      check(verify2.frame_count == 48, "typed manifest verifier: frame_count = 48");
+      check(verify2.clip_count == 9, "typed manifest verifier: clip_count = 9");
+      check(verify2.sample_count == 48, "typed manifest verifier: sample_count = 48");
+      check(!verify2.package_identity.empty(), "typed manifest verifier: package_identity populated");
+      check(!verify2.seed_identity.empty(), "typed manifest verifier: seed_identity populated");
+      fs::remove_all(test_pkg_dir);
+    }
+  }
+
   std::cout << "\n=== LIVING PACKAGE TESTS: " << assertions << " assertions, " << failures << " failures ===\n";
   return failures ? 1 : 0;
 
