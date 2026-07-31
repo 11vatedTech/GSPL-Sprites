@@ -104,6 +104,71 @@ bool package_feature_present(TargetFeature feature,
   default:return false;
   }
 }
+} // anonymous namespace
+
+/* ── Artifact kind ↔ string helpers ── */
+std::string_view artifact_kind_string(LivingArtifactKind kind) noexcept {
+  switch (kind) {
+  case LivingArtifactKind::living_seed: return "living-seed";
+  case LivingArtifactKind::seed_identity: return "seed-identity";
+  case LivingArtifactKind::frame_metadata: return "frame-metadata";
+  case LivingArtifactKind::frame_image: return "frame-image";
+  case LivingArtifactKind::generated_animation: return "generated-animation";
+  case LivingArtifactKind::frame_samples: return "frame-samples";
+  case LivingArtifactKind::generated_events: return "generated-events";
+  case LivingArtifactKind::pose_hashes: return "pose-hashes";
+  case LivingArtifactKind::frame_hashes: return "frame-hashes";
+  case LivingArtifactKind::channel_metadata: return "channel-metadata";
+  case LivingArtifactKind::channel_image: return "channel-image";
+  case LivingArtifactKind::collision_metadata: return "collision-metadata";
+  case LivingArtifactKind::effective_morphology: return "effective-morphology";
+  case LivingArtifactKind::transformation_morphologies: return "transformation-morphologies";
+  case LivingArtifactKind::sprite_atlas: return "sprite-atlas";
+  case LivingArtifactKind::sprite_atlas_metadata: return "sprite-atlas-metadata";
+  }
+  return "unknown";
+}
+
+std::string_view artifact_schema_for_kind(LivingArtifactKind kind) noexcept {
+  switch (kind) {
+  case LivingArtifactKind::living_seed: return kSchemaLivingSeed;
+  case LivingArtifactKind::frame_metadata: return kSchemaFrames2d;
+  case LivingArtifactKind::generated_animation: return kSchemaGeneratedAnimation2d;
+  case LivingArtifactKind::frame_samples: return kSchemaFrameSamples;
+  case LivingArtifactKind::generated_events: return kSchemaGeneratedAnimationEvents;
+  case LivingArtifactKind::pose_hashes: return kSchemaPoseHashes;
+  case LivingArtifactKind::frame_hashes: return kSchemaFrameHashes;
+  case LivingArtifactKind::channel_metadata: return kSchemaChannelMaps;
+  case LivingArtifactKind::collision_metadata: return kSchemaCollisions2d;
+  case LivingArtifactKind::effective_morphology: return kSchemaEffectiveMorphology;
+  case LivingArtifactKind::transformation_morphologies: return kSchemaTransformationMorphologies;
+  case LivingArtifactKind::sprite_atlas_metadata: return kSchemaSpriteSheet;
+  case LivingArtifactKind::sprite_atlas: return "";
+  case LivingArtifactKind::channel_image: return "";
+  case LivingArtifactKind::seed_identity: return "";
+  case LivingArtifactKind::frame_image: return "";
+  }
+  return "";
+}
+
+std::optional<LivingArtifactKind> artifact_kind_from_string(std::string_view s) noexcept {
+  if (s == "living-seed") return LivingArtifactKind::living_seed;
+  if (s == "seed-identity") return LivingArtifactKind::seed_identity;
+  if (s == "frame-metadata") return LivingArtifactKind::frame_metadata;
+  if (s == "frame-image") return LivingArtifactKind::frame_image;
+  if (s == "generated-animation") return LivingArtifactKind::generated_animation;
+  if (s == "frame-samples") return LivingArtifactKind::frame_samples;
+  if (s == "generated-events") return LivingArtifactKind::generated_events;
+  if (s == "pose-hashes") return LivingArtifactKind::pose_hashes;
+  if (s == "frame-hashes") return LivingArtifactKind::frame_hashes;
+  if (s == "channel-metadata") return LivingArtifactKind::channel_metadata;
+  if (s == "channel-image") return LivingArtifactKind::channel_image;
+  if (s == "collision-metadata") return LivingArtifactKind::collision_metadata;
+  if (s == "effective-morphology") return LivingArtifactKind::effective_morphology;
+  if (s == "transformation-morphologies") return LivingArtifactKind::transformation_morphologies;
+  if (s == "sprite-atlas") return LivingArtifactKind::sprite_atlas;
+  if (s == "sprite-atlas-metadata") return LivingArtifactKind::sprite_atlas_metadata;
+  return std::nullopt;
 }
 
 PackageVerification verify_package(const std::filesystem::path& root, const PackageLimits& limits) {
@@ -2081,6 +2146,47 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
     }
   } catch (std::exception const& e) { add("LV_VERIFY_ERROR", e.what()); }
   return result;
+}
+
+/* ── Canonical manifest serialization ── */
+std::string canonicalize_manifest(const LivingPackageManifest& m, bool include_package_identity) {
+  std::string out;
+  out += "{\"format\":\""; out += lv_escape(m.format); out += "\"";
+  out += ",\"identityVersion\":\""; out += lv_escape(m.identity_version); out += "\"";
+  if (include_package_identity) { out += ",\"packageIdentity\":\""; out += lv_escape(m.package_identity); out += "\""; }
+  out += ",\"entityId\":\""; out += lv_escape(m.entity_id); out += "\"";
+  if (!m.canonical_entity_identity.empty()) { out += ",\"canonicalEntityIdentity\":\""; out += lv_escape(m.canonical_entity_identity); out += "\""; }
+  out += ",\"seedIdentity\":\""; out += lv_escape(m.seed_identity); out += "\"";
+  out += ",\"frameCount\":"; out += std::to_string(m.frame_count);
+  out += ",\"clipCount\":"; out += std::to_string(m.clip_count);
+  out += ",\"sampleCount\":"; out += std::to_string(m.sample_count);
+  out += ",\"eventCount\":"; out += std::to_string(m.event_count);
+  out += ",\"channelCount\":"; out += std::to_string(m.channel_count);
+  out += ",\"collisionShapeCount\":"; out += std::to_string(m.collision_shape_count);
+  out += ",\"collisionWindowCount\":"; out += std::to_string(m.collision_window_count);
+  out += ",\"transformationMorphologyCount\":"; out += std::to_string(m.transformation_morphology_count);
+  out += ",\"artifactCount\":"; out += std::to_string(m.artifact_count);
+  out += ",\"artifacts\":[";
+  for (std::size_t i = 0; i < m.artifacts.size(); ++i) {
+    if (i) out += ",";
+    auto const& a = m.artifacts[i];
+    out += "{\"path\":\""; out += lv_escape(a.path); out += "\"";
+    out += ",\"kind\":\""; out += artifact_kind_string(a.kind); out += "\"";
+    if (!a.schema.empty()) { out += ",\"schema\":\""; out += lv_escape(a.schema); out += "\""; }
+    out += ",\"byteSize\":"; out += std::to_string(a.byte_size);
+    out += ",\"sha256\":\""; out += lv_escape(a.sha256); out += "\"";
+    out += ",\"dependencies\":[";
+    auto sorted_deps = a.dependencies;
+    std::sort(sorted_deps.begin(), sorted_deps.end());
+    sorted_deps.erase(std::unique(sorted_deps.begin(), sorted_deps.end()), sorted_deps.end());
+    for (std::size_t j = 0; j < sorted_deps.size(); ++j) {
+      if (j) out += ",";
+      out += "\""; out += lv_escape(sorted_deps[j]); out += "\"";
+    }
+    out += "],\"provenanceIdentity\":\""; out += lv_escape(a.provenance_identity); out += "\"}";
+  }
+  out += "]}";
+  return out;
 }
 
 } // namespace gspl::sprites

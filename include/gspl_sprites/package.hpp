@@ -33,6 +33,68 @@ struct PackageVerification {
 
 /* ── Living Visual Package ── */
 
+/* ── Semantic artifact kinds ── */
+enum class LivingArtifactKind : std::uint8_t {
+  living_seed,
+  seed_identity,
+  frame_metadata,
+  frame_image,
+  generated_animation,
+  frame_samples,
+  generated_events,
+  pose_hashes,
+  frame_hashes,
+  channel_metadata,
+  channel_image,
+  collision_metadata,
+  effective_morphology,
+  transformation_morphologies,
+  sprite_atlas,
+  sprite_atlas_metadata,
+};
+
+[[nodiscard]] std::string_view artifact_kind_string(LivingArtifactKind kind) noexcept;
+[[nodiscard]] std::string_view artifact_schema_for_kind(LivingArtifactKind kind) noexcept;
+[[nodiscard]] std::optional<LivingArtifactKind> artifact_kind_from_string(std::string_view s) noexcept;
+
+/* ── Typed manifest artifact record ── */
+struct LivingPackageArtifactRecord {
+  std::string path;
+  LivingArtifactKind kind{LivingArtifactKind::frame_image};
+  std::string schema;
+  std::uint64_t byte_size{};
+  std::string sha256;
+  std::vector<std::string> dependencies;
+  std::string provenance_identity;
+};
+
+/* ── Typed canonical living-package manifest ── */
+struct LivingPackageManifest {
+  std::string format;
+  std::string identity_version;
+  std::string package_identity;
+  std::string entity_id;
+  std::string canonical_entity_identity;
+  std::string seed_identity;
+
+  std::uint32_t frame_count{};
+  std::uint32_t clip_count{};
+  std::uint32_t sample_count{};
+  std::uint32_t event_count{};
+  std::uint32_t channel_count{};
+  std::uint32_t collision_shape_count{};
+  std::uint32_t collision_window_count{};
+  std::uint32_t transformation_morphology_count{};
+  std::uint32_t artifact_count{};
+
+  std::vector<LivingPackageArtifactRecord> artifacts;
+};
+
+/* ── Canonical manifest serialization ── */
+[[nodiscard]] std::string canonicalize_manifest(
+    const LivingPackageManifest& manifest,
+    bool include_package_identity);
+
 /* ── Artifact schemas ── */
 inline constexpr std::string_view kSchemaLivingSeed               = "gspl.living-seed/0.1";
 inline constexpr std::string_view kSchemaSourceSkeletalAnimations = "gspl.source-skeletal-animations/0.1";
@@ -75,6 +137,7 @@ struct LoadedLivingVisualPackage {
   std::string seed_identity;
   std::string package_identity;
 
+  LivingPackageManifest manifest;
   SpriteSeed seed;
 
   std::vector<FrameSource> frames;
