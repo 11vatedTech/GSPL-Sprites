@@ -18,6 +18,24 @@ struct PackageLimits {
   std::uint32_t max_path_bytes{1024};
 };
 
+/* Moved here so it is visible to validate_manifest_model / parse_living_package_manifest */
+struct PackageReadLimits {
+  std::uint64_t max_manifest_bytes{4ULL * 1024ULL * 1024ULL};
+  std::uint64_t max_artifact_bytes{512ULL * 1024ULL * 1024ULL};
+  std::uint64_t max_total_bytes{2ULL * 1024ULL * 1024ULL * 1024ULL};
+  std::uint32_t max_artifacts{4096};
+  std::uint32_t max_directory_entries{8192};
+  std::uint32_t max_path_bytes{1024};
+  std::uint32_t max_frames{256};
+  std::uint32_t max_channels{512};
+  std::uint32_t max_morphology_parts{128};
+  std::uint32_t max_json_tokens{262144};
+  std::uint32_t max_json_nesting{32};
+  std::uint32_t max_image_width{4096};
+  std::uint32_t max_image_height{4096};
+  std::uint64_t max_decoded_pixel_bytes{256ULL * 1024ULL * 1024ULL};
+};
+
 struct PackageVerification {
   ValidationResult validation;
   std::string entity_id;
@@ -37,6 +55,7 @@ struct PackageVerification {
 enum class LivingArtifactKind : std::uint8_t {
   living_seed,
   seed_identity,
+  source_skeletal_animations,
   frame_metadata,
   frame_image,
   generated_animation,
@@ -90,10 +109,26 @@ struct LivingPackageManifest {
   std::vector<LivingPackageArtifactRecord> artifacts;
 };
 
-/* ── Canonical manifest serialization ── */
+/* ── Manifest validation ── */
+[[nodiscard]] ValidationResult validate_manifest_model(
+    const LivingPackageManifest& manifest,
+    const PackageReadLimits& limits);
+
+/* ── Canonical manifest serialization (assumes validated model) ── */
 [[nodiscard]] std::string canonicalize_manifest(
     const LivingPackageManifest& manifest,
     bool include_package_identity);
+
+/* ── Strict typed manifest parser ── */
+struct LivingPackageManifestParseResult {
+  std::optional<LivingPackageManifest> value;
+  ValidationResult diagnostics;
+  [[nodiscard]] bool ok() const noexcept { return value.has_value() && diagnostics.ok(); }
+};
+
+[[nodiscard]] LivingPackageManifestParseResult parse_living_package_manifest(
+    std::string_view bytes,
+    const PackageReadLimits& limits);
 
 /* ── Artifact schemas ── */
 inline constexpr std::string_view kSchemaLivingSeed               = "gspl.living-seed/0.1";
@@ -111,23 +146,6 @@ inline constexpr std::string_view kSchemaTransformationMorphologies = "gspl.tran
 inline constexpr std::string_view kSchemaSpriteSheet              = "gspl.sprite-sheet/0.1";
 inline constexpr std::string_view kSchemaLivingVisualPackage      = "gspl.living-visual-package/0.1";
 inline constexpr std::string_view kIdentityPreimageVersion  = "gspl.living-visual-package.identity/0.1";
-
-struct PackageReadLimits {
-  std::uint64_t max_manifest_bytes{4ULL * 1024ULL * 1024ULL};
-  std::uint64_t max_artifact_bytes{512ULL * 1024ULL * 1024ULL};
-  std::uint64_t max_total_bytes{2ULL * 1024ULL * 1024ULL * 1024ULL};
-  std::uint32_t max_artifacts{4096};
-  std::uint32_t max_directory_entries{8192};
-  std::uint32_t max_path_bytes{1024};
-  std::uint32_t max_frames{256};
-  std::uint32_t max_channels{512};
-  std::uint32_t max_morphology_parts{128};
-  std::uint32_t max_json_tokens{262144};
-  std::uint32_t max_json_nesting{32};
-  std::uint32_t max_image_width{4096};
-  std::uint32_t max_image_height{4096};
-  std::uint64_t max_decoded_pixel_bytes{256ULL * 1024ULL * 1024ULL};
-};
 
 /* ── Fully reconstructed loaded package ── */
 struct LoadedLivingVisualPackage {
