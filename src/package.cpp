@@ -1318,6 +1318,8 @@ std::string canonicalize_frame_set_preimage(std::span<const FrameSource> frames)
     preimage += std::to_string(f.image.width) + "x" + std::to_string(f.image.height) + "\n";
     preimage += std::to_string(f.pivot_x) + "," + std::to_string(f.pivot_y) + "\n";
     preimage += std::to_string(f.duration_ticks) + "\n";
+    // color_space and alpha_mode excluded: reader reconstructs from PNG decode,
+    // which may not match the frames.json serialized metadata faithfully.
   }
   return preimage;
 }
@@ -1337,8 +1339,9 @@ std::string canonicalize_sample_table_preimage(std::span<const GeneratedFrameSam
 }
 
 std::string canonicalize_event_schedule_preimage(std::span<const GeneratedAnimationEvent> events) {
-  // NOTE: mapped_source_tick is excluded from the preimage because it does not
-  // round-trip identically through JSON serialization (internal synthesis detail).
+  // NOTE: mapped_source_tick excluded — the builder applies a fallback
+  // (if mapped_tick==0, substitute source_tick) that the reader cannot
+  // independently reproduce, so the round-trip is not faithful.
   auto sorted = std::vector<GeneratedAnimationEvent>(events.begin(), events.end());
   std::ranges::sort(sorted, {}, [](auto const& e) { return std::make_tuple(e.clip_id, e.event_id, e.authored_tick, e.frame_index, e.frame_id); });
   std::string preimage;
@@ -2631,101 +2634,86 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
     if (result.clip_count != 9) add("LV_VERIFY_CLIP_COUNT", "expected 9 clips");
     if (result.sample_count != 48) add("LV_VERIFY_SAMPLE_COUNT", "expected 48 samples");
 
-    // ── Semantic provenance verification (recomputed from reconstructed content) ──
+    // ── Build artifact provenance lookup (O(1) map, not O(n) closure) ──
+    std::map<std::string, std::string, std::less<>> art_prov;
+    for (auto const& a : pkg.manifest.artifacts)
+      art_prov[a.path] = a.provenance_identity;
+    auto prov = [&](std::string_view path) -> std::string_view {
+      auto it = art_prov.find(std::string(path));
+      return it != art_prov.end() ? std::string_view(it->second) : std::string_view{};
+    };
+
+    // ── Mandatory semantic provenance (not gated by verify_pixel_hashes) ──
+    // Canonical entity identity
+    auto recomputed_canonical_entity = sha256(std::string(kDomainCanonicalEntity) + "\n" + canonicalize(pkg.seed));
+    if (recomputed_canonical_entity != pkg.manifest.canonical_entity_identity)
+      add("LV_PROV_CANONICAL_ENTITY", "canonical entity identity mismatch");
+
+    // Frame-set identity (uses shared canonicalize_frame_set_preimage)
+    {
+      auto preimage = canonicalize_frame_set_preimage(pkg.frames);
+      auto computed = compute_domain_id_impl(kDomainFrameSet, preimage);
+      auto stored_frame_set = prov("frames.json");
+      auto stored_frame_hashes = prov("frame-hashes.json");
+      if (!stored_frame_set.empty() && computed != stored_frame_set)
+        add("LV_PROV_FRAME_SET", "frame-set provenance mismatch");
+      if (!stored_frame_hashes.empty() && computed != stored_frame_hashes)
+        add("LV_PROV_FRAME_HASHES", "frame-hashes provenance mismatch");
+    }
+
+    // Sample-table identity
+    {
+      auto preimage = canonicalize_sample_table_preimage(pkg.samples);
+      auto computed = compute_domain_id_impl(kDomainSampleTable, preimage);
+      auto stored = prov("frame-samples.json");
+      if (!stored.empty() && computed != stored)
+        add("LV_PROV_SAMPLE_TABLE", "sample-table provenance mismatch");
+    }
+
+    // Event-schedule identity (uses shared canonicalize_event_schedule_preimage)
+    {
+      auto preimage = canonicalize_event_schedule_preimage(pkg.events);
+      auto computed = compute_domain_id_impl(kDomainEventSchedule, preimage);
+      auto stored = prov("animation-events.json");
+      if (!stored.empty() && computed != stored)
+        add("LV_PROV_EVENT_SCHEDULE", "event-schedule provenance mismatch");
+    }
+
+    // Pose-table identity
+    {
+      auto preimage = canonicalize_pose_table_preimage(pkg.samples);
+      auto computed = compute_domain_id_impl(kDomainPoseTable, preimage);
+      auto stored = prov("pose-hashes.json");
+      if (!stored.empty() && computed != stored)
+        add("LV_PROV_POSE_TABLE", "pose-table provenance mismatch");
+    }
+
+    // Generated-clip-set identity
+    {
+      auto preimage = canonicalize_generated_clip_set_preimage(pkg.generated_clips);
+      auto computed = compute_domain_id_impl(kDomainGeneratedClipSet, preimage);
+      auto stored = prov("animations-2d.json");
+      if (!stored.empty() && computed != stored)
+        add("LV_PROV_GENERATED_CLIPS", "generated-clip-set provenance mismatch");
+    }
+
+    // Collision-set identity (from reconstructed collision artifacts, not seed)
+    {
+      auto preimage = canonicalize_collision_set_preimage(
+          pkg.collision_shapes, pkg.collision_windows);
+      auto computed = compute_domain_id_impl(kDomainCollisionSet, preimage);
+      auto stored = prov("collisions-2d.json");
+      if (!stored.empty() && computed != stored)
+        add("LV_PROV_COLLISIONS", "collision-set provenance mismatch");
+    }
+
+    // ── Optional pixel-level checks (gated by verify_pixel_hashes) ──
     if (options.verify_pixel_hashes) {
-      // Helper: find artifact provenance by path
-      auto art_prov = [&](std::string_view path) -> std::string {
-        for (auto const& a : pkg.manifest.artifacts)
-          if (a.path == path) return a.provenance_identity;
-        return "";
-      };
-
-      // Canonical entity identity: SHA-256(domain + "\n" + canonicalize(seed))
-      auto recomputed_canonical_entity = sha256(std::string(kDomainCanonicalEntity) + "\n" + canonicalize(pkg.seed));
-      if (recomputed_canonical_entity != pkg.manifest.canonical_entity_identity)
-        add("LV_PROV_CANONICAL_ENTITY", "canonical entity identity mismatch");
-
-      // Frame-set identity: sorted by frame ID, includes frame_id + frame_hash + dimensions
-      {
-        auto sorted_frames = pkg.frames;
-        std::ranges::sort(sorted_frames, {}, &FrameSource::id);
-        std::string preimage;
-        for (auto const& f : sorted_frames) {
-          preimage += f.id + "\n";
-          preimage += f.frame_hash + "\n";
-          preimage += std::to_string(f.image.width) + "x" + std::to_string(f.image.height) + "\n";
-          preimage += std::to_string(f.pivot_x) + "," + std::to_string(f.pivot_y) + "\n";
-          preimage += std::to_string(f.duration_ticks) + "\n";
-        }
-        auto computed = sha256(std::string(kDomainFrameSet) + "\n" + preimage);
-        auto stored_frame_set = art_prov("frames.json");
-        auto stored_frame_hashes = art_prov("frame-hashes.json");
-        if (!stored_frame_set.empty() && computed != stored_frame_set)
-          add("LV_PROV_FRAME_SET", "frame-set provenance mismatch");
-        if (!stored_frame_hashes.empty() && computed != stored_frame_hashes)
-          add("LV_PROV_FRAME_HASHES", "frame-hashes provenance mismatch");
-      }
-
-      // Sample-table identity
-      {
-        auto preimage = canonicalize_sample_table_preimage(pkg.samples);
-        auto computed = compute_domain_id_impl(kDomainSampleTable, preimage);
-        auto stored = art_prov("frame-samples.json");
-        if (!stored.empty() && computed != stored)
-          add("LV_PROV_SAMPLE_TABLE", "sample-table provenance mismatch");
-      }
-
-      // Event-schedule identity
-      {
-        auto sorted_events = pkg.events;
-        std::ranges::sort(sorted_events, {}, [](auto const& e) { return e.clip_id + "|" + e.event_id; });
-        std::string preimage;
-        for (auto const& ev : sorted_events) {
-          preimage += ev.clip_id + "\n";
-          preimage += ev.event_id + "\n";
-          preimage += std::to_string(ev.authored_tick) + "\n";
-          preimage += std::to_string(ev.frame_index) + "\n";
-          preimage += ev.frame_id + "\n";
-        }
-        auto computed = sha256(std::string(kDomainEventSchedule) + "\n" + preimage);
-        auto stored = art_prov("animation-events.json");
-        if (!stored.empty() && computed != stored)
-          add("LV_PROV_EVENT_SCHEDULE", "event-schedule provenance mismatch");
-      }
-
-      // Pose-table identity
-      {
-        auto preimage = canonicalize_pose_table_preimage(pkg.samples);
-        auto computed = compute_domain_id_impl(kDomainPoseTable, preimage);
-        auto stored = art_prov("pose-hashes.json");
-        if (!stored.empty() && computed != stored)
-          add("LV_PROV_POSE_TABLE", "pose-table provenance mismatch");
-      }
-
-      // Generated-clip-set identity
-      {
-        auto preimage = canonicalize_generated_clip_set_preimage(pkg.generated_clips);
-        auto computed = compute_domain_id_impl(kDomainGeneratedClipSet, preimage);
-        auto stored = art_prov("animations-2d.json");
-        if (!stored.empty() && computed != stored)
-          add("LV_PROV_GENERATED_CLIPS", "generated-clip-set provenance mismatch");
-      }
-
-      // Collision-set identity (from reconstructed seed)
-      {
-        auto preimage = canonicalize_collision_set_preimage(
-            pkg.seed.collision_shapes, pkg.seed.collision_windows);
-        auto computed = compute_domain_id_impl(kDomainCollisionSet, preimage);
-        auto stored = art_prov("collisions-2d.json");
-        if (!stored.empty() && computed != stored)
-          add("LV_PROV_COLLISIONS", "collision-set provenance mismatch");
-      }
-
       // Channel-set identity
       if (!pkg.channels.empty()) {
         auto preimage = canonicalize_channel_set_preimage(pkg.channels);
         auto computed = compute_domain_id_impl(kDomainChannelSet, preimage);
-        auto stored = art_prov("channels.json");
+        auto stored = prov("channels.json");
         if (!stored.empty() && computed != stored)
           add("LV_PROV_CHANNEL_SET", "channel-set provenance mismatch");
       }
@@ -2734,7 +2722,7 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
       if (!pkg.base_morphology.empty()) {
         auto preimage = canonicalize_morphology_preimage(pkg.base_morphology);
         auto computed = compute_domain_id_impl(kDomainMorphologySet, preimage);
-        auto stored = art_prov("resolved-base-morphology.json");
+        auto stored = prov("resolved-base-morphology.json");
         if (!stored.empty() && computed != stored)
           add("LV_PROV_BASE_MORPHOLOGY", "base morphology provenance mismatch");
       }
@@ -2743,7 +2731,7 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
       if (!pkg.storm_morphology.empty()) {
         auto preimage = canonicalize_morphology_preimage(pkg.storm_morphology);
         auto computed = compute_domain_id_impl(kDomainMorphologySet, preimage);
-        auto stored = art_prov("resolved-storm-morphology.json");
+        auto stored = prov("resolved-storm-morphology.json");
         if (!stored.empty() && computed != stored)
           add("LV_PROV_STORM_MORPHOLOGY", "storm morphology provenance mismatch");
       }
@@ -2756,7 +2744,7 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
           trans_preimage += canonicalize_morphology_preimage(pkg.transformation_morphologies[i]);
         }
         auto computed = compute_domain_id_impl(kDomainMorphologySet, trans_preimage);
-        auto stored = art_prov("transformation-morphologies.json");
+        auto stored = prov("transformation-morphologies.json");
         if (!stored.empty() && computed != stored)
           add("LV_PROV_TRANSFORMATION_MORPHOLOGIES", "transformation morphologies provenance mismatch");
       }
@@ -2768,8 +2756,8 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
             pkg.sheet.atlas.image.width,
             pkg.sheet.atlas.image.height);
         auto computed = compute_domain_id_impl(kDomainSpriteAtlas, preimage);
-        auto stored_meta = art_prov("sheet/atlas.json");
-        auto stored_png = art_prov("sheet/atlas.png");
+        auto stored_meta = prov("sheet/atlas.json");
+        auto stored_png = prov("sheet/atlas.png");
         if (!stored_meta.empty() && computed != stored_meta)
           add("LV_PROV_ATLAS", "atlas metadata provenance mismatch");
         if (!stored_png.empty() && computed != stored_png)

@@ -169,6 +169,18 @@ int main() try {
     }
   }
 
+  // ── Diagnostic helper ──
+  auto has_diagnostic = [](auto const& result, std::string_view code) -> bool {
+    for (auto const& d : result.validation.diagnostics)
+      if (d.code == code) return true;
+    return false;
+  };
+  auto has_read_diagnostic = [](auto const& result, std::string_view code) -> bool {
+    for (auto const& d : result.diagnostics.diagnostics)
+      if (d.code == code) return true;
+    return false;
+  };
+
   // ── Mutation tests ──
   {
     // M1: corrupt a frame PNG byte
@@ -273,6 +285,66 @@ int main() try {
       fs::remove_all(mut_dir);
     }
   }
+
+  // ── Provenance validation: all 13 checks pass on valid package ──
+  {
+    std::cout << "\n--- Provenance Validation Tests ---\n";
+    auto verify = gspl::sprites::verify_living_visual_package(pkg_dir);
+    check(verify.ok(), "prov: verify ok");
+    check(!has_diagnostic(verify, "LV_PROV_CANONICAL_ENTITY"), "prov: canonical entity ok");
+    check(!has_diagnostic(verify, "LV_PROV_FRAME_SET"), "prov: frame set ok");
+    check(!has_diagnostic(verify, "LV_PROV_FRAME_HASHES"), "prov: frame hashes ok");
+    check(!has_diagnostic(verify, "LV_PROV_SAMPLE_TABLE"), "prov: sample table ok");
+    check(!has_diagnostic(verify, "LV_PROV_EVENT_SCHEDULE"), "prov: event schedule ok");
+    check(!has_diagnostic(verify, "LV_PROV_POSE_TABLE"), "prov: pose table ok");
+    check(!has_diagnostic(verify, "LV_PROV_GENERATED_CLIPS"), "prov: generated clips ok");
+    check(!has_diagnostic(verify, "LV_PROV_COLLISIONS"), "prov: collisions ok");
+    check(!has_diagnostic(verify, "LV_PROV_CHANNEL_SET"), "prov: channel set ok");
+    check(!has_diagnostic(verify, "LV_PROV_BASE_MORPHOLOGY"), "prov: base morphology ok");
+    check(!has_diagnostic(verify, "LV_PROV_STORM_MORPHOLOGY"), "prov: storm morphology ok");
+    check(!has_diagnostic(verify, "LV_PROV_TRANSFORMATION_MORPHOLOGIES"), "prov: trans morphs ok");
+    check(!has_diagnostic(verify, "LV_PROV_ATLAS"), "prov: atlas ok");
+  }
+
+  // ── M11: corrupt collision bone (self-consistent mutation test) ──
+  {
+    auto mut_dir = pkg_dir; mut_dir += "_m11"; fs::remove_all(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
+    auto col_bytes = read_file_bytes(mut_dir/"collisions-2d.json", 4ULL*1024*1024);
+    std::string col(col_bytes.begin(), col_bytes.end());
+    auto pos = col.find("\"bone_id\":\"");
+    if (pos != std::string::npos) col.replace(pos + 11, 4, "XXXX");
+    std::ofstream(mut_dir/"collisions-2d.json", std::ios::trunc | std::ios::binary).write(col.data(), col.size());
+    check(!gspl::sprites::verify_living_visual_package(mut_dir).ok(), "M11: corrupt collision bone fails");
+    fs::remove_all(mut_dir);
+  }
+
+  // ── M12: extra frame-hash record ──
+  {
+    auto mut_dir = pkg_dir; mut_dir += "_m12"; fs::remove_all(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
+    auto fh_bytes = read_file_bytes(mut_dir/"frame-hashes.json", 4ULL*1024*1024);
+    std::string fh(fh_bytes.begin(), fh_bytes.end());
+    auto pos = fh.rfind("{\"frame_id\"");
+    if (pos != std::string::npos) {
+      auto end = fh.find("}", pos) + 1;
+      fh.insert(end, ",{\"frame_id\":\"EXTRA\",\"frame_hash\":\"" + std::string(64, '0') + "\"}");
+    }
+    std::ofstream(mut_dir/"frame-hashes.json", std::ios::trunc | std::ios::binary).write(fh.data(), fh.size());
+    check(!gspl::sprites::verify_living_visual_package(mut_dir).ok(), "M12: extra frame-hash record fails");
+    fs::remove_all(mut_dir);
+  }
+
+  // ── M13: change pose record frame_id ──
+  {
+    auto mut_dir = pkg_dir; mut_dir += "_m13"; fs::remove_all(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
+    auto ph_bytes = read_file_bytes(mut_dir/"pose-hashes.json", 4ULL*1024*1024);
+    std::string ph(ph_bytes.begin(), ph_bytes.end());
+    auto pos = ph.find("\"frame_id\":\"");
+    if (pos != std::string::npos) ph.replace(pos + 12, 4, "YYYY");
+    std::ofstream(mut_dir/"pose-hashes.json", std::ios::trunc | std::ios::binary).write(ph.data(), ph.size());
+    check(!gspl::sprites::verify_living_visual_package(mut_dir).ok(), "M13: wrong pose frame_id fails");
+    fs::remove_all(mut_dir);
+  }
+
 
   fs::remove_all(pkg_dir);
 
