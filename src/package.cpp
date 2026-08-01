@@ -2958,6 +2958,18 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
         if (fit != pkg.frame_hash_records.end() && fit->frame_hash != s.frame_hash)
           add("LV_FH_SAMPLE_MISMATCH", "sample frame_hash != frame-hash record: " + s.frame_id);
       }
+      // Complete frame identity chain: frame-image manifest provenance == decoded frame hash
+      for (auto const& f : pkg.frames) {
+        // Find the frame-image artifact for this frame
+        for (auto const& art : pkg.manifest.artifacts) {
+          if (art.kind == LivingArtifactKind::frame_image &&
+              art.path == "frames/" + encode_pc(f.id) + ".png") {
+            if (art.provenance_identity != f.frame_hash)
+              add("LV_FH_IMAGE_PROVENANCE", "frame-image provenance != frame hash: " + f.id);
+            break;
+          }
+        }
+      }
     }
 
     // ── Pose exact-set equality ──
@@ -2991,6 +3003,21 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
         if (pr.pose_hash != sample_it->pose_hash)
           add("LV_POSE_HASH", "pose hash mismatch: " + pr.clip_id);
       }
+
+    // Validate retained sample temporal ordering per clip (nondecreasing source ticks by frame index)
+    for (auto const& c : pkg.generated_clips) {
+      std::vector<const GeneratedFrameSample*> clip_samples;
+      for (auto const& s : pkg.samples)
+        if (s.clip_id == c.id) clip_samples.push_back(&s);
+      std::sort(clip_samples.begin(), clip_samples.end(),
+        [](auto a, auto b) { return a->frame_index < b->frame_index; });
+      std::uint32_t prev_tick = 0;
+      for (std::size_t i = 0; i < clip_samples.size(); ++i) {
+        if (i > 0 && clip_samples[i]->source_tick < prev_tick)
+          add("LV_SAMPLE_TICK_ORDER", "sample source ticks not nondecreasing: " + c.id);
+        prev_tick = clip_samples[i]->source_tick;
+      }
+    }
     }
 
     // ── Event exact-set: require exactly the 4 governed events (exact entity-derived IDs) ──
