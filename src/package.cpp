@@ -1,4 +1,5 @@
 #include "gspl_sprites/package.hpp"
+#include "gspl_sprites/animation_sampling.hpp"
 
 #include "gspl/json.hpp"
 #include "gspl_sprites/core.hpp"
@@ -1644,6 +1645,17 @@ void build_living_visual_package(const LivingVisualPackageInput& input, const st
         throw std::runtime_error("builder: event mapped_source_tick != sample source_tick: " + e.event_id);
       if (e.mapped_source_tick < e.authored_tick)
         throw std::runtime_error("builder: event mapped_source_tick < authored_tick: " + e.event_id);
+      // Independent first-at-or-after proof via shared selector
+      {
+        auto expected = select_first_retained_sample_at_or_after(
+            input.samples, e.clip_id, e.authored_tick);
+        if (!expected)
+          throw std::runtime_error("builder: no retained sample at-or-after authored tick: " + e.event_id);
+        if (expected->get().frame_index != e.frame_index ||
+            expected->get().frame_id != e.frame_id ||
+            expected->get().source_tick != e.mapped_source_tick)
+          throw std::runtime_error("builder: event not first-at-or-after sample: " + e.event_id);
+      }
     }
     // Generated events — use synthesis's mapped_source_tick directly
     { std::ostringstream o; o << "{\"schema\":\"" << kSchemaGeneratedAnimationEvents << "\",\"events\":[";

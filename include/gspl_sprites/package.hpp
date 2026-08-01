@@ -270,14 +270,6 @@ struct LivingVisualPackageVerificationResult {
   [[nodiscard]] bool ok() const noexcept { return validation.ok(); }
 };
 
-/* ── Shared temporal authority: first retained sample at-or-after authored tick ── */
-[[nodiscard]] std::optional<std::reference_wrapper<const GeneratedFrameSample>>
-select_first_retained_sample_at_or_after(
-    std::span<const GeneratedFrameSample> samples,
-    std::string_view clip_id,
-    std::uint32_t authored_tick);
-
-/* ── Shared canonical source animation preimage ── */
 [[nodiscard]] std::string canonicalize_source_animation_set_preimage(
     std::span<const SkeletalClip> clips);
 
