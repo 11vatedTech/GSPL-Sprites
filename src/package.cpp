@@ -2865,6 +2865,8 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
           add("LV_CLIP_LOOP", "clip " + c.id + " looping flag mismatch");
         if (c.frame_ids.size() != c.frame_durations.size())
           add("LV_CLIP_DUR_MISMATCH", "clip " + c.id + " frame/duration vector mismatch");
+        for (auto const& d : c.frame_durations)
+          if (d == 0) add("LV_CLIP_ZERO_DURATION", "clip " + c.id + " has zero-duration frame");
         for (auto const& fid : c.frame_ids) {
           auto frame_it = std::find_if(pkg.frames.begin(), pkg.frames.end(),
             [&](auto const& f) { return f.id == fid; });
@@ -2920,6 +2922,20 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
         }
         if (s.frame_id != clip_it->frame_ids[s.frame_index])
           add("LV_SAMPLE_FRAME_ID", "sample frame_id mismatch: " + s.clip_id + "/" + std::to_string(s.frame_index));
+      }
+      // Validate sample source-tick ordering per clip
+      std::map<std::string, std::vector<const GeneratedFrameSample*>, std::less<>> samples_by_clip;
+      for (auto const& s : pkg.samples) samples_by_clip[s.clip_id].push_back(&s);
+      for (auto& [cid, vec] : samples_by_clip) {
+        std::ranges::sort(vec, {}, [](auto s) { return s->frame_index; });
+        std::uint32_t prev_tick = 0;
+        for (std::size_t i = 0; i < vec.size(); ++i) {
+          if (vec[i]->frame_index != static_cast<std::uint32_t>(i))
+            add("LV_SAMPLE_TICK_ORDER", "sample frame indices not 0..N-1 for clip " + cid);
+          if (i > 0 && vec[i]->source_tick < prev_tick)
+            add("LV_SAMPLE_TICK_ORDER", "sample source ticks not nondecreasing for clip " + cid);
+          prev_tick = vec[i]->source_tick;
+        }
       }
     }
 

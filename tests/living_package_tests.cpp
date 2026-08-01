@@ -451,7 +451,138 @@ int main() try {
       std::ofstream(md/"animation-events.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
       auto ml4 = m; refresh(ml4, md, "animation-events.json"); finalize(ml4, md);
       auto v = verify_living_visual_package(md);
-      check(!v.ok(), "SC10: event frame_id change detected");
+      check(!v.ok() && has_diag(v, "LV_EVENT_FRAME_ID"), "SC10: LV_EVENT_FRAME_ID");
+      fs::remove_all(md);
+    }
+    // SC1: extra frame-hash record → LV_FH_EXTRA
+    {
+      auto md = pkg_dir; md += "_sc1"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto fhb = read_file_bytes(md/"frame-hashes.json", 4ULL*1024*1024);
+      std::string s(fhb.begin(), fhb.end());
+      auto pos = s.rfind("{\"frame_id\"");
+      if (pos != std::string::npos) {
+        auto end = s.find("}", pos) + 1;
+        s.insert(end, ",{\"frame_id\":\"EXTRA\",\"frame_hash\":\"" + std::string(64, '0') + "\"}");
+      }
+      std::ofstream(md/"frame-hashes.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
+      auto ml = m; refresh(ml, md, "frame-hashes.json"); finalize(ml, md);
+      auto v = verify_living_visual_package(md);
+      check(!v.ok() && has_diag(v, "LV_FH_EXTRA"), "SC1: LV_FH_EXTRA");
+      fs::remove_all(md);
+    }
+    // SC2: missing frame-hash record → LV_FH_MISSING
+    {
+      auto md = pkg_dir; md += "_sc2"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto fhb = read_file_bytes(md/"frame-hashes.json", 4ULL*1024*1024);
+      std::string s(fhb.begin(), fhb.end());
+      auto pos = s.find("{\"frame_id\"");
+      if (pos != std::string::npos) {
+        auto end = s.find("}", pos) + 1;
+        if (s[end] == ',') ++end;
+        s.erase(pos, end - pos);
+      }
+      std::ofstream(md/"frame-hashes.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
+      auto ml = m; refresh(ml, md, "frame-hashes.json"); finalize(ml, md);
+      auto v = verify_living_visual_package(md);
+      check(!v.ok() && has_diag(v, "LV_FH_MISSING"), "SC2: LV_FH_MISSING");
+      fs::remove_all(md);
+    }
+    // SC4: extra pose record → LV_POSE_EXTRA
+    {
+      auto md = pkg_dir; md += "_sc4"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto phb = read_file_bytes(md/"pose-hashes.json", 4ULL*1024*1024);
+      std::string s(phb.begin(), phb.end());
+      auto pos = s.rfind("{\"clip_id\"");
+      if (pos != std::string::npos) {
+        auto end = s.find("}", pos) + 1;
+        s.insert(end, ",{\"clip_id\":\"EXTRA\",\"frame_index\":99,\"frame_id\":\"EXTRA\",\"pose_hash\":\"" + std::string(64, '0') + "\"}");
+      }
+      std::ofstream(md/"pose-hashes.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
+      auto ml = m; refresh(ml, md, "pose-hashes.json"); finalize(ml, md);
+      auto v = verify_living_visual_package(md);
+      check(!v.ok() && has_diag(v, "LV_POSE_EXTRA"), "SC4: LV_POSE_EXTRA");
+      fs::remove_all(md);
+    }
+    // SC5: missing pose record → LV_POSE_MISSING
+    {
+      auto md = pkg_dir; md += "_sc5"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto phb = read_file_bytes(md/"pose-hashes.json", 4ULL*1024*1024);
+      std::string s(phb.begin(), phb.end());
+      auto pos = s.find("{\"clip_id\"");
+      if (pos != std::string::npos) {
+        auto end = s.find("}", pos) + 1;
+        if (s[end] == ',') ++end;
+        s.erase(pos, end - pos);
+      }
+      std::ofstream(md/"pose-hashes.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
+      auto ml = m; refresh(ml, md, "pose-hashes.json"); finalize(ml, md);
+      auto v = verify_living_visual_package(md);
+      check(!v.ok() && has_diag(v, "LV_POSE_MISSING"), "SC5: LV_POSE_MISSING");
+      fs::remove_all(md);
+    }
+    // SC7: duplicate sample position → LV_SAMPLE_DUP
+    {
+      auto md = pkg_dir; md += "_sc7"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto fsb = read_file_bytes(md/"frame-samples.json", 512ULL*1024*1024);
+      std::string s(fsb.begin(), fsb.end());
+      auto pos = s.find("{\"clip_id\"");
+      if (pos != std::string::npos) {
+        auto end = s.find("}", pos) + 1;
+        auto dup = s.substr(pos, end - pos);
+        s.insert(end, "," + dup);
+      }
+      std::ofstream(md/"frame-samples.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
+      auto ml = m; refresh(ml, md, "frame-samples.json"); finalize(ml, md);
+      auto v = verify_living_visual_package(md);
+      check(!v.ok() && has_diag(v, "LV_SAMPLE_DUP"), "SC7: LV_SAMPLE_DUP");
+      fs::remove_all(md);
+    }
+    // SC9: event mapped_source_tick changed → LV_EVENT_NOT_FIRST_AT_OR_AFTER
+    {
+      auto md = pkg_dir; md += "_sc9"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto eb = read_file_bytes(md/"animation-events.json", 4ULL*1024*1024);
+      std::string s(eb.begin(), eb.end());
+      auto pos = s.find("\"mapped_source_tick\":");
+      if (pos != std::string::npos) {
+        auto end = s.find(",", pos);
+        s.replace(pos, end - pos, "\"mapped_source_tick\":999");
+      }
+      std::ofstream(md/"animation-events.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
+      auto ml = m; refresh(ml, md, "animation-events.json"); finalize(ml, md);
+      auto v = verify_living_visual_package(md);
+      check(!v.ok(), "SC9: mapped_source_tick change detected");
+      fs::remove_all(md);
+    }
+    // SC11: generated authored_tick changed → LV_EVENT_AUTHORED_TICK
+    {
+      auto md = pkg_dir; md += "_sc11"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto eb = read_file_bytes(md/"animation-events.json", 4ULL*1024*1024);
+      std::string s(eb.begin(), eb.end());
+      auto pos = s.find("\"authored_tick\":");
+      if (pos != std::string::npos) {
+        auto end = s.find(",", pos);
+        s.replace(pos, end - pos, "\"authored_tick\":999");
+      }
+      std::ofstream(md/"animation-events.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
+      auto ml = m; refresh(ml, md, "animation-events.json"); finalize(ml, md);
+      auto v = verify_living_visual_package(md);
+      check(!v.ok(), "SC11: authored_tick change detected");
+      fs::remove_all(md);
+    }
+    // SC12: source authored event tick changed → LV_EVENT_AUTHORED_TICK
+    {
+      auto md = pkg_dir; md += "_sc12"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto sb = read_file_bytes(md/"source-skeletal-animations.json", 4ULL*1024*1024);
+      std::string s(sb.begin(), sb.end());
+      auto pos = s.find("\"tick\":");
+      if (pos != std::string::npos) {
+        auto end = s.find_first_of(",}", pos);
+        s.replace(pos, end - pos, "\"tick\":999");
+      }
+      std::ofstream(md/"source-skeletal-animations.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
+      auto ml = m; refresh(ml, md, "source-skeletal-animations.json"); finalize(ml, md);
+      auto v = verify_living_visual_package(md);
+      check(!v.ok(), "SC12: source authored event tick change detected");
       fs::remove_all(md);
     }
     // SC-positive: valid package passes after manifest refresh
