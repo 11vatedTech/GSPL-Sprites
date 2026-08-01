@@ -273,7 +273,7 @@ ValidationResult validate_manifest_model(const LivingPackageManifest& m, const P
 
 /* ── Embedded schema extraction from JSON artifact ── */
 std::string extract_embedded_schema(std::string_view json_bytes, const PackageReadLimits& limits) {
-  gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting;
+  gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_tokens = limits.max_json_tokens;
   cfg.max_object_members = 64;
   cfg.max_input_bytes = json_bytes.size() + 1;
   cfg.max_nesting_depth = limits.max_json_nesting;
@@ -661,9 +661,9 @@ static bool lv_rd_bool(gspl::BoundedJsonReader& r, std::string_view path) {
 
 
 // Full SpriteSeed deserialization from canonical JSON using BoundedJsonReader
-static SpriteSeed lv_parse_seed_json(std::string_view json) {
+static SpriteSeed lv_parse_seed_json(std::string_view json, const PackageReadLimits& limits) {
   SpriteSeed s;
-  gspl::BoundedJsonConfig cfg{}; cfg.max_object_members = 8192; cfg.max_array_length = 8192;
+  gspl::BoundedJsonConfig cfg{}; cfg.max_object_members = 8192; cfg.max_array_length = 8192; cfg.max_tokens = limits.max_json_tokens;
   gspl::BoundedJsonReader r(json, cfg);
   if (!r.begin_object("seed")) return s;
   while (r.has_more() && !r.has_error()) {
@@ -1960,7 +1960,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     if (!check_embedded_schema("seed.json", seed_wrapper)) return result;
     std::string seed_json;
     {
-      gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_object_members = 512;
+      gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_tokens = limits.max_json_tokens; cfg.max_object_members = 512;
       gspl::BoundedJsonReader wr(seed_wrapper, cfg);
       if (wr.begin_object("seed-wrapper")) {
         while (wr.has_more() && !wr.has_error()) {
@@ -1976,7 +1976,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
       }
     }
     if (seed_json.empty()) { add("LV_READ_NO_DATA", "seed wrapper missing data field"); return result; }
-    pkg.seed = lv_parse_seed_json(seed_json);
+    pkg.seed = lv_parse_seed_json(seed_json, limits);
     if (pkg.seed.stable_id.empty()) pkg.seed.stable_id = pkg.entity_id;
     pkg.seed_identity = sha256(seed_json);
     if (pkg.manifest.seed_identity != pkg.seed_identity)
@@ -2167,7 +2167,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     {
       auto anim_bytes = inv_read("animations-2d.json", limits.max_artifact_bytes);
       if (!check_embedded_schema("animations-2d.json", anim_bytes)) return result;
-      gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_object_members = 2048; cfg.max_array_length = 2048;
+      gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_tokens = limits.max_json_tokens; cfg.max_object_members = 2048; cfg.max_array_length = 2048;
       gspl::BoundedJsonReader ar(anim_bytes, cfg);
       if (ar.begin_object("animations-2d")) {
         while (ar.has_more() && !ar.has_error()) {
@@ -2243,7 +2243,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
       {
         auto fs_bytes = inv_read("frame-samples.json", limits.max_artifact_bytes);
         if (!check_embedded_schema("frame-samples.json", fs_bytes)) return result;
-        gspl::BoundedJsonConfig cfg2{}; cfg2.max_nesting_depth = limits.max_json_nesting; cfg2.max_object_members = 512;
+        gspl::BoundedJsonConfig cfg2{}; cfg2.max_nesting_depth = limits.max_json_nesting; cfg2.max_object_members = 512; cfg2.max_tokens = limits.max_json_tokens;
         gspl::BoundedJsonReader fsr(fs_bytes, cfg2);
         if (fsr.begin_object("frame-samples")) {
           while (fsr.has_more() && !fsr.has_error()) {
@@ -2285,7 +2285,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
       {
         auto ev_bytes = inv_read("animation-events.json", limits.max_artifact_bytes);
         if (!check_embedded_schema("animation-events.json", ev_bytes)) return result;
-        gspl::BoundedJsonConfig cfg3{}; cfg3.max_nesting_depth = limits.max_json_nesting; cfg3.max_object_members = 512;
+        gspl::BoundedJsonConfig cfg3{}; cfg3.max_nesting_depth = limits.max_json_nesting; cfg3.max_object_members = 512; cfg3.max_tokens = limits.max_json_tokens;
         gspl::BoundedJsonReader evr(ev_bytes, cfg3);
         if (evr.begin_object("anim-events")) {
           while (evr.has_more() && !evr.has_error()) {
@@ -2328,7 +2328,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     {
       auto ch_bytes = inv_read("channels.json", limits.max_artifact_bytes);
       if (!check_embedded_schema("channels.json", ch_bytes)) return result;
-      gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_object_members = 512; cfg.max_array_length = 512;
+      gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_tokens = limits.max_json_tokens; cfg.max_object_members = 512; cfg.max_array_length = 512;
       gspl::BoundedJsonReader chr(ch_bytes, cfg);
       if (chr.begin_object("channels")) {
         while (chr.has_more() && !chr.has_error()) {
@@ -2381,7 +2381,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     {
       auto col_bytes = inv_read("collisions-2d.json", limits.max_artifact_bytes);
       if (!check_embedded_schema("collisions-2d.json", col_bytes)) return result;
-      gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_object_members = 512; cfg.max_array_length = 512;
+      gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_tokens = limits.max_json_tokens; cfg.max_object_members = 512; cfg.max_array_length = 512;
       gspl::BoundedJsonReader cr(col_bytes, cfg);
       if (cr.begin_object("collisions")) {
         while (cr.has_more() && !cr.has_error()) {
@@ -2447,7 +2447,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     auto lv_parse_morph_json = [&](std::string_view bytes) -> EffectiveMorphology {
       EffectiveMorphology m;
       if (bytes.empty()) return m;
-      gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_object_members = 512; cfg.max_array_length = 512;
+      gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_tokens = limits.max_json_tokens; cfg.max_object_members = 512; cfg.max_array_length = 512;
       gspl::BoundedJsonReader mr(bytes, cfg);
       if (mr.begin_object("morph")) {
         while (mr.has_more() && !mr.has_error()) {
@@ -2509,7 +2509,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     {
       auto tm_bytes = inv_read("transformation-morphologies.json", limits.max_artifact_bytes);
       if (!check_embedded_schema("transformation-morphologies.json", tm_bytes)) return result;
-      gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_object_members = 2048;
+      gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_tokens = limits.max_json_tokens; cfg.max_object_members = 2048;
       gspl::BoundedJsonReader tmr(tm_bytes, cfg);
       if (tmr.begin_object("trans-morphs")) {
         while (tmr.has_more() && !tmr.has_error()) {
@@ -2585,7 +2585,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
       auto aj_bytes = inv_read("sheet/atlas.json", limits.max_artifact_bytes);
       if (!check_embedded_schema("sheet/atlas.json", aj_bytes)) return result;
       // Extract data field from wrapper
-      gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_object_members = 512;
+      gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_tokens = limits.max_json_tokens; cfg.max_object_members = 512;
       gspl::BoundedJsonReader ajr(aj_bytes, cfg);
       if (ajr.begin_object("atlas-wrapper")) {
         while (ajr.has_more() && !ajr.has_error()) {
@@ -2604,7 +2604,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     {
       auto fh_bytes = inv_read("frame-hashes.json", limits.max_artifact_bytes);
       if (!check_embedded_schema("frame-hashes.json", fh_bytes)) return result;
-      gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_object_members = 2048; cfg.max_array_length = 4096;
+      gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_tokens = limits.max_json_tokens; cfg.max_object_members = 2048; cfg.max_array_length = 4096;
       gspl::BoundedJsonReader fhr(fh_bytes, cfg);
       if (fhr.begin_object("frame-hashes")) {
         std::map<std::string, std::string> fh_map;
@@ -2651,7 +2651,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     {
       auto ph_bytes = inv_read("pose-hashes.json", limits.max_artifact_bytes);
       if (!check_embedded_schema("pose-hashes.json", ph_bytes)) return result;
-      gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_object_members = 512; cfg.max_array_length = 512;
+      gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_tokens = limits.max_json_tokens; cfg.max_object_members = 512; cfg.max_array_length = 512;
       gspl::BoundedJsonReader phr(ph_bytes, cfg);
       if (phr.begin_object("pose-hashes")) {
         // Key: "clip_id|frame_index" → pose_hash
@@ -3368,7 +3368,7 @@ LivingPackageManifestParseResult parse_living_package_manifest(std::string_view 
     if (bytes.size() > limits.max_manifest_bytes)
       { add("LV_PARSE_OVERSIZE", "manifest exceeds byte limit"); return result; }
 
-    gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_object_members = 256;
+    gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_tokens = limits.max_json_tokens; cfg.max_object_members = 256;
     cfg.max_object_members = 256;
     cfg.max_array_length = limits.max_artifacts;
     cfg.max_nesting_depth = limits.max_json_nesting;

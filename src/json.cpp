@@ -104,6 +104,15 @@ void BoundedJsonReader::set_error(std::string msg) {
     }
 }
 
+void BoundedJsonReader::count_token() {
+    ++token_count_;
+    if (cfg_.max_tokens > 0 && token_count_ > cfg_.max_tokens) {
+        set_error("JSON token budget exhausted (" +
+                  std::to_string(cfg_.max_tokens) + " max, " +
+                  std::to_string(token_count_) + " consumed)");
+    }
+}
+
 void BoundedJsonReader::advance_pos() {
     if (pos_ >= src_.size()) return;
     if (src_[pos_] == '\n') {
@@ -252,6 +261,7 @@ bool BoundedJsonReader::next_object_member(std::string_view path) {
         return false;
     }
     advance_pos(); // consume comma
+    count_token();  // comma separator token
     if (frame) frame->expect_separator = false;
     skip_ws();
     if (has_error_) return false;
@@ -282,6 +292,7 @@ bool BoundedJsonReader::next_array_element(std::string_view path) {
         return false;
     }
     advance_pos(); // consume comma
+    count_token();  // comma separator token
     if (frame) frame->expect_separator = false;
     skip_ws();
     if (has_error_) return false;
@@ -381,6 +392,7 @@ bool BoundedJsonReader::require(char expected, std::string_view path) {
         return false;
     }
     advance_pos();
+    count_token();  // structural token: { } [ ] :
     return true;
 }
 
@@ -388,6 +400,7 @@ bool BoundedJsonReader::consume_if(char token) {
     skip_ws();
     if (has_error_ || pos_ >= src_.size() || src_[pos_] != token) return false;
     advance_pos();
+    count_token();
     return true;
 }
 
@@ -395,6 +408,7 @@ bool BoundedJsonReader::expect(char c) {
     skip_ws();
     if (has_error_ || pos_ >= src_.size() || src_[pos_] != c) return false;
     advance_pos();
+    count_token();
     return true;
 }
 
@@ -456,6 +470,7 @@ static void encode_utf8(unsigned cp, std::string& out) {
 std::string BoundedJsonReader::read_raw_string() {
     if (pos_ >= src_.size() || src_[pos_] != '"') return {};
     advance_pos(); // skip opening quote
+    count_token();  // string token
     std::string out;
     while (pos_ < src_.size() && !has_error_) {
         char c = src_[pos_];
@@ -657,6 +672,7 @@ JsonReadResult<std::int64_t> BoundedJsonReader::read_int64_result() {
                                      "integer overflow", {});
         return result;
     }
+    count_token();  // number token
     result.value = v;
     return result;
 }
@@ -701,6 +717,7 @@ JsonReadResult<std::uint64_t> BoundedJsonReader::read_uint64_result() {
                                      "unsigned integer overflow", {});
         return result;
     }
+    count_token();  // number token
     result.value = v;
     return result;
 }
@@ -786,6 +803,7 @@ JsonReadResult<double> BoundedJsonReader::read_double_result() {
                                      "number overflow or NaN", {});
         return result;
     }
+    count_token();  // number token
     result.value = v;
     return result;
 }
@@ -797,11 +815,13 @@ JsonReadResult<bool> BoundedJsonReader::read_bool_result() {
 
     if (pos_ + 4 <= src_.size() && src_.substr(pos_, 4) == "true") {
         for (int i = 0; i < 4; ++i) advance_pos();
+        count_token();  // boolean token
         result.value = true;
         return result;
     }
     if (pos_ + 5 <= src_.size() && src_.substr(pos_, 5) == "false") {
         for (int i = 0; i < 5; ++i) advance_pos();
+        count_token();  // boolean token
         result.value = false;
         return result;
     }
@@ -815,6 +835,7 @@ JsonReadResult<bool> BoundedJsonReader::read_null_result() {
     skip_ws();
     if (pos_ + 4 <= src_.size() && src_.substr(pos_, 4) == "null") {
         for (int i = 0; i < 4; ++i) advance_pos();
+        count_token();  // null token
         result.value = true;
         return result;
     }
@@ -838,6 +859,7 @@ void BoundedJsonReader::skip_value() {
     if (c == '{') {
         enter_object();
         advance_pos(); // skip '{'
+        count_token();  // {
         std::size_t member_count = 0;
         bool expect_comma = false;
         bool saw_closing = false;
@@ -847,6 +869,7 @@ void BoundedJsonReader::skip_value() {
             if (pos_ >= src_.size() || has_error_) break;
             if (src_[pos_] == '}') {
                 advance_pos();
+                count_token();  // }
                 leave_object();
                 saw_closing = true;
                 break;
@@ -854,6 +877,7 @@ void BoundedJsonReader::skip_value() {
             if (expect_comma) {
                 if (src_[pos_] == ',') {
                     advance_pos();
+                    count_token();  // ,
                     expect_comma = false;
                     continue;
                 } else {
@@ -865,7 +889,7 @@ void BoundedJsonReader::skip_value() {
                 set_error("expected string key in JSON object");
                 break;
             }
-            read_raw_string(); // key
+            read_raw_string(); // key (counted internally)
             if (has_error_) break;
             skip_ws();
             if (pos_ >= src_.size() || src_[pos_] != ':') {
@@ -873,6 +897,7 @@ void BoundedJsonReader::skip_value() {
                 break;
             }
             advance_pos(); // skip ':'
+            count_token();  // :
             ++member_count;
             if (member_count > cfg_.max_object_members) {
                 set_error("object member count (" + std::to_string(member_count) +
@@ -895,6 +920,7 @@ void BoundedJsonReader::skip_value() {
     if (c == '[') {
         enter_array();
         advance_pos(); // skip '['
+        count_token();  // [
         std::size_t elem_count = 0;
         bool expect_comma = false;
         bool saw_closing = false;
@@ -904,6 +930,7 @@ void BoundedJsonReader::skip_value() {
             if (pos_ >= src_.size() || has_error_) break;
             if (src_[pos_] == ']') {
                 advance_pos();
+                count_token();  // ]
                 leave_array();
                 saw_closing = true;
                 break;
@@ -911,6 +938,7 @@ void BoundedJsonReader::skip_value() {
             if (expect_comma) {
                 if (src_[pos_] == ',') {
                     advance_pos();
+                    count_token();  // ,
                     expect_comma = false;
                     continue;
                 } else {
@@ -939,15 +967,18 @@ void BoundedJsonReader::skip_value() {
 
     // Scalar: true, false, null, or number
     if (c == 't' || c == 'f') {
-        read_bool();
+        read_bool();  // counted internally
     } else if (c == 'n') {
-        read_null();
+        read_null();  // counted internally
     } else {
-        // number — consume until delimiter
+        // number — consume until delimiter (count as 1 token)
+        bool consumed = false;
         while (pos_ < src_.size() && src_[pos_] != ',' && src_[pos_] != '}' &&
                src_[pos_] != ']' && src_[pos_] != '\n' && src_[pos_] != '\r') {
             advance_pos();
+            consumed = true;
         }
+        if (consumed) count_token();
     }
 }
 
@@ -969,11 +1000,14 @@ std::string BoundedJsonReader::read_typed_value() {
     }
     // scalar: number, true, false, null
     std::string scalar;
+    bool consumed = false;
     while (pos_ < src_.size() && src_[pos_] != ',' && src_[pos_] != '}' &&
            src_[pos_] != ']' && src_[pos_] != '\n' && src_[pos_] != '\r') {
         scalar += src_[pos_];
         advance_pos();
+        consumed = true;
     }
+    if (consumed) count_token();
     return scalar;
 }
 

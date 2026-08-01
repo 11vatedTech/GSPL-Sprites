@@ -55,6 +55,7 @@ struct BoundedJsonConfig {
     std::size_t max_object_members{10'000};
     std::size_t max_array_length{100'000};
     std::size_t max_string_length{64 * 1024};
+    std::size_t max_tokens{0};  // 0 = unlimited
 };
 
 // Per-container tracking frame — nested-safe
@@ -114,6 +115,9 @@ public:
     bool has_error() const { return has_error_; }
     std::string const& error_message() const { return error_; }
 
+    // Token budget accounting
+    std::size_t token_count() const { return token_count_; }
+
     // Container entry (increments unified nesting depth)
     void enter_object();
     void leave_object();
@@ -146,9 +150,11 @@ private:
     BoundedJsonConfig cfg_;
     bool has_error_{false};
     std::string error_;
+    std::size_t token_count_{};
 
     ContainerFrame* current_frame() noexcept;
     void set_error(std::string msg);
+    void count_token();   // increments token_count_, checks cfg_.max_tokens
     std::string read_raw_string();
     void advance_pos();  // increments pos_, updates line_/col_
 };

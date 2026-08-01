@@ -124,6 +124,27 @@ int main() try {
       auto mA = read_file_bytes(dA / "manifest.json", 4ULL*1024*1024);
       auto mB = read_file_bytes(dB / "manifest.json", 4ULL*1024*1024);
       check(mA == mB, "det: identical manifest bytes");
+      check(vA.frame_count == vB.frame_count, "det: identical frame count");
+      check(vA.clip_count == vB.clip_count, "det: identical clip count");
+      check(vA.sample_count == vB.sample_count, "det: identical sample count");
+      // Recursive artifact comparison A→B and B→A
+      for (auto const& entry : fs::recursive_directory_iterator(dA)) {
+        if (!entry.is_regular_file()) continue;
+        auto rel = fs::relative(entry.path(), dA);
+        auto pathB = dB / rel;
+        check(fs::exists(pathB), ("det: file exists in B: " + rel.string()).c_str());
+        if (fs::exists(pathB)) {
+          auto bytesA = read_file_bytes(entry.path(), 512ULL*1024*1024);
+          auto bytesB = read_file_bytes(pathB, 512ULL*1024*1024);
+          check(bytesA.size() == bytesB.size(), ("det: same size: " + rel.string()).c_str());
+          check(bytesA == bytesB, ("det: identical bytes: " + rel.string()).c_str());
+        }
+      }
+      for (auto const& entry : fs::recursive_directory_iterator(dB)) {
+        if (!entry.is_regular_file()) continue;
+        auto rel = fs::relative(entry.path(), dB);
+        check(fs::exists(dA / rel), ("det: file exists in A: " + rel.string()).c_str());
+      }
       fs::remove_all(dA); fs::remove_all(dB);
     }
   }
@@ -442,7 +463,7 @@ int main() try {
       std::ofstream(md/"frame-samples.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
       auto ml2 = m; refresh(ml2, md, "frame-samples.json"); finalize(ml2, md);
       auto v = verify_living_visual_package(md);
-      check(!v.ok(), "SC6: sample removal detected");
+      check(!v.ok() && has_diag(v, "LV_SAMPLE_MISSING"), "SC6: LV_SAMPLE_MISSING");
       fs::remove_all(md);
     }
     // SC8: flip clip looping flag (semantic)
@@ -456,7 +477,7 @@ int main() try {
       std::ofstream(md/"animations-2d.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
       auto ml3 = m; refresh(ml3, md, "animations-2d.json"); finalize(ml3, md);
       auto v = verify_living_visual_package(md);
-      check(!v.ok(), "SC8: clip loop flag change detected");
+      check(!v.ok() && has_diag(v, "LV_CLIP_LOOP"), "SC8: LV_CLIP_LOOP");
       fs::remove_all(md);
     }
     // SC10: event frame_id changed (cross-reference)
