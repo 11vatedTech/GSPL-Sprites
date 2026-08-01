@@ -3090,6 +3090,29 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
       }
     }
 
+    // ── Event-to-source binding: generated authored ticks must match reconstructed source events ──
+    if (!pkg.source_skeletal_animations.empty()) {
+      std::map<std::string, std::map<std::string, std::uint32_t>> source_ev;
+      for (auto const& sc : pkg.source_skeletal_animations)
+        for (auto const& [en, et] : sc.events) source_ev[sc.id][en] = et;
+      auto resolve_source_clip = [&](std::string_view gcid) -> std::string {
+        if (gcid.ends_with(".base.attack")) return "base_attack";
+        if (gcid.ends_with(".storm.attack")) return "storm_attack";
+        if (gcid.ends_with(".transform")) return "transform_ascend";
+        return "";
+      };
+      for (auto const& e : pkg.events) {
+        auto scid = resolve_source_clip(e.clip_id);
+        if (scid.empty()) { add("LV_EVENT_SOURCE_CLIP", "no source clip for: " + e.clip_id); continue; }
+        auto it = source_ev.find(scid);
+        if (it == source_ev.end()) { add("LV_EVENT_SOURCE_CLIP", "source clip not found: " + scid); continue; }
+        auto eit = it->second.find(e.event_id);
+        if (eit == it->second.end()) { add("LV_EVENT_SOURCE_EVENT", "source event not found: " + e.event_id + " in " + scid); continue; }
+        if (e.authored_tick != eit->second)
+          add("LV_EVENT_AUTHORED_TICK", "authored_tick mismatch: " + e.event_id + " gen=" + std::to_string(e.authored_tick) + " src=" + std::to_string(eit->second));
+      }
+    }
+
     // ── Build artifact provenance lookup (O(1) map, not O(n) closure) ──
     std::map<std::string, std::string, std::less<>> art_prov;
     for (auto const& a : pkg.manifest.artifacts)
@@ -3157,6 +3180,14 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
       auto stored = prov("source-skeletal-animations.json");
       if (!stored.empty() && computed != stored)
         add("LV_PROV_SOURCE_ANIMATIONS", "source-animation provenance mismatch");
+    }
+
+    // Source ↔ seed semantic equality (independent artifact vs seed authority)
+    if (!pkg.source_skeletal_animations.empty()) {
+      auto seed_preimage = canonicalize_source_animation_set_preimage(pkg.seed.clips);
+      auto source_preimage = canonicalize_source_animation_set_preimage(pkg.source_skeletal_animations);
+      if (seed_preimage != source_preimage)
+        add("LV_SOURCE_SEED_MISMATCH", "seed.clips != source-skeletal-animations.json semantic identity");
     }
 
     // Generated-clip-set identity
