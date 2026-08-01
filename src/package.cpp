@@ -273,7 +273,7 @@ ValidationResult validate_manifest_model(const LivingPackageManifest& m, const P
 
 /* ── Embedded schema extraction from JSON artifact ── */
 std::string extract_embedded_schema(std::string_view json_bytes, const PackageReadLimits& limits) {
-  gspl::BoundedJsonConfig cfg{};
+  gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting;
   cfg.max_object_members = 64;
   cfg.max_input_bytes = json_bytes.size() + 1;
   cfg.max_nesting_depth = limits.max_json_nesting;
@@ -1960,7 +1960,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     if (!check_embedded_schema("seed.json", seed_wrapper)) return result;
     std::string seed_json;
     {
-      gspl::BoundedJsonConfig cfg{};
+      gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_object_members = 512;
       gspl::BoundedJsonReader wr(seed_wrapper, cfg);
       if (wr.begin_object("seed-wrapper")) {
         while (wr.has_more() && !wr.has_error()) {
@@ -2243,7 +2243,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
       {
         auto fs_bytes = inv_read("frame-samples.json", limits.max_artifact_bytes);
         if (!check_embedded_schema("frame-samples.json", fs_bytes)) return result;
-        gspl::BoundedJsonConfig cfg2{};
+        gspl::BoundedJsonConfig cfg2{}; cfg2.max_nesting_depth = limits.max_json_nesting; cfg2.max_object_members = 512;
         gspl::BoundedJsonReader fsr(fs_bytes, cfg2);
         if (fsr.begin_object("frame-samples")) {
           while (fsr.has_more() && !fsr.has_error()) {
@@ -2285,7 +2285,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
       {
         auto ev_bytes = inv_read("animation-events.json", limits.max_artifact_bytes);
         if (!check_embedded_schema("animation-events.json", ev_bytes)) return result;
-        gspl::BoundedJsonConfig cfg3{};
+        gspl::BoundedJsonConfig cfg3{}; cfg3.max_nesting_depth = limits.max_json_nesting; cfg3.max_object_members = 512;
         gspl::BoundedJsonReader evr(ev_bytes, cfg3);
         if (evr.begin_object("anim-events")) {
           while (evr.has_more() && !evr.has_error()) {
@@ -3368,7 +3368,7 @@ LivingPackageManifestParseResult parse_living_package_manifest(std::string_view 
     if (bytes.size() > limits.max_manifest_bytes)
       { add("LV_PARSE_OVERSIZE", "manifest exceeds byte limit"); return result; }
 
-    gspl::BoundedJsonConfig cfg{};
+    gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_object_members = 256;
     cfg.max_object_members = 256;
     cfg.max_array_length = limits.max_artifacts;
     cfg.max_nesting_depth = limits.max_json_nesting;
