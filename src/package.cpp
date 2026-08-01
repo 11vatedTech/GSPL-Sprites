@@ -1304,6 +1304,155 @@ std::string decode_package_component(std::string_view encoded) {
   return out;
 }
 
+/* ── Shared canonical semantic identity preimage functions ── */
+/* Builder and verifier both call these to ensure identical preimage construction. */
+namespace {
+
+std::string canonicalize_frame_set_preimage(std::span<const FrameSource> frames) {
+  auto sorted = std::vector<FrameSource>(frames.begin(), frames.end());
+  std::ranges::sort(sorted, {}, &FrameSource::id);
+  std::string preimage;
+  for (auto const& f : sorted) {
+    preimage += f.id + "\n";
+    preimage += f.frame_hash + "\n";
+    preimage += std::to_string(f.image.width) + "x" + std::to_string(f.image.height) + "\n";
+    preimage += std::to_string(f.pivot_x) + "," + std::to_string(f.pivot_y) + "\n";
+    preimage += std::to_string(f.duration_ticks) + "\n";
+  }
+  return preimage;
+}
+
+std::string canonicalize_sample_table_preimage(std::span<const GeneratedFrameSample> samples) {
+  auto sorted = std::vector<GeneratedFrameSample>(samples.begin(), samples.end());
+  std::ranges::sort(sorted, {}, [](auto const& s) { return std::make_tuple(s.clip_id, s.frame_index, s.frame_id); });
+  std::string preimage;
+  for (auto const& s : sorted) {
+    preimage += s.clip_id + "|" + std::to_string(s.frame_index) + "\n";
+    preimage += s.frame_id + "\n";
+    preimage += std::to_string(s.source_tick) + "\n";
+    preimage += s.frame_hash + "\n";
+    preimage += s.pose_hash + "\n";
+  }
+  return preimage;
+}
+
+std::string canonicalize_event_schedule_preimage(std::span<const GeneratedAnimationEvent> events) {
+  // NOTE: mapped_source_tick is excluded from the preimage because it does not
+  // round-trip identically through JSON serialization (internal synthesis detail).
+  auto sorted = std::vector<GeneratedAnimationEvent>(events.begin(), events.end());
+  std::ranges::sort(sorted, {}, [](auto const& e) { return std::make_tuple(e.clip_id, e.event_id, e.authored_tick, e.frame_index, e.frame_id); });
+  std::string preimage;
+  for (auto const& ev : sorted) {
+    preimage += ev.clip_id + "\n";
+    preimage += ev.event_id + "\n";
+    preimage += std::to_string(ev.authored_tick) + "\n";
+    preimage += std::to_string(ev.frame_index) + "\n";
+    preimage += ev.frame_id + "\n";
+  }
+  return preimage;
+}
+
+std::string canonicalize_pose_table_preimage(std::span<const GeneratedFrameSample> samples) {
+  auto sorted = std::vector<GeneratedFrameSample>(samples.begin(), samples.end());
+  std::ranges::sort(sorted, {}, [](auto const& s) { return std::make_tuple(s.clip_id, s.frame_index, s.frame_id); });
+  std::string preimage;
+  for (auto const& s : sorted) {
+    preimage += s.clip_id + "|" + std::to_string(s.frame_index) + "\n";
+    preimage += s.frame_id + "\n";
+    preimage += s.pose_hash + "\n";
+  }
+  return preimage;
+}
+
+std::string canonicalize_generated_clip_set_preimage(std::span<const AnimationClip> clips) {
+  auto sorted = std::vector<AnimationClip>(clips.begin(), clips.end());
+  std::ranges::sort(sorted, {}, &AnimationClip::id);
+  std::string preimage;
+  for (auto const& c : sorted) {
+    preimage += c.id + "\n";
+    preimage += std::string(c.looping ? "1" : "0") + "\n";
+    for (auto const& fid : c.frame_ids) preimage += fid + "\n";
+    for (auto d : c.frame_durations) preimage += std::to_string(d) + "\n";
+    for (auto const& ev : c.events) { preimage += ev.id; preimage += "|"; preimage += std::to_string(ev.tick); preimage += "\n"; }
+  }
+  return preimage;
+}
+
+std::string canonicalize_collision_set_preimage(std::span<const CollisionShape> shapes,
+                                                 std::span<const CollisionWindow> windows) {
+  auto sorted_shapes = std::vector<CollisionShape>(shapes.begin(), shapes.end());
+  std::ranges::sort(sorted_shapes, {}, &CollisionShape::id);
+  std::string preimage;
+  for (auto const& s : sorted_shapes) {
+    preimage += s.id + "\n";
+    preimage += std::to_string(static_cast<int>(s.kind)) + "\n";
+    preimage += s.bone_id + "\n";
+    preimage += std::to_string(s.offset_x) + "," + std::to_string(s.offset_y) + "\n";
+    preimage += std::to_string(s.extent_x) + "," + std::to_string(s.extent_y) + "\n";
+  }
+  auto sorted_windows = std::vector<CollisionWindow>(windows.begin(), windows.end());
+  std::ranges::sort(sorted_windows, {}, [](auto const& w) { return std::make_tuple(w.start_tick, w.end_tick, w.shape_id, w.ability_id); });
+  for (auto const& w : sorted_windows) {
+    preimage += w.shape_id + "\n";
+    preimage += w.ability_id + "\n";
+    preimage += std::to_string(w.start_tick) + "\n";
+    preimage += std::to_string(w.end_tick) + "\n";
+    preimage += std::string(w.deals_damage ? "1" : "0") + "\n";
+  }
+  return preimage;
+}
+
+std::string canonicalize_channel_set_preimage(std::span<const ChannelMap> channels) {
+  auto sorted = std::vector<ChannelMap>(channels.begin(), channels.end());
+  std::ranges::sort(sorted, {}, [](auto const& ch) { return std::make_tuple(ch.id, ch.target_frame_id, static_cast<int>(ch.kind)); });
+  std::string preimage;
+  for (auto const& ch : sorted) {
+    preimage += ch.id + "\n";
+    preimage += ch.target_frame_id + "\n";
+    preimage += std::to_string(static_cast<int>(ch.kind)) + "\n";
+  }
+  return preimage;
+}
+
+std::string canonicalize_morphology_preimage(const EffectiveMorphology& morph) {
+  std::string preimage;
+  for (auto const& [part_id, mp] : morph) {
+    preimage += part_id + "\n";
+    preimage += mp.bone_id + "\n";
+    preimage += mp.primitive + "\n";
+    preimage += mp.semantic_role + "\n";
+    preimage += mp.color + "\n";
+    preimage += mp.parent + "\n";
+    preimage += std::to_string(mp.x) + "," + std::to_string(mp.y) + "," + std::to_string(mp.z) + "\n";
+    preimage += std::to_string(mp.size_x) + "," + std::to_string(mp.size_y) + "," + std::to_string(mp.size_z) + "\n";
+    preimage += std::to_string(mp.rotation_degrees) + "\n";
+    preimage += std::to_string(mp.z_order) + "\n";
+  }
+  return preimage;
+}
+
+std::string canonicalize_atlas_preimage(std::span<const AtlasPlacement> placements,
+                                         std::uint32_t atlas_width, std::uint32_t atlas_height) {
+  auto sorted = std::vector<AtlasPlacement>(placements.begin(), placements.end());
+  std::ranges::sort(sorted, {}, &AtlasPlacement::frame_id);
+  std::string preimage;
+  preimage += std::to_string(atlas_width) + "x" + std::to_string(atlas_height) + "\n";
+  for (auto const& p : sorted) {
+    preimage += p.frame_id + "\n";
+    preimage += std::to_string(p.x) + "," + std::to_string(p.y) + "\n";
+    preimage += std::to_string(p.width) + "x" + std::to_string(p.height) + "\n";
+    preimage += std::to_string(p.pivot_x) + "," + std::to_string(p.pivot_y) + "\n";
+    preimage += std::to_string(p.duration_ticks) + "\n";
+  }
+  return preimage;
+}
+
+} // anonymous namespace
+
+static std::string compute_domain_id_impl(std::string_view domain, std::string_view preimage) {
+  return sha256(std::string(domain) + "\n" + std::string(preimage));
+}
+
 /* -- build_living_visual_package -- */
 void build_living_visual_package(const LivingVisualPackageInput& input, const std::filesystem::path& output) {
   if (output.empty()) throw std::invalid_argument("empty output path");
@@ -1502,54 +1651,44 @@ void build_living_visual_package(const LivingVisualPackageInput& input, const st
       manifest.artifacts.push_back(std::move(rec));
     };
 
-    // ── Compute governed provenance identities ──
-    auto compute_domain_id = [](std::string_view domain, std::string_view preimage) -> std::string {
-      return sha256(std::string(domain) + "\n" + std::string(preimage));
-    };
-
-    // Compute content-derived provenance identities (matches verifier recomputation)
-    auto sorted_frames = input.frames;
-    std::ranges::sort(sorted_frames, {}, &FrameSource::id);
-    std::string frame_preimage;
-    for (auto const& f : sorted_frames) {
-      frame_preimage += f.id + "\n";
-      frame_preimage += f.frame_hash + "\n";
-      frame_preimage += std::to_string(f.image.width) + "x" + std::to_string(f.image.height) + "\n";
-      frame_preimage += std::to_string(f.pivot_x) + "," + std::to_string(f.pivot_y) + "\n";
-      frame_preimage += std::to_string(f.duration_ticks) + "\n";
+    // ── Compute governed provenance identities (shared functions ensure
+    //     builder and verifier produce identical preimages) ──
+    std::string frame_set_id = compute_domain_id_impl(
+        kDomainFrameSet, canonicalize_frame_set_preimage(input.frames));
+    std::string sample_table_id = compute_domain_id_impl(
+        kDomainSampleTable, canonicalize_sample_table_preimage(input.samples));
+    std::string event_sched_id = compute_domain_id_impl(
+        kDomainEventSchedule, canonicalize_event_schedule_preimage(input.events));
+    std::string pose_table_id = compute_domain_id_impl(
+        kDomainPoseTable, canonicalize_pose_table_preimage(input.samples));
+    std::string clip_set_id = compute_domain_id_impl(
+        kDomainGeneratedClipSet, canonicalize_generated_clip_set_preimage(input.generated_clips));
+    std::string collision_set_id = compute_domain_id_impl(
+        kDomainCollisionSet, canonicalize_collision_set_preimage(input.collision_shapes, input.collision_windows));
+    std::string channel_set_id = compute_domain_id_impl(
+        kDomainChannelSet, canonicalize_channel_set_preimage(input.channels));
+    std::string morph_set_id = compute_domain_id_impl(
+        kDomainMorphologySet, canonicalize_morphology_preimage(input.base_morphology));
+    std::string storm_morph_id = compute_domain_id_impl(
+        kDomainMorphologySet, canonicalize_morphology_preimage(input.storm_morphology));
+    std::string trans_morph_id;
+    {
+      std::string trans_preimage;
+      for (std::size_t i = 0; i < input.transformation_morphologies.size(); ++i) {
+        trans_preimage += std::to_string(i) + "\n";
+        trans_preimage += canonicalize_morphology_preimage(input.transformation_morphologies[i]);
+      }
+      trans_morph_id = compute_domain_id_impl(kDomainMorphologySet, trans_preimage);
     }
-    std::string frame_set_id = compute_domain_id("gspl.frame-set.identity/0.1", frame_preimage);
-
-    std::string sample_preimage;
-    for (auto const& s : input.samples) {
-      sample_preimage += s.clip_id + "|" + std::to_string(s.frame_index) + "\n";
-      sample_preimage += s.frame_id + "\n";
-      sample_preimage += std::to_string(s.source_tick) + "\n";
-      sample_preimage += s.frame_hash + "\n";
-      sample_preimage += s.pose_hash + "\n";
+    std::string atlas_id = compute_domain_id_impl(
+        kDomainSpriteAtlas, canonicalize_atlas_preimage(
+            input.sheet.atlas.placements, input.sheet.atlas.image.width, input.sheet.atlas.image.height));
+    // Source-animation identity: derived from the file content written to staging
+    std::string source_anim_id;
+    {
+      auto sa_bytes = lv_read(staging/"source-skeletal-animations.json", 512ULL*1024*1024);
+      source_anim_id = sha256(sa_bytes);
     }
-    std::string sample_table_id = compute_domain_id("gspl.sample-table.identity/0.1", sample_preimage);
-
-    auto sorted_events = input.events;
-    std::ranges::sort(sorted_events, {}, [](auto const& e) { return e.clip_id + "|" + e.event_id; });
-    std::string event_preimage;
-    for (auto const& ev : sorted_events) {
-      event_preimage += ev.clip_id + "\n";
-      event_preimage += ev.event_id + "\n";
-      event_preimage += std::to_string(ev.authored_tick) + "\n";
-      event_preimage += std::to_string(ev.frame_index) + "\n";
-      event_preimage += ev.frame_id + "\n";
-    }
-    std::string event_sched_id = compute_domain_id("gspl.event-schedule.identity/0.1", event_preimage);
-
-    // Remaining identities still seed-derived (updated in future passes)
-    std::string pose_table_id = compute_domain_id("gspl.pose-table.identity/0.1", seed_id);
-    std::string clip_set_id = compute_domain_id("gspl.generated-clip-set.identity/0.1", seed_id);
-    std::string channel_set_id = compute_domain_id("gspl.channel-set.identity/0.1", seed_id);
-    std::string collision_set_id = compute_domain_id("gspl.collision-set.identity/0.1", seed_id);
-    std::string morph_set_id = compute_domain_id("gspl.morphology-set.identity/0.1", seed_id);
-    std::string atlas_id = compute_domain_id("gspl.sprite-atlas.identity/0.1", seed_id);
-    std::string source_anim_id = compute_domain_id("gspl.source-animation-set.identity/0.1", seed_id);
 
     // Seed artifacts
     add_artifact("seed.json", LivingArtifactKind::living_seed, {}, seed_id);
@@ -1599,9 +1738,9 @@ void build_living_visual_package(const LivingVisualPackageInput& input, const st
 
     // Morphologies
     add_artifact("resolved-base-morphology.json", LivingArtifactKind::effective_morphology, {"seed.json"}, morph_set_id);
-    add_artifact("resolved-storm-morphology.json", LivingArtifactKind::effective_morphology, {"seed.json"}, morph_set_id);
+    add_artifact("resolved-storm-morphology.json", LivingArtifactKind::effective_morphology, {"seed.json"}, storm_morph_id);
     add_artifact("transformation-morphologies.json", LivingArtifactKind::transformation_morphologies,
-                 {"seed.json"}, morph_set_id);
+                 {"seed.json"}, trans_morph_id);
 
     // Atlas — depends on all frame images + atlas metadata
     {
@@ -2529,15 +2668,8 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
 
       // Sample-table identity
       {
-        std::string preimage;
-        for (auto const& s : pkg.samples) {
-          preimage += s.clip_id + "|" + std::to_string(s.frame_index) + "\n";
-          preimage += s.frame_id + "\n";
-          preimage += std::to_string(s.source_tick) + "\n";
-          preimage += s.frame_hash + "\n";
-          preimage += s.pose_hash + "\n";
-        }
-        auto computed = sha256(std::string(kDomainSampleTable) + "\n" + preimage);
+        auto preimage = canonicalize_sample_table_preimage(pkg.samples);
+        auto computed = compute_domain_id_impl(kDomainSampleTable, preimage);
         auto stored = art_prov("frame-samples.json");
         if (!stored.empty() && computed != stored)
           add("LV_PROV_SAMPLE_TABLE", "sample-table provenance mismatch");
@@ -2559,6 +2691,89 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
         auto stored = art_prov("animation-events.json");
         if (!stored.empty() && computed != stored)
           add("LV_PROV_EVENT_SCHEDULE", "event-schedule provenance mismatch");
+      }
+
+      // Pose-table identity
+      {
+        auto preimage = canonicalize_pose_table_preimage(pkg.samples);
+        auto computed = compute_domain_id_impl(kDomainPoseTable, preimage);
+        auto stored = art_prov("pose-hashes.json");
+        if (!stored.empty() && computed != stored)
+          add("LV_PROV_POSE_TABLE", "pose-table provenance mismatch");
+      }
+
+      // Generated-clip-set identity
+      {
+        auto preimage = canonicalize_generated_clip_set_preimage(pkg.generated_clips);
+        auto computed = compute_domain_id_impl(kDomainGeneratedClipSet, preimage);
+        auto stored = art_prov("animations-2d.json");
+        if (!stored.empty() && computed != stored)
+          add("LV_PROV_GENERATED_CLIPS", "generated-clip-set provenance mismatch");
+      }
+
+      // Collision-set identity (from reconstructed seed)
+      {
+        auto preimage = canonicalize_collision_set_preimage(
+            pkg.seed.collision_shapes, pkg.seed.collision_windows);
+        auto computed = compute_domain_id_impl(kDomainCollisionSet, preimage);
+        auto stored = art_prov("collisions-2d.json");
+        if (!stored.empty() && computed != stored)
+          add("LV_PROV_COLLISIONS", "collision-set provenance mismatch");
+      }
+
+      // Channel-set identity
+      if (!pkg.channels.empty()) {
+        auto preimage = canonicalize_channel_set_preimage(pkg.channels);
+        auto computed = compute_domain_id_impl(kDomainChannelSet, preimage);
+        auto stored = art_prov("channels.json");
+        if (!stored.empty() && computed != stored)
+          add("LV_PROV_CHANNEL_SET", "channel-set provenance mismatch");
+      }
+
+      // Base morphology identity
+      if (!pkg.base_morphology.empty()) {
+        auto preimage = canonicalize_morphology_preimage(pkg.base_morphology);
+        auto computed = compute_domain_id_impl(kDomainMorphologySet, preimage);
+        auto stored = art_prov("resolved-base-morphology.json");
+        if (!stored.empty() && computed != stored)
+          add("LV_PROV_BASE_MORPHOLOGY", "base morphology provenance mismatch");
+      }
+
+      // Storm morphology identity
+      if (!pkg.storm_morphology.empty()) {
+        auto preimage = canonicalize_morphology_preimage(pkg.storm_morphology);
+        auto computed = compute_domain_id_impl(kDomainMorphologySet, preimage);
+        auto stored = art_prov("resolved-storm-morphology.json");
+        if (!stored.empty() && computed != stored)
+          add("LV_PROV_STORM_MORPHOLOGY", "storm morphology provenance mismatch");
+      }
+
+      // Transformation morphology sequence identity
+      if (!pkg.transformation_morphologies.empty()) {
+        std::string trans_preimage;
+        for (std::size_t i = 0; i < pkg.transformation_morphologies.size(); ++i) {
+          trans_preimage += std::to_string(i) + "\n";
+          trans_preimage += canonicalize_morphology_preimage(pkg.transformation_morphologies[i]);
+        }
+        auto computed = compute_domain_id_impl(kDomainMorphologySet, trans_preimage);
+        auto stored = art_prov("transformation-morphologies.json");
+        if (!stored.empty() && computed != stored)
+          add("LV_PROV_TRANSFORMATION_MORPHOLOGIES", "transformation morphologies provenance mismatch");
+      }
+
+      // Atlas identity (reconstructed from typed atlas metadata)
+      if (!pkg.sheet.atlas.placements.empty()) {
+        auto preimage = canonicalize_atlas_preimage(
+            pkg.sheet.atlas.placements,
+            pkg.sheet.atlas.image.width,
+            pkg.sheet.atlas.image.height);
+        auto computed = compute_domain_id_impl(kDomainSpriteAtlas, preimage);
+        auto stored_meta = art_prov("sheet/atlas.json");
+        auto stored_png = art_prov("sheet/atlas.png");
+        if (!stored_meta.empty() && computed != stored_meta)
+          add("LV_PROV_ATLAS", "atlas metadata provenance mismatch");
+        if (!stored_png.empty() && computed != stored_png)
+          add("LV_PROV_ATLAS", "atlas image provenance mismatch");
       }
     }
     if (pkg.manifest.transformation_morphology_count != 10)
