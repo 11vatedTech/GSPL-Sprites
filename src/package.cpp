@@ -1464,33 +1464,56 @@ std::string canonicalize_atlas_preimage(std::span<const AtlasPlacement> placemen
 
 } // anonymous namespace
 
-/* ── Shared canonical source animation preimage ── */
-std::string canonicalize_source_animation_set_preimage(std::span<const SkeletalClip> clips) {
+/* Canonical source-animation JSON serializer using canonical_double.
+   Also serves as the preimage for source-animation semantic identity. */
+std::string canonicalize_source_skeletal_animations_json(std::span<const SkeletalClip> clips) {
   auto sorted = std::vector<SkeletalClip>(clips.begin(), clips.end());
   std::ranges::sort(sorted, {}, &SkeletalClip::id);
-  std::string preimage;
-  for (auto const& c : sorted) {
-    preimage += c.id + "\n";
-    preimage += std::to_string(c.duration_ticks) + "\n";
-    preimage += std::string(c.looping ? "1" : "0") + "\n";
-    for (auto const& t : c.tracks) {
-      preimage += t.bone_id + "^{";
-      for (auto const& k : t.keys) {
-        preimage += std::to_string(k.tick) + ",";
-        preimage += canonical_double(k.transform.x) + "," + canonical_double(k.transform.y) + ",";
-        preimage += canonical_double(k.transform.rotation_degrees) + ",";
-        preimage += canonical_double(k.transform.scale_x) + "," + canonical_double(k.transform.scale_y) + ";";
+  std::string json = "{\"clips\":[";
+  for (std::size_t i = 0; i < sorted.size(); ++i) {
+    if (i) json += ",";
+    auto const& c = sorted[i];
+    json += "{\"id\":\"" + lv_escape(c.id) + "\"";
+    json += ",\"duration_ticks\":" + std::to_string(c.duration_ticks);
+    json += ",\"looping\":" + std::string(c.looping ? "true" : "false");
+    json += ",\"tracks\":[";
+    auto sorted_tracks = std::vector<BoneTrack>(c.tracks.begin(), c.tracks.end());
+    std::ranges::sort(sorted_tracks, {}, &BoneTrack::bone_id);
+    for (std::size_t j = 0; j < sorted_tracks.size(); ++j) {
+      if (j) json += ",";
+      auto const& t = sorted_tracks[j];
+      json += "{\"bone_id\":\"" + lv_escape(t.bone_id) + "\",\"keys\":[";
+      auto sorted_keys = std::vector<BoneKeyframe>(t.keys.begin(), t.keys.end());
+      std::ranges::sort(sorted_keys, {}, &BoneKeyframe::tick);
+      for (std::size_t k = 0; k < sorted_keys.size(); ++k) {
+        if (k) json += ",";
+        auto const& key = sorted_keys[k];
+        json += "{\"tick\":" + std::to_string(key.tick);
+        json += ",\"x\":" + canonical_double(key.transform.x);
+        json += ",\"y\":" + canonical_double(key.transform.y);
+        json += ",\"rotation_degrees\":" + canonical_double(key.transform.rotation_degrees);
+        json += ",\"scale_x\":" + canonical_double(key.transform.scale_x);
+        json += ",\"scale_y\":" + canonical_double(key.transform.scale_y) + "}";
       }
-      preimage += "}";
+      json += "]}";
     }
-    preimage += "\n";
-    for (auto const& [ev_name, ev_tick] : c.events)
-      preimage += ev_name + "|" + std::to_string(ev_tick) + ";";
-    preimage += "\n";
+    json += "],\"events\":[";
+    auto sorted_events = c.events;
+    std::ranges::sort(sorted_events, {}, [](auto const& a){ return std::make_tuple(a.first, a.second); });
+    for (std::size_t j = 0; j < sorted_events.size(); ++j) {
+      if (j) json += ",";
+      json += "{\"name\":\"" + lv_escape(sorted_events[j].first) + "\",\"tick\":" + std::to_string(sorted_events[j].second) + "}";
+    }
+    json += "]}";
   }
-  return preimage;
+  json += "]}";
+  return json;
 }
 
+/* Shared canonical source animation preimage (delegates to canonical JSON). */
+std::string canonicalize_source_animation_set_preimage(std::span<const SkeletalClip> clips) {
+  return canonicalize_source_skeletal_animations_json(clips);
+}
 static std::string compute_domain_id_impl(std::string_view domain, std::string_view preimage) {
   return sha256(std::string(domain) + "\n" + std::string(preimage));
 }
@@ -1520,26 +1543,11 @@ void build_living_visual_package(const LivingVisualPackageInput& input, const st
     lv_write(staging/"sheet"/"atlas.png", std::string_view(reinterpret_cast<const char*>(atlas_png.data()), atlas_png.size()));
     lv_write(staging/"sheet"/"atlas.json", std::string("{\"schema\":\"") + std::string(kSchemaSpriteSheet) + "\",\"data\":" + input.sheet.metadata + "}");
 
-    // Source skeletal animations
-    { std::ostringstream o; o << "{\"schema\":\"" << kSchemaSourceSkeletalAnimations << "\",\"clips\":[";
-      for (std::size_t i=0; i<input.seed.clips.size(); ++i) {
-        if (i) o << ","; auto const& c = input.seed.clips[i];
-        o << "{\"id\":\"" << lv_escape(c.id) << "\",\"duration_ticks\":" << c.duration_ticks << ",\"looping\":" << (c.looping?"true":"false") << ",\"tracks\":[";
-        for (std::size_t j=0; j<c.tracks.size(); ++j) {
-          if (j) o << ","; auto const& t = c.tracks[j];
-          o << "{\"bone_id\":\"" << lv_escape(t.bone_id) << "\",\"keys\":[";
-          for (std::size_t k=0; k<t.keys.size(); ++k) {
-            if (k) o << ","; auto const& key = t.keys[k];
-            o << "{\"tick\":" << key.tick << ",\"x\":" << key.transform.x << ",\"y\":" << key.transform.y
-              << ",\"rotation_degrees\":" << key.transform.rotation_degrees << ",\"scale_x\":" << key.transform.scale_x << ",\"scale_y\":" << key.transform.scale_y << "}";
-          }
-          o << "]}";
-        }
-        o << "],\"events\":[";
-        for (std::size_t j=0; j<c.events.size(); ++j) { if (j) o << ","; o << "{\"name\":\"" << lv_escape(c.events[j].first) << "\",\"tick\":" << c.events[j].second << "}"; }
-        o << "]}";
-      }
-      o << "]}"; lv_write(staging/"source-skeletal-animations.json", o.str());
+    // Source skeletal animations (canonical JSON using canonical_double)
+    {
+      auto clips_json = canonicalize_source_skeletal_animations_json(input.seed.clips);
+      std::string full = "{\"schema\":\"" + std::string(kSchemaSourceSkeletalAnimations) + "\"," + clips_json.substr(1);
+      lv_write(staging/"source-skeletal-animations.json", full);
     }
 
     // Generated 2D animations
