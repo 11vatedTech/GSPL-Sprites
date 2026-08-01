@@ -96,6 +96,7 @@ add_library(gspl_sprites_core
   src/domain.cpp
   src/image.cpp
   src/animation.cpp
+  src/animation_sampling.cpp
   src/package.cpp
   src/package_semantics.cpp
   src/model.cpp

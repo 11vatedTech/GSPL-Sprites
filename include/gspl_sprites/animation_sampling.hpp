@@ -25,7 +25,7 @@ namespace gspl::sprites {
   return std::string(buf, r.ptr);
 }
 
-/* Declared here for neutral access; implemented in package.cpp.
+/* Neutral module: select_first_retained_sample_at_or_after implemented in animation_sampling.cpp.
    Selects minimum retained sample with source_tick >= authored_tick. */
 [[nodiscard]] std::optional<std::reference_wrapper<const GeneratedFrameSample>>
 select_first_retained_sample_at_or_after(
