@@ -108,6 +108,24 @@ int main() try {
     check(fs::exists(pkg_dir / "pose-hashes.json"), "pose hashes exist");
     check(fs::exists(pkg_dir / "frame-hashes.json"), "frame hashes exist");
     check(fs::exists(pkg_dir / "collisions-2d.json"), "collisions exist");
+
+    // Deterministic two-build proof
+    {
+      auto dA = fs::temp_directory_path() / "lv_pkg_det_A";
+      auto dB = fs::temp_directory_path() / "lv_pkg_det_B";
+      fs::remove_all(dA); fs::remove_all(dB);
+      gspl::sprites::build_living_visual_package(pkg_input, dA);
+      gspl::sprites::build_living_visual_package(pkg_input, dB);
+      auto vA = gspl::sprites::verify_living_visual_package(dA);
+      auto vB = gspl::sprites::verify_living_visual_package(dB);
+      check(vA.ok() && vB.ok(), "det: both valid");
+      check(vA.package_identity == vB.package_identity, "det: identical identity");
+      check(vA.package_identity.size() == 64, "det: SHA-256");
+      auto mA = read_file_bytes(dA / "manifest.json", 4ULL*1024*1024);
+      auto mB = read_file_bytes(dB / "manifest.json", 4ULL*1024*1024);
+      check(mA == mB, "det: identical manifest bytes");
+      fs::remove_all(dA); fs::remove_all(dB);
+    }
   }
   // ── End Scope 1: all source objects destroyed ──
 

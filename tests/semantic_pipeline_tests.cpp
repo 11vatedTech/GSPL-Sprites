@@ -828,9 +828,8 @@ int main() {
             ce.morphology["torso"] = torso;
 
             // Form-specific morphology overrides
-            gspl::CanonicalPart storm_head;
-            storm_head.name = "head";
-            storm_head.parent = "root";
+            gspl::CanonicalMorphologyPartOverride storm_head;
+            storm_head.part_id = "head";
             storm_head.x = 0; storm_head.y = 85; storm_head.z = 5;
             storm_head.size_x = 35; storm_head.size_y = 28; storm_head.size_z = 22;
             storm_head.color = "#00BFFF";
@@ -1064,8 +1063,7 @@ int main() {
                     check(r_parts.count(part_name) == 1,
                           ("DEF-0012: form_morphology_overrides '" + form_name + "' part '" + part_name + "' present").c_str());
                     auto const& rp = r_parts.at(part_name);
-                    check(rp.name == part.name, "DEF-0012: fmo part name");
-                    check(rp.parent == part.parent, "DEF-0012: fmo part parent");
+                    check(rp.part_id == part.part_id, "DEF-0012: fmo part name");
                     check(rp.emissive == part.emissive, "DEF-0012: fmo part emissive");
                     check(rp.electrical_marking == part.electrical_marking, "DEF-0012: fmo part marking");
                 }

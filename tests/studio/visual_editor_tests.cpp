@@ -325,8 +325,8 @@ static void test_animation_editor_create() {
     clip.loop = true;
     gspl::CanonicalAnimationClip::Track track;
     track.bone = "torso";
-    track.keys.push_back({0, "0,0,0"});
-    track.keys.push_back({30, "0,10,0"});
+    track.keys.push_back({0, 0.0, 0.0, 0.0, 1.0, 1.0});
+    track.keys.push_back({30, 0.0, 10.0, 0.0, 1.0, 1.0});
     clip.tracks.push_back(track);
     entity.clips.push_back(clip);
 
