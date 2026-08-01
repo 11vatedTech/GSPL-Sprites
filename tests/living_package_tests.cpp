@@ -315,7 +315,7 @@ int main() try {
     check(verify.ok(), "prov: verify ok");
     check(!has_diagnostic(verify, "LV_PROV_CANONICAL_ENTITY"), "prov: canonical entity ok");
     check(!has_diagnostic(verify, "LV_PROV_FRAME_SET"), "prov: frame set ok");
-    check(!has_diagnostic(verify, "LV_PROV_FRAME_HASHES"), "prov: frame hashes ok");
+    check(!has_diagnostic(verify, "LV_PROV_FRAME_HASH_TABLE"), "prov: frame hash table ok");
     check(!has_diagnostic(verify, "LV_PROV_SAMPLE_TABLE"), "prov: sample table ok");
     check(!has_diagnostic(verify, "LV_PROV_EVENT_SCHEDULE"), "prov: event schedule ok");
     check(!has_diagnostic(verify, "LV_PROV_POSE_TABLE"), "prov: pose table ok");

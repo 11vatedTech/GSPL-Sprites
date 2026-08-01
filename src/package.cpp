@@ -14,6 +14,7 @@
 #include <map>
 #include <limits>
 #include <set>
+#include <span>
 #include <sstream>
 #include <stdexcept>
 
@@ -1462,6 +1463,53 @@ std::string canonicalize_atlas_preimage(std::span<const AtlasPlacement> placemen
 
 } // anonymous namespace
 
+/* ── Shared canonical source animation preimage ── */
+std::string canonicalize_source_animation_set_preimage(std::span<const SkeletalClip> clips) {
+  auto sorted = std::vector<SkeletalClip>(clips.begin(), clips.end());
+  std::ranges::sort(sorted, {}, &SkeletalClip::id);
+  std::string preimage;
+  for (auto const& c : sorted) {
+    preimage += c.id + "\n";
+    preimage += std::to_string(c.duration_ticks) + "\n";
+    preimage += std::string(c.looping ? "1" : "0") + "\n";
+    for (auto const& t : c.tracks) {
+      preimage += t.bone_id + "^{";
+      for (auto const& k : t.keys) {
+        preimage += std::to_string(k.tick) + ",";
+        preimage += std::to_string(k.transform.x) + "," + std::to_string(k.transform.y) + ",";
+        preimage += std::to_string(k.transform.rotation_degrees) + ",";
+        preimage += std::to_string(k.transform.scale_x) + "," + std::to_string(k.transform.scale_y) + ";";
+      }
+      preimage += "}";
+    }
+    preimage += "\n";
+    for (auto const& [ev_name, ev_tick] : c.events)
+      preimage += ev_name + "|" + std::to_string(ev_tick) + ";";
+    preimage += "\n";
+  }
+  return preimage;
+}
+
+/* ── Shared temporal authority: minimum retained sample at-or-after authored tick ── */
+std::optional<std::reference_wrapper<const GeneratedFrameSample>>
+select_first_retained_sample_at_or_after(
+    std::span<const GeneratedFrameSample> samples,
+    std::string_view clip_id,
+    std::uint32_t authored_tick) {
+  const GeneratedFrameSample* best = nullptr;
+  for (auto const& s : samples) {
+    if (s.clip_id == clip_id && s.source_tick >= authored_tick) {
+      if (!best ||
+          std::make_tuple(s.source_tick, s.frame_index, s.frame_id) <
+          std::make_tuple(best->source_tick, best->frame_index, best->frame_id)) {
+        best = &s;
+      }
+    }
+  }
+  if (best) return std::cref(*best);
+  return std::nullopt;
+}
+
 static std::string compute_domain_id_impl(std::string_view domain, std::string_view preimage) {
   return sha256(std::string(domain) + "\n" + std::string(preimage));
 }
@@ -1548,11 +1596,11 @@ void build_living_visual_package(const LivingVisualPackageInput& input, const st
       }
       o << "]}"; lv_write(staging/"pose-hashes.json", o.str());
     }
-    // Frame hashes — ID-addressed records
+    // Frame hashes — ID-addressed records (single authority: use same FrameHashRecord vector as provenance)
     { std::ostringstream o; o << "{\"schema\":\"" << kSchemaFrameHashes << "\",\"frames\":[";
-      for (std::size_t i=0; i<input.samples.size(); ++i) {
-        if (i) o << ","; auto const& s = input.samples[i];
-        o << "{\"frame_id\":\"" << lv_escape(s.frame_id) << "\",\"frame_hash\":\"" << lv_escape(s.frame_hash) << "\"}";
+      for (std::size_t i=0; i<input.frames.size(); ++i) {
+        if (i) o << ","; auto const& f = input.frames[i];
+        o << "{\"frame_id\":\"" << lv_escape(f.id) << "\",\"frame_hash\":\"" << lv_escape(f.frame_hash) << "\"}";
       }
       o << "]}"; lv_write(staging/"frame-hashes.json", o.str());
     }
@@ -1715,11 +1763,12 @@ void build_living_visual_package(const LivingVisualPackageInput& input, const st
     std::string atlas_id = compute_domain_id_impl(
         kDomainSpriteAtlas, canonicalize_atlas_preimage(
             input.sheet.atlas.placements, input.sheet.atlas.image.width, input.sheet.atlas.image.height));
-    // Source-animation identity: derived from the file content written to staging
+    // Source-animation identity: semantic provenance from seed clips
     std::string source_anim_id;
     {
-      auto sa_bytes = lv_read(staging/"source-skeletal-animations.json", 512ULL*1024*1024);
-      source_anim_id = sha256(sa_bytes);
+      source_anim_id = compute_domain_id_impl(
+          kDomainSourceAnimSet,
+          canonicalize_source_animation_set_preimage(input.seed.clips));
     }
 
     // Seed artifacts
@@ -1930,6 +1979,9 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     pkg.seed_identity = sha256(seed_json);
     if (pkg.manifest.seed_identity != pkg.seed_identity)
       add("LV_READ_SEED_MISMATCH", "seed identity mismatch: manifest vs computed");
+
+    // Reconstructed source skeletal animations (same data as written to source-skeletal-animations.json)
+    pkg.source_skeletal_animations = pkg.seed.clips;
 
     // ── Reconstruct frames from frames.json + PNG files ──
     {
@@ -2674,61 +2726,58 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
     if (result.clip_count != 9) add("LV_VERIFY_CLIP_COUNT", "expected 9 clips");
     if (result.sample_count != 48) add("LV_VERIFY_SAMPLE_COUNT", "expected 48 samples");
 
-    // ── Exact nine-clip contract ──
+    // ── Exact nine-clip contract (exact entity-derived IDs, no suffix matching) ──
     {
-      struct ClipExpect { const char* suffix; std::uint32_t frames; bool looping; };
-      static const ClipExpect expected_clips[] = {
-        {"storm.idle",  4, true},  {"storm.locomotion", 6, true},
-        {"storm.attack",6, false}, {"storm.hit",        3, false},
-        {"base.idle",   4, true},  {"base.locomotion",  6, true},
-        {"base.attack", 6, false}, {"base.hit",         3, false},
-        {"transform",  10, false},
-      };
-      std::set<std::string> seen_roles;
+      struct GovernedClip { std::string id; std::uint32_t frames; bool looping; };
+      auto& eid = pkg.entity_id;
+      static const char* roles[] = {"base.idle","base.locomotion","base.attack","base.hit",
+                                    "storm.idle","storm.locomotion","storm.attack","storm.hit"};
+      static const std::uint32_t frame_counts[] = {4,6,6,3,4,6,6,3};
+      static const bool loop_flags[] = {true,true,false,false,true,true,false,false};
+      std::vector<GovernedClip> expected_clips;
+      for (int i=0; i<8; ++i)
+        expected_clips.push_back({eid + "." + roles[i], frame_counts[i], loop_flags[i]});
+      expected_clips.push_back({eid + ".transform", 10, false});
+
+      // Build index for duplicate detection
+      std::map<std::string, const AnimationClip*> clip_index;
+      for (auto const& c : pkg.generated_clips) {
+        if (clip_index.contains(c.id))
+          add("LV_CLIP_DUPLICATE", "duplicate clip ID: " + c.id);
+        else
+          clip_index[c.id] = &c;
+      }
+
       for (auto const& exp : expected_clips) {
-        bool found = false;
-        for (auto const& c : pkg.generated_clips) {
-          // Match by suffix: "original.voltfox.storm.idle".ends_with("storm.idle")
-          auto suffix = std::string(exp.suffix);
-          if (c.id.size() >= suffix.size() &&
-              c.id.compare(c.id.size() - suffix.size(), std::string::npos, suffix) == 0) {
-            if (seen_roles.count(suffix))
-              add("LV_CLIP_DUP_ROLE", "duplicate clip role: " + suffix);
-            seen_roles.insert(suffix);
-            found = true;
-            if (c.frame_ids.size() != exp.frames)
-              add("LV_CLIP_FRAME_COUNT", "clip " + c.id + " frame count " + std::to_string(c.frame_ids.size()) + " != " + std::to_string(exp.frames));
-            if (c.looping != exp.looping)
-              add("LV_CLIP_LOOP", "clip " + c.id + " looping flag mismatch");
-            if (c.frame_ids.size() != c.frame_durations.size())
-              add("LV_CLIP_DUR_MISMATCH", "clip " + c.id + " frame/duration vector mismatch");
-            for (auto const& fid : c.frame_ids) {
-              auto frame_it = std::find_if(pkg.frames.begin(), pkg.frames.end(),
-                [&](auto const& f) { return f.id == fid; });
-              if (frame_it == pkg.frames.end())
-                add("LV_CLIP_UNKNOWN_FRAME", "clip " + c.id + " references unknown frame: " + fid);
-            }
-            // Check for duplicate frame positions within clip
-            std::set<std::string> pos_seen;
-            for (auto const& fid : c.frame_ids) {
-              if (!pos_seen.insert(fid).second)
-                add("LV_CLIP_DUP_POS", "clip " + c.id + " duplicate frame position: " + fid);
-            }
-            break;
-          }
+        auto it = clip_index.find(exp.id);
+        if (it == clip_index.end()) {
+          add("LV_CLIP_MISSING", "missing required clip: " + exp.id);
+          continue;
         }
-        if (!found)
-          add("LV_CLIP_MISSING", "missing required clip role: " + std::string(exp.suffix));
+        auto const& c = *it->second;
+        if (c.frame_ids.size() != exp.frames)
+          add("LV_CLIP_FRAME_COUNT", "clip " + c.id + " frame count " + std::to_string(c.frame_ids.size()) + " != " + std::to_string(exp.frames));
+        if (c.looping != exp.looping)
+          add("LV_CLIP_LOOP", "clip " + c.id + " looping flag mismatch");
+        if (c.frame_ids.size() != c.frame_durations.size())
+          add("LV_CLIP_DUR_MISMATCH", "clip " + c.id + " frame/duration vector mismatch");
+        for (auto const& fid : c.frame_ids) {
+          auto frame_it = std::find_if(pkg.frames.begin(), pkg.frames.end(),
+            [&](auto const& f) { return f.id == fid; });
+          if (frame_it == pkg.frames.end())
+            add("LV_CLIP_UNKNOWN_FRAME", "clip " + c.id + " references unknown frame: " + fid);
+        }
+        std::set<std::string> pos_seen;
+        for (auto const& fid : c.frame_ids) {
+          if (!pos_seen.insert(fid).second)
+            add("LV_CLIP_DUP_POS", "clip " + c.id + " duplicate frame position: " + fid);
+        }
       }
       // Check for extra clips
       for (auto const& c : pkg.generated_clips) {
         bool known = false;
         for (auto const& exp : expected_clips) {
-          auto suffix = std::string(exp.suffix);
-          if (c.id.size() >= suffix.size() &&
-              c.id.compare(c.id.size() - suffix.size(), std::string::npos, suffix) == 0) {
-            known = true; break;
-          }
+          if (c.id == exp.id) { known = true; break; }
         }
         if (!known)
           add("LV_CLIP_EXTRA", "unexpected clip: " + c.id);
@@ -2790,6 +2839,20 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
         if (!frame_ids.count(fid))
           add("LV_FH_EXTRA", "frame-hashes extra record: " + fid);
       }
+      // Cross-validate: frame-hash records vs decoded frames
+      for (auto const& fh : pkg.frame_hash_records) {
+        auto fit = std::find_if(pkg.frames.begin(), pkg.frames.end(),
+          [&](auto const& f) { return f.id == fh.frame_id; });
+        if (fit != pkg.frames.end() && fit->frame_hash != fh.frame_hash)
+          add("LV_FH_FRAME_MISMATCH", "frame-hash record != decoded frame hash: " + fh.frame_id);
+      }
+      // Cross-validate: samples frame_hash vs frame-hash records
+      for (auto const& s : pkg.samples) {
+        auto fit = std::find_if(pkg.frame_hash_records.begin(), pkg.frame_hash_records.end(),
+          [&](auto const& r) { return r.frame_id == s.frame_id; });
+        if (fit != pkg.frame_hash_records.end() && fit->frame_hash != s.frame_hash)
+          add("LV_FH_SAMPLE_MISMATCH", "sample frame_hash != frame-hash record: " + s.frame_id);
+      }
     }
 
     // ── Pose exact-set equality ──
@@ -2825,63 +2888,72 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
       }
     }
 
-    // ── Event exact-set: require exactly the 4 governed events ──
-    // Match by (clip_suffix, event_id) only; ticks are validated below.
+    // ── Event exact-set: require exactly the 4 governed events (exact entity-derived IDs) ──
     {
-      struct GovEvent { const char* clip_suffix; const char* event_id; };
-      static const GovEvent governed_events[] = {
-        {"base.attack", "release"},
-        {"storm.attack", "release"},
-        {"transform", "midpoint"},
-        {"transform", "complete"},
+      auto& eid = pkg.entity_id;
+      struct GovernedEvent { std::string clip_id; std::string event_id; };
+      const GovernedEvent governed[] = {
+        {eid + ".base.attack", "release"},
+        {eid + ".storm.attack", "release"},
+        {eid + ".transform", "midpoint"},
+        {eid + ".transform", "complete"},
       };
-      auto clip_matches = [&](std::string const& clip_id, const char* suffix) -> bool {
-        auto s = std::string(suffix);
-        return clip_id.size() >= s.size() &&
-               clip_id.compare(clip_id.size() - s.size(), std::string::npos, s) == 0;
-      };
-      for (auto const& gev : governed_events) {
-        bool found = false;
-        for (auto const& e : pkg.events) {
-          if (e.event_id == gev.event_id && clip_matches(e.clip_id, gev.clip_suffix)) {
-            found = true;
-            // Validate event temporal authority
-            if (e.mapped_source_tick < e.authored_tick)
-              add("LV_EVENT_BEFORE_AUTHORED", "event mapped_tick < authored_tick: " + e.event_id);
-            // Validate sample exists and mapped_tick matches
-            auto sample_it = std::find_if(pkg.samples.begin(), pkg.samples.end(),
-              [&](auto const& s) { return s.clip_id == e.clip_id && s.frame_index == e.frame_index; });
-            if (sample_it == pkg.samples.end())
-              add("LV_EVENT_SAMPLE_MISSING", "no sample for event: " + e.event_id);
-            else if (sample_it->source_tick != e.mapped_source_tick)
-              add("LV_EVENT_MAPPED_TICK", "event mapped_tick != sample source_tick: " + e.event_id);
-            // Validate frame_id matches clip position
-            auto clip_it = std::find_if(pkg.generated_clips.begin(), pkg.generated_clips.end(),
-              [&](auto const& c) { return c.id == e.clip_id; });
-            if (clip_it != pkg.generated_clips.end() && e.frame_index < clip_it->frame_ids.size()) {
-              if (e.frame_id != clip_it->frame_ids[e.frame_index])
-                add("LV_EVENT_FRAME_ID", "event frame_id mismatch: " + e.event_id);
-            }
-            break;
-          }
+      // Index events for duplicate detection
+      std::map<std::string, const GeneratedAnimationEvent*> ev_index;
+      for (auto const& e : pkg.events) {
+        std::string key = e.clip_id + "|" + e.event_id;
+        if (ev_index.contains(key))
+          add("LV_EVENT_DUPLICATE", "duplicate event: " + key);
+        else
+          ev_index[key] = &e;
+      }
+
+      for (auto const& gev : governed) {
+        std::string gkey = gev.clip_id + "|" + gev.event_id;
+        auto it = ev_index.find(gkey);
+        if (it == ev_index.end()) {
+          add("LV_EVENT_MISSING", "missing governed event: " + gkey);
+          continue;
         }
-        if (!found)
-          add("LV_EVENT_MISSING", "missing governed event: " + std::string(gev.event_id) + " in " + std::string(gev.clip_suffix));
+        auto const& e = *it->second;
+        // Validate event temporal authority
+        if (e.mapped_source_tick < e.authored_tick)
+          add("LV_EVENT_BEFORE_AUTHORED", "event mapped_tick < authored_tick: " + e.event_id);
+        // Validate sample exists and mapped_tick matches
+        auto sample_it = std::find_if(pkg.samples.begin(), pkg.samples.end(),
+          [&](auto const& s) { return s.clip_id == e.clip_id && s.frame_index == e.frame_index; });
+        if (sample_it == pkg.samples.end())
+          add("LV_EVENT_SAMPLE_MISSING", "no sample for event: " + e.event_id);
+        else if (sample_it->source_tick != e.mapped_source_tick)
+          add("LV_EVENT_MAPPED_TICK", "event mapped_tick != sample source_tick: " + e.event_id);
+        // Validate frame_id matches clip position
+        auto clip_it = std::find_if(pkg.generated_clips.begin(), pkg.generated_clips.end(),
+          [&](auto const& c) { return c.id == e.clip_id; });
+        if (clip_it != pkg.generated_clips.end() && e.frame_index < clip_it->frame_ids.size()) {
+          if (e.frame_id != clip_it->frame_ids[e.frame_index])
+            add("LV_EVENT_FRAME_ID", "event frame_id mismatch: " + e.event_id);
+        }
+        // Independent first-at-or-after recomputation
+        auto selected = select_first_retained_sample_at_or_after(pkg.samples, e.clip_id, e.authored_tick);
+        if (!selected)
+          add("LV_EVENT_SAMPLE_MISSING", "no retained sample at-or-after auth tick: " + e.event_id);
+        else if (selected->get().source_tick != e.mapped_source_tick ||
+                 selected->get().frame_index != e.frame_index)
+          add("LV_EVENT_NOT_FIRST_AT_OR_AFTER", "event not mapped to first-at-or-after sample: " + e.event_id);
       }
       // Check for extra events
       for (auto const& e : pkg.events) {
         bool known = false;
-        for (auto const& gev : governed_events) {
-          if (e.event_id == gev.event_id && clip_matches(e.clip_id, gev.clip_suffix)) {
-            known = true; break;
-          }
+        for (auto const& gev : governed) {
+          if (e.clip_id == gev.clip_id && e.event_id == gev.event_id) { known = true; break; }
         }
         if (!known)
           add("LV_EVENT_EXTRA", "unexpected event: " + e.event_id + " in " + e.clip_id);
       }
       // Validate transform.complete maps to frame index 9 (terminal transform frame)
+      std::string transform_id = eid + ".transform";
       for (auto const& e : pkg.events) {
-        if (e.event_id == "complete" && clip_matches(e.clip_id, "transform")) {
+        if (e.event_id == "complete" && e.clip_id == transform_id) {
           if (e.frame_index != 9)
             add("LV_EVENT_TRANSFORM_COMPLETION", "transform completion not at frame index 9 (got " + std::to_string(e.frame_index) + ")");
         }
@@ -2947,6 +3019,11 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
       if (!stored.empty() && computed != stored)
         add("LV_PROV_FRAME_HASH_TABLE", "frame-hash-table provenance mismatch");
     }
+
+    // NOTE: Source-animation provenance (kDomainSourceAnimSet) is declared in the manifest
+    // but verification requires parsing source-skeletal-animations.json directly from the
+    // immutable inventory bytes rather than from seed.json (which loses float precision).
+    // Deferred until source-skeletal-animations.json has its own parser in the reader.
 
     // Generated-clip-set identity
     {

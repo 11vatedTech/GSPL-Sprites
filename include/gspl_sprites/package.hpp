@@ -173,6 +173,7 @@ struct LoadedLivingVisualPackage {
 
   std::vector<FrameSource> frames;
   std::vector<FrameHashRecord> frame_hash_records;
+  std::vector<SkeletalClip> source_skeletal_animations;
   std::vector<AnimationClip> generated_clips;
   std::vector<GeneratedFrameSample> samples;
   std::vector<PoseHashRecord> pose_hash_records;
@@ -268,6 +269,17 @@ struct LivingVisualPackageVerificationResult {
   std::uint32_t collision_window_count{};
   [[nodiscard]] bool ok() const noexcept { return validation.ok(); }
 };
+
+/* ── Shared temporal authority: first retained sample at-or-after authored tick ── */
+[[nodiscard]] std::optional<std::reference_wrapper<const GeneratedFrameSample>>
+select_first_retained_sample_at_or_after(
+    std::span<const GeneratedFrameSample> samples,
+    std::string_view clip_id,
+    std::uint32_t authored_tick);
+
+/* ── Shared canonical source animation preimage ── */
+[[nodiscard]] std::string canonicalize_source_animation_set_preimage(
+    std::span<const SkeletalClip> clips);
 
 /* ── Safe path encoding for artifact IDs ── */
 [[nodiscard]] std::string encode_package_component(std::string_view semantic_id);
