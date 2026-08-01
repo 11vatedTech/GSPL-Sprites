@@ -367,6 +367,104 @@ int main() try {
     fs::remove_all(mut_dir);
   }
 
+  // ── Self-Consistent Mutations (refresh artifact hash/size + package identity) ──
+  // Each SC mutation recomputes manifest integrity so rejection hits the
+  // semantic layer, not the inventory/hash layer.
+  {
+    using namespace gspl::sprites;
+    std::cout << "\n--- Self-Consistent Mutation Tests ---\n";
+    PackageReadLimits rlim{};
+    auto mf_bytes = read_file_bytes(pkg_dir/"manifest.json", 4ULL*1024*1024);
+    auto mf_parse = parse_living_package_manifest({mf_bytes.begin(), mf_bytes.end()}, rlim);
+    check(mf_parse.ok(), "SC: base manifest parse ok");
+    auto m = *mf_parse.value;
+
+    auto refresh = [&](auto& manifest, auto d, auto path) {
+      auto b = read_file_bytes(d/path, 512ULL*1024*1024);
+      auto h = sha256({b.begin(), b.end()});
+      for (auto& a : manifest.artifacts) if (a.path == path) {
+        a.byte_size = static_cast<std::uint32_t>(b.size()); a.sha256 = std::move(h); return;
+      }
+    };
+    auto finalize = [&](auto& manifest, auto d) {
+      auto cn = canonicalize_manifest(manifest, false);
+      manifest.package_identity = sha256(std::string(kIdentityPreimageVersion) + "\n" + cn);
+      auto cw = canonicalize_manifest(manifest, true);
+      std::ofstream(d/"manifest.json", std::ios::trunc | std::ios::binary).write(cw.data(), cw.size());
+    };
+    auto has_diag = [](auto const& r, std::string_view code) {
+      for (auto const& d : r.validation.diagnostics) if (d.code == code) return true;
+      return false;
+    };
+
+    // SC3: pose record frame_id changed (cross-artifact structural)
+    {
+      auto md = pkg_dir; md += "_sc3"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto ph = read_file_bytes(md/"pose-hashes.json", 4ULL*1024*1024);
+      std::string s(ph.begin(), ph.end());
+      auto pos = s.find("\"frame_id\":\"");
+      if (pos != std::string::npos) s.replace(pos + 12, 4, "YYYY");
+      std::ofstream(md/"pose-hashes.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
+      auto ml = m; refresh(ml, md, "pose-hashes.json"); finalize(ml, md);
+      auto v = verify_living_visual_package(md);
+      check(!v.ok() && has_diag(v, "LV_POSE_FRAME_ID"), "SC3: LV_POSE_FRAME_ID");
+      fs::remove_all(md);
+    }
+    // SC6: remove sample position (structural)
+    {
+      auto md = pkg_dir; md += "_sc6"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto fsb = read_file_bytes(md/"frame-samples.json", 512ULL*1024*1024);
+      std::string s(fsb.begin(), fsb.end());
+      auto st = s.find("{\"clip_id\"");
+      if (st != std::string::npos) {
+        auto en = s.find("}", st) + 1;
+        if (s[en] == ',') ++en;
+        s.erase(st, en - st);
+      }
+      std::ofstream(md/"frame-samples.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
+      auto ml2 = m; refresh(ml2, md, "frame-samples.json"); finalize(ml2, md);
+      auto v = verify_living_visual_package(md);
+      check(!v.ok(), "SC6: sample removal detected");
+      fs::remove_all(md);
+    }
+    // SC8: flip clip looping flag (semantic)
+    {
+      auto md = pkg_dir; md += "_sc8"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto ab = read_file_bytes(md/"animations-2d.json", 4ULL*1024*1024);
+      std::string s(ab.begin(), ab.end());
+      auto pos = s.find("\"looping\":false");
+      if (pos != std::string::npos) s.replace(pos + 10, 5, "true,");
+      else { pos = s.find("\"looping\":true"); if (pos != std::string::npos) s.replace(pos + 10, 4, "false"); }
+      std::ofstream(md/"animations-2d.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
+      auto ml3 = m; refresh(ml3, md, "animations-2d.json"); finalize(ml3, md);
+      auto v = verify_living_visual_package(md);
+      check(!v.ok(), "SC8: clip loop flag change detected");
+      fs::remove_all(md);
+    }
+    // SC10: event frame_id changed (cross-reference)
+    {
+      auto md = pkg_dir; md += "_sc10"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto eb = read_file_bytes(md/"animation-events.json", 4ULL*1024*1024);
+      std::string s(eb.begin(), eb.end());
+      auto pos = s.find("\"frame_id\":\"");
+      if (pos != std::string::npos) s.replace(pos + 12, 4, "XXXX");
+      std::ofstream(md/"animation-events.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
+      auto ml4 = m; refresh(ml4, md, "animation-events.json"); finalize(ml4, md);
+      auto v = verify_living_visual_package(md);
+      check(!v.ok(), "SC10: event frame_id change detected");
+      fs::remove_all(md);
+    }
+    // SC-positive: valid package passes after manifest refresh
+    {
+      auto md = pkg_dir; md += "_sc_valid"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto ml5 = m;
+      for (auto const& a : ml5.artifacts) refresh(ml5, md, a.path);
+      finalize(ml5, md);
+      auto v = verify_living_visual_package(md);
+      check(v.ok(), "SC: valid package passes after manifest regeneration");
+      fs::remove_all(md);
+    }
+  }
 
   fs::remove_all(pkg_dir);
 
