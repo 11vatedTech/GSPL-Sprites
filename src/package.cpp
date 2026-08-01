@@ -3210,65 +3210,111 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
         add("LV_PROV_COLLISIONS", "collision-set provenance mismatch");
     }
 
-    // ── Optional pixel-level checks (gated by verify_pixel_hashes) ──
-    if (options.verify_pixel_hashes) {
-      // Channel-set identity
-      if (!pkg.channels.empty()) {
-        auto preimage = canonicalize_channel_set_preimage(pkg.channels);
-        auto computed = compute_domain_id_impl(kDomainChannelSet, preimage);
-        auto stored = prov("channels.json");
-        if (!stored.empty() && computed != stored)
-          add("LV_PROV_CHANNEL_SET", "channel-set provenance mismatch");
+    // ── Channel-set semantic authority (mandatory, not gated) ──
+    if (!pkg.channels.empty()) {
+      // Unique channel IDs
+      std::set<std::string> channel_ids;
+      for (auto const& ch : pkg.channels) {
+        if (!channel_ids.insert(ch.id).second)
+          add("LV_CHANNEL_DUP_ID", "duplicate channel ID: " + ch.id);
       }
-
-      // Base morphology identity
-      if (!pkg.base_morphology.empty()) {
-        auto preimage = canonicalize_morphology_preimage(pkg.base_morphology);
-        auto computed = compute_domain_id_impl(kDomainMorphologySet, preimage);
-        auto stored = prov("resolved-base-morphology.json");
-        if (!stored.empty() && computed != stored)
-          add("LV_PROV_BASE_MORPHOLOGY", "base morphology provenance mismatch");
+      // Known target frames
+      std::map<std::string, const FrameSource*, std::less<>> frame_by_id;
+      for (auto const& f : pkg.frames) frame_by_id[f.id] = &f;
+      for (auto const& ch : pkg.channels) {
+        if (!frame_by_id.count(ch.target_frame_id))
+          add("LV_CHANNEL_UNKNOWN_FRAME", "channel " + ch.id + " references unknown frame " + ch.target_frame_id);
       }
-
-      // Storm morphology identity
-      if (!pkg.storm_morphology.empty()) {
-        auto preimage = canonicalize_morphology_preimage(pkg.storm_morphology);
-        auto computed = compute_domain_id_impl(kDomainMorphologySet, preimage);
-        auto stored = prov("resolved-storm-morphology.json");
-        if (!stored.empty() && computed != stored)
-          add("LV_PROV_STORM_MORPHOLOGY", "storm morphology provenance mismatch");
-      }
-
-      // Transformation morphology sequence identity
-      if (!pkg.transformation_morphologies.empty()) {
-        std::string trans_preimage;
-        for (std::size_t i = 0; i < pkg.transformation_morphologies.size(); ++i) {
-          trans_preimage += std::to_string(i) + "\n";
-          trans_preimage += canonicalize_morphology_preimage(pkg.transformation_morphologies[i]);
-        }
-        auto computed = compute_domain_id_impl(kDomainMorphologySet, trans_preimage);
-        auto stored = prov("transformation-morphologies.json");
-        if (!stored.empty() && computed != stored)
-          add("LV_PROV_TRANSFORMATION_MORPHOLOGIES", "transformation morphologies provenance mismatch");
-      }
-
-      // Atlas identity (reconstructed from typed atlas metadata)
-      if (!pkg.sheet.atlas.placements.empty()) {
-        auto preimage = canonicalize_atlas_preimage(
-            pkg.sheet.atlas.placements,
-            pkg.sheet.atlas.image.width,
-            pkg.sheet.atlas.image.height);
-        auto computed = compute_domain_id_impl(kDomainSpriteAtlas, preimage);
-        auto stored_meta = prov("sheet/atlas.json");
-        auto stored_png = prov("sheet/atlas.png");
-        if (!stored_meta.empty() && computed != stored_meta)
-          add("LV_PROV_ATLAS", "atlas metadata provenance mismatch");
-        if (!stored_png.empty() && computed != stored_png)
-          add("LV_PROV_ATLAS", "atlas image provenance mismatch");
-      }
+      // Channel-set provenance
+      auto preimage = canonicalize_channel_set_preimage(pkg.channels);
+      auto computed = compute_domain_id_impl(kDomainChannelSet, preimage);
+      auto stored = prov("channels.json");
+      if (!stored.empty() && computed != stored)
+        add("LV_PROV_CHANNEL_SET", "channel-set provenance mismatch");
     }
+
+    // ── Morphology semantic authority (mandatory) ──
+    // Base morphology
+    if (!pkg.base_morphology.empty()) {
+      auto preimage = canonicalize_morphology_preimage(pkg.base_morphology);
+      auto computed = compute_domain_id_impl(kDomainMorphologySet, preimage);
+      auto stored = prov("resolved-base-morphology.json");
+      if (!stored.empty() && computed != stored)
+        add("LV_PROV_BASE_MORPHOLOGY", "base morphology provenance mismatch");
+    }
+
+    // Storm morphology
+    if (!pkg.storm_morphology.empty()) {
+      auto preimage = canonicalize_morphology_preimage(pkg.storm_morphology);
+      auto computed = compute_domain_id_impl(kDomainMorphologySet, preimage);
+      auto stored = prov("resolved-storm-morphology.json");
+      if (!stored.empty() && computed != stored)
+        add("LV_PROV_STORM_MORPHOLOGY", "storm morphology provenance mismatch");
+    }
+
+    // Transformation morphology sequence identity
+    if (!pkg.transformation_morphologies.empty()) {
+      std::string trans_preimage;
+      for (std::size_t i = 0; i < pkg.transformation_morphologies.size(); ++i) {
+        trans_preimage += std::to_string(i) + "\n";
+        trans_preimage += canonicalize_morphology_preimage(pkg.transformation_morphologies[i]);
+      }
+      auto computed = compute_domain_id_impl(kDomainMorphologySet, trans_preimage);
+      auto stored = prov("transformation-morphologies.json");
+      if (!stored.empty() && computed != stored)
+        add("LV_PROV_TRANSFORMATION_MORPHOLOGIES", "transformation morphologies provenance mismatch");
+    }
+
+    // Transformation endpoint validation
     if (pkg.manifest.transformation_morphology_count != 10)
       add("LV_VERIFY_TRANSMORPH_COUNT", "expected 10 transformation morphologies");
+
+    // Verify transformation[0] semantically equals base, transformation[9] equals storm
+    if (pkg.transformation_morphologies.size() >= 10) {
+      auto base_preimage = canonicalize_morphology_preimage(pkg.base_morphology);
+      auto t0_preimage = canonicalize_morphology_preimage(pkg.transformation_morphologies[0]);
+      if (base_preimage != t0_preimage)
+        add("LV_MORPH_TRANSFORM_BASE", "transformation[0] does not equal base morphology");
+      auto storm_preimage = canonicalize_morphology_preimage(pkg.storm_morphology);
+      auto t9_preimage = canonicalize_morphology_preimage(pkg.transformation_morphologies[9]);
+      if (storm_preimage != t9_preimage)
+        add("LV_MORPH_TRANSFORM_STORM", "transformation[9] does not equal storm morphology");
+    }
+
+    // ── Atlas semantic authority (mandatory) ──
+    if (!pkg.sheet.atlas.placements.empty()) {
+      // Placement/frame set equality
+      std::set<std::string> frame_ids;
+      for (auto const& f : pkg.frames) frame_ids.insert(f.id);
+      std::set<std::string> placement_ids;
+      for (auto const& p : pkg.sheet.atlas.placements) {
+        if (!placement_ids.insert(p.frame_id).second)
+          add("LV_ATLAS_DUP_PLACEMENT", "duplicate atlas placement for frame " + p.frame_id);
+        if (!frame_ids.count(p.frame_id))
+          add("LV_ATLAS_UNKNOWN_FRAME", "atlas placement references unknown frame " + p.frame_id);
+      }
+      for (auto const& fid : frame_ids) {
+        if (!placement_ids.count(fid))
+          add("LV_ATLAS_MISSING_PLACEMENT", "missing atlas placement for frame " + fid);
+      }
+      // Atlas provenance
+      auto preimage = canonicalize_atlas_preimage(
+          pkg.sheet.atlas.placements,
+          pkg.sheet.atlas.image.width,
+          pkg.sheet.atlas.image.height);
+      auto computed = compute_domain_id_impl(kDomainSpriteAtlas, preimage);
+      auto stored_meta = prov("sheet/atlas.json");
+      auto stored_png = prov("sheet/atlas.png");
+      if (!stored_meta.empty() && computed != stored_meta)
+        add("LV_PROV_ATLAS", "atlas metadata provenance mismatch");
+      if (!stored_png.empty() && computed != stored_png)
+        add("LV_PROV_ATLAS", "atlas image provenance mismatch");
+    }
+
+    // ── Optional pixel-level checks (gated by verify_pixel_hashes) ──
+    // Reserved for expensive decoded-pixel recomputation:
+    // channel pixel-level checks, atlas/frame pixel equivalence, etc.
+    (void)options.verify_pixel_hashes;
 
     // Package identity already verified by reader (parse + canonicalize + recompute).
     // Encoded artifact hashes, path confinement, symlink safety, byte sizes, and
