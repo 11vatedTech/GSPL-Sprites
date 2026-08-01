@@ -334,14 +334,32 @@ Projection2dDefinition synthesize_morphology_projection2d(
     }
   };
 
-  // Resolve part color: use part's own color, fallback to palette based on emissive/electrical flags
+  const bool is_storm_form = (form_id == "storm");
+
+  // Resolve part color: use part's own color, fallback to palette based on emissive/electrical flags.
+  // Storm form applies a palette-based tint so transformation produces visually distinct frames.
   auto resolve_color = [&](const MorphologyPart& part, bool is_eye_or_ear) -> std::uint32_t {
+    std::uint32_t base_color;
     if (!part.color.empty() && part.color[0] == '#' && part.color.size() == 7) {
-      return hex_color(part.color);
+      base_color = hex_color(part.color);
+    } else if (part.emissive || part.electrical_marking || is_eye_or_ear) {
+      base_color = palette.accent;
+    } else {
+      base_color = palette.primary;
     }
-    if (part.emissive || part.electrical_marking || is_eye_or_ear)
-      return palette.accent;
-    return palette.primary;
+    if (is_storm_form && base_color != 0xFFFFFFFF) {
+      // Blend 35% of the storm palette primary (visually distinct cyan accent) into base color
+      auto blend_ch = [](std::uint32_t bc, std::uint32_t tc, int shift) -> std::uint8_t {
+        int b = (bc >> shift) & 0xFF, t = (tc >> shift) & 0xFF;
+        return static_cast<std::uint8_t>(std::min(255, b + (t - b) * 35 / 100));
+      };
+      std::uint32_t tint = palette.primary;  // for storm form, palette.primary is the accent cyan
+      return (blend_ch(base_color, tint, 24) << 24) |
+             (blend_ch(base_color, tint, 16) << 16) |
+             (blend_ch(base_color, tint, 8)  << 8)  |
+             (base_color & 0xFF);  // preserve original alpha
+    }
+    return base_color;
   };
 
   // Find a clip: try form-prefixed exact match first, then substring fallback
