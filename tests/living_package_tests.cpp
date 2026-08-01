@@ -166,6 +166,28 @@ int main() try {
       check(!pkg.base_morphology.empty(), "reconstructed base morphology");
       check(!pkg.storm_morphology.empty(), "reconstructed storm morphology");
       check(pkg.transformation_morphologies.size() == 10, "reconstructed 10 trans morphs");
+
+      // Typed frame-hash records
+      check(pkg.frame_hash_records.size() == 48, "typed frame_hash_records: 48 records");
+      std::set<std::string> fhr_fids;
+      for (auto const& fhr : pkg.frame_hash_records) {
+        check(!fhr.frame_id.empty(), "typed fhr: frame_id nonempty");
+        check(fhr.frame_hash.size() == 64, "typed fhr: frame_hash is 64 chars");
+        check(!fhr_fids.contains(fhr.frame_id), "typed fhr: unique frame_id");
+        fhr_fids.insert(fhr.frame_id);
+      }
+      check(fhr_fids == expected_frame_ids, "typed fhr: frame IDs match expected");
+
+      // Typed pose-hash records
+      check(pkg.pose_hash_records.size() == 48, "typed pose_hash_records: 48 records");
+      std::set<std::string> phr_keys;
+      for (auto const& phr : pkg.pose_hash_records) {
+        check(!phr.clip_id.empty(), "typed phr: clip_id nonempty");
+        check(phr.pose_hash.size() == 64, "typed phr: pose_hash is 64 chars");
+        auto key = phr.clip_id + "|" + std::to_string(phr.frame_index);
+        check(!phr_keys.contains(key), "typed phr: unique clip+frame_index");
+        phr_keys.insert(key);
+      }
     }
   }
 

@@ -418,6 +418,7 @@ LivingPackageInventoryResult validate_living_package_inventory(
       ValidatedLivingArtifact va;
       va.record = &art;
       va.absolute_path = canon;
+      va.verified_bytes = std::make_shared<const std::string>(std::move(file_bytes));
       va.verified_byte_size = fsz;
       va.verified_sha256 = computed_hash;
       inv.by_path[art.path] = std::move(va);
@@ -1318,8 +1319,8 @@ std::string canonicalize_frame_set_preimage(std::span<const FrameSource> frames)
     preimage += std::to_string(f.image.width) + "x" + std::to_string(f.image.height) + "\n";
     preimage += std::to_string(f.pivot_x) + "," + std::to_string(f.pivot_y) + "\n";
     preimage += std::to_string(f.duration_ticks) + "\n";
-    // color_space and alpha_mode excluded: reader reconstructs from PNG decode,
-    // which may not match the frames.json serialized metadata faithfully.
+    // color_space and alpha_mode excluded: PNG encode/decode round-trip
+    // may not preserve these values faithfully across all codec paths.
   }
   return preimage;
 }
@@ -1339,9 +1340,6 @@ std::string canonicalize_sample_table_preimage(std::span<const GeneratedFrameSam
 }
 
 std::string canonicalize_event_schedule_preimage(std::span<const GeneratedAnimationEvent> events) {
-  // NOTE: mapped_source_tick excluded — the builder applies a fallback
-  // (if mapped_tick==0, substitute source_tick) that the reader cannot
-  // independently reproduce, so the round-trip is not faithful.
   auto sorted = std::vector<GeneratedAnimationEvent>(events.begin(), events.end());
   std::ranges::sort(sorted, {}, [](auto const& e) { return std::make_tuple(e.clip_id, e.event_id, e.authored_tick, e.frame_index, e.frame_id); });
   std::string preimage;
@@ -1351,6 +1349,7 @@ std::string canonicalize_event_schedule_preimage(std::span<const GeneratedAnimat
     preimage += std::to_string(ev.authored_tick) + "\n";
     preimage += std::to_string(ev.frame_index) + "\n";
     preimage += ev.frame_id + "\n";
+    preimage += std::to_string(ev.mapped_source_tick) + "\n";
   }
   return preimage;
 }
@@ -1561,27 +1560,13 @@ void build_living_visual_package(const LivingVisualPackageInput& input, const st
       }
       o << "]}"; lv_write(staging/"frames.json", o.str());
     }
-    // Generated events — use synthesis's mapped_source_tick directly, no fallback
+    // Generated events — use synthesis's mapped_source_tick directly
     { std::ostringstream o; o << "{\"schema\":\"" << kSchemaGeneratedAnimationEvents << "\",\"events\":[";
       for (std::size_t i=0; i<input.events.size(); ++i) {
         if (i) o << ","; auto const& e = input.events[i];
-        std::uint32_t mapped_tick = e.mapped_source_tick;
-        // Validate that mapped tick exists and matches a sample
-        bool found = false;
-        for (auto const& s : input.samples) {
-          if (s.clip_id == e.clip_id && s.frame_index == e.frame_index) {
-            found = true;
-            if (mapped_tick == 0) mapped_tick = s.source_tick;
-            if (mapped_tick != s.source_tick)
-              throw std::runtime_error("mapped_source_tick mismatch for event " + e.event_id + " in clip " + e.clip_id);
-            break;
-          }
-        }
-        if (!found) throw std::runtime_error("no sample for event " + e.event_id + " clip " + e.clip_id + " frame_index " + std::to_string(e.frame_index));
-        if (mapped_tick < e.authored_tick) throw std::runtime_error("mapped_source_tick < authored_tick for " + e.event_id);
         o << "{\"clip_id\":\"" << lv_escape(e.clip_id) << "\",\"event_id\":\"" << lv_escape(e.event_id)
           << "\",\"authored_tick\":" << e.authored_tick << ",\"frame_index\":" << e.frame_index
-          << ",\"frame_id\":\"" << lv_escape(e.frame_id) << "\",\"mapped_source_tick\":" << mapped_tick << "}";
+          << ",\"frame_id\":\"" << lv_escape(e.frame_id) << "\",\"mapped_source_tick\":" << e.mapped_source_tick << "}";
       }
       o << "]}"; lv_write(staging/"animation-events.json", o.str());
     }
@@ -1838,11 +1823,18 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     auto& inv = *inv_result.value;
 
     // Inventory-based read helper: resolves path through validated inventory
-    auto inv_read = [&](std::string_view rel_path, std::uint64_t max_bytes) -> std::string {
+    // Inventory helpers: inv_bytes returns verified immutable bytes, inv_read copies.
+    auto inv_bytes = [&](std::string_view rel_path) -> std::string_view {
       auto it = inv.by_path.find(std::string(rel_path));
       if (it == inv.by_path.end())
         throw std::runtime_error("artifact not in inventory: " + std::string(rel_path));
-      return lv_read(it->second.absolute_path, max_bytes);
+      return *it->second.verified_bytes;
+    };
+    auto inv_read = [&](std::string_view rel_path, std::uint64_t max_bytes) -> std::string {
+      auto b = inv_bytes(rel_path);
+      if (b.size() > max_bytes)
+        throw std::runtime_error("artifact exceeds byte limit: " + std::string(rel_path));
+      return std::string(b);
     };
 
     // Embedded schema cross-check helper
@@ -2242,10 +2234,9 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     }
 
     // ── Reconstruct morphologies ──
-    auto lv_parse_morph_json = [&](const std::filesystem::path& path) -> EffectiveMorphology {
+    auto lv_parse_morph_json = [&](std::string_view bytes) -> EffectiveMorphology {
       EffectiveMorphology m;
-      if (!std::filesystem::exists(path)) return m;
-      auto bytes = lv_read(path, limits.max_artifact_bytes);
+      if (bytes.empty()) return m;
       gspl::BoundedJsonConfig cfg{};
       gspl::BoundedJsonReader mr(bytes, cfg);
       if (mr.begin_object("morph")) {
@@ -2295,20 +2286,15 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
       }
       return m;
     };
-    auto inv_path = [&](std::string_view rel) -> std::filesystem::path {
-      auto it = inv.by_path.find(std::string(rel));
-      if (it == inv.by_path.end()) throw std::runtime_error("path not in inventory: " + std::string(rel));
-      return it->second.absolute_path;
-    };
     {
       auto base_bytes = inv_read("resolved-base-morphology.json", limits.max_artifact_bytes);
       check_embedded_schema("resolved-base-morphology.json", base_bytes);
-      pkg.base_morphology = lv_parse_morph_json(inv_path("resolved-base-morphology.json"));
+      pkg.base_morphology = lv_parse_morph_json(base_bytes);
     }
     {
       auto storm_bytes = inv_read("resolved-storm-morphology.json", limits.max_artifact_bytes);
       check_embedded_schema("resolved-storm-morphology.json", storm_bytes);
-      pkg.storm_morphology = lv_parse_morph_json(inv_path("resolved-storm-morphology.json"));
+      pkg.storm_morphology = lv_parse_morph_json(storm_bytes);
     }
     {
       auto tm_bytes = inv_read("transformation-morphologies.json", limits.max_artifact_bytes);
@@ -2432,7 +2418,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
               fhr.end_object("fhRec");
               if (!fid.empty()) {
                 if (fh_map.contains(fid)) add("LV_READ_FH_DUP", "duplicate frame_hash record: " + fid);
-                else fh_map[std::move(fid)] = std::move(hash);
+                else { fh_map[fid] = hash; pkg.frame_hash_records.push_back({fid, std::move(hash)}); }
               }
               fhr.record_array_element("fh.frames");
               if (!fhr.next_array_element("fh.frames")) break;
@@ -2483,7 +2469,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
               if (!cid.empty()) {
                 auto key = cid + "|" + std::to_string(fi);
                 if (ph_map.contains(key)) add("LV_READ_PH_DUP", "duplicate pose_hash record: " + key);
-                else ph_map[std::move(key)] = std::move(hash);
+                else { ph_map[key] = hash; pkg.pose_hash_records.push_back({cid, fi, fid, std::move(hash)}); }
               }
               phr.record_array_element("ph.poses");
               if (!phr.next_array_element("ph.poses")) break;

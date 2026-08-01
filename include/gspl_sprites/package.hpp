@@ -147,6 +147,19 @@ inline constexpr std::string_view kSchemaSpriteSheet              = "gspl.sprite
 inline constexpr std::string_view kSchemaLivingVisualPackage      = "gspl.living-visual-package/0.1";
 inline constexpr std::string_view kIdentityPreimageVersion  = "gspl.living-visual-package.identity/0.1";
 
+/* ── Typed frame-hash and pose-hash records ── */
+struct FrameHashRecord {
+  std::string frame_id;
+  std::string frame_hash;
+};
+
+struct PoseHashRecord {
+  std::string clip_id;
+  std::uint32_t frame_index{};
+  std::string frame_id;
+  std::string pose_hash;
+};
+
 /* ── Fully reconstructed loaded package ── */
 struct LoadedLivingVisualPackage {
   std::string schema;
@@ -159,8 +172,10 @@ struct LoadedLivingVisualPackage {
   SpriteSeed seed;
 
   std::vector<FrameSource> frames;
+  std::vector<FrameHashRecord> frame_hash_records;
   std::vector<AnimationClip> generated_clips;
   std::vector<GeneratedFrameSample> samples;
+  std::vector<PoseHashRecord> pose_hash_records;
   std::vector<GeneratedAnimationEvent> events;
   std::vector<ChannelMap> channels;
 
@@ -193,6 +208,7 @@ struct PackageVerificationOptions {
 struct ValidatedLivingArtifact {
   const LivingPackageArtifactRecord* record{};
   std::filesystem::path absolute_path;
+  std::shared_ptr<const std::string> verified_bytes;
   std::uint64_t verified_byte_size{};
   std::string verified_sha256;
 };
