@@ -893,9 +893,12 @@ int main() {
             clip.loop = true;
             gspl::CanonicalAnimationClip::Track track;
             track.bone = "spine";
-            track.keys = {{0, "pose:idle_0"}, {30, "pose:idle_30"}, {60, "pose:idle_0"}};
+            track.keys.push_back({0, 0.0, 0.0, 0.0, 1.0, 1.0, "pose:idle_0"});
+            track.keys.push_back({30, 0.0, 0.0, 0.0, 1.0, 1.0, "pose:idle_30"});
+            track.keys.push_back({60, 0.0, 0.0, 0.0, 1.0, 1.0, "pose:idle_0"});
             clip.tracks.push_back(track);
-            clip.clip_events = {{0, "event:loop_start"}, {60, "event:loop_end"}};
+            clip.clip_events.push_back({0, "event:loop_start"});
+            clip.clip_events.push_back({60, "event:loop_end"});
             ce.clips.push_back(clip);
 
             gspl::CanonicalAnimationClip atk_clip;
@@ -903,9 +906,10 @@ int main() {
             atk_clip.loop = false;
             gspl::CanonicalAnimationClip::Track atk_track;
             atk_track.bone = "spine";
-            atk_track.keys = {{0, "pose:atk_0"}, {15, "pose:atk_15"}};
+            atk_track.keys.push_back({0, 0.0, 0.0, 0.0, 1.0, 1.0, "pose:atk_0"});
+            atk_track.keys.push_back({15, 0.0, 0.0, 0.0, 1.0, 1.0, "pose:atk_15"});
             atk_clip.tracks.push_back(atk_track);
-            atk_clip.clip_events = {{10, "event:hit"}};
+            atk_clip.clip_events.push_back({10, "event:hit"});
             ce.clips.push_back(atk_clip);
 
             // States
