@@ -1469,7 +1469,7 @@ std::string canonicalize_atlas_preimage(std::span<const AtlasPlacement> placemen
 std::string canonicalize_source_skeletal_animations_json(std::span<const SkeletalClip> clips) {
   auto sorted = std::vector<SkeletalClip>(clips.begin(), clips.end());
   std::ranges::sort(sorted, {}, &SkeletalClip::id);
-  std::string json = "{\"clips\":[";
+  std::string json = "{\"schema\":\"" + std::string(kSchemaSourceSkeletalAnimations) + "\",\"clips\":[";
   for (std::size_t i = 0; i < sorted.size(); ++i) {
     if (i) json += ",";
     auto const& c = sorted[i];
@@ -1545,9 +1545,8 @@ void build_living_visual_package(const LivingVisualPackageInput& input, const st
 
     // Source skeletal animations (canonical JSON using canonical_double)
     {
-      auto clips_json = canonicalize_source_skeletal_animations_json(input.seed.clips);
-      std::string full = "{\"schema\":\"" + std::string(kSchemaSourceSkeletalAnimations) + "\"," + clips_json.substr(1);
-      lv_write(staging/"source-skeletal-animations.json", full);
+      auto json = canonicalize_source_skeletal_animations_json(input.seed.clips);
+      lv_write(staging/"source-skeletal-animations.json", json);
     }
 
     // Generated 2D animations
