@@ -1995,7 +1995,8 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
       while (r.has_more() && !r.has_error()) {
         auto sk = r.read_string_result(); if (!sk.ok()) break;
         if (!r.require(':', "sa")) break;
-        if (*sk.value == "clips") {
+        if (*sk.value == "schema") { r.skip_value(); }
+        else if (*sk.value == "clips") {
           if (!r.begin_array("sa-clips")) break;
           while (r.has_more() && !r.has_error()) {
             if (!r.begin_object("sa-clip")) break;
@@ -2029,7 +2030,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
                           else if (*kk.value == "rotation_degrees") bkf.transform.rotation_degrees = lv_rd_dbl(r, "key.rot");
                           else if (*kk.value == "scale_x") bkf.transform.scale_x = lv_rd_dbl(r, "key.sx");
                           else if (*kk.value == "scale_y") bkf.transform.scale_y = lv_rd_dbl(r, "key.sy");
-                          else r.skip_value();
+                          else { add("LV_SOURCE_PARSE", "unknown key field: " + *kk.value); r.skip_value(); }
                           r.record_object_member("key");
                           if (!r.next_object_member("key")) break;
                         }
@@ -2039,7 +2040,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
                         if (!r.next_array_element("keys")) break;
                       }
                       r.end_array("keys");
-                    } else r.skip_value();
+                    } else { add("LV_SOURCE_PARSE", "unknown track field: " + *tk.value); r.skip_value(); }
                     r.record_object_member("track");
                     if (!r.next_object_member("track")) break;
                   }
@@ -2059,7 +2060,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
                     if (!r.require(':', "event")) break;
                     if (*ek.value == "name") ev_name = lv_rd_str(r, "event.name");
                     else if (*ek.value == "tick") ev_tick = lv_rd_u32(r, "event.tick");
-                    else r.skip_value();
+                    else { add("LV_SOURCE_PARSE", "unknown event field: " + *ek.value); r.skip_value(); }
                     r.record_object_member("event");
                     if (!r.next_object_member("event")) break;
                   }
@@ -2069,7 +2070,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
                   if (!r.next_array_element("events")) break;
                 }
                 r.end_array("events");
-              } else r.skip_value();
+              } else { add("LV_SOURCE_PARSE", "unknown clip field: " + *ck.value); r.skip_value(); }
               r.record_object_member("sa-clip");
               if (!r.next_object_member("sa-clip")) break;
             }
@@ -2079,7 +2080,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
             if (!r.next_array_element("sa-clips")) break;
           }
           r.end_array("sa-clips");
-        } else { r.skip_value(); }
+        } else { add("LV_SOURCE_PARSE", "unknown source-animation field: " + *sk.value); r.skip_value(); }
         r.record_object_member("sa");
         if (!r.next_object_member("sa")) break;
       }
