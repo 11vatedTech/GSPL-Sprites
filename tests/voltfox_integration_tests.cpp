@@ -43,10 +43,10 @@ std::string voltfox_seed_text() {
     "bone=tail|root|-4|0|0|1|1|10|-80|80\n"
     "socket=muzzle|head|8|0|0|1|1\n"
     "clip=idle|10|true\n"
-    "track=idle|head|0,4,0,-10,1,1;10,4,0,10,1,1\n"
+    "track=idle|head|0,4,0,-10,1,1;9,4,0,10,1,1\n"
     "clip_event=idle|blink|5\n"
     "clip=attack|2|false\n"
-    "track=attack|head|0,4,0,0,1,1;2,6,0,25,1,1\n"
+    "track=attack|head|0,4,0,0,1,1;1,6,0,25,1,1\n"
     "clip_event=attack|release|1\n"
     "initial_state=idle\n"
     "state=idle|idle\n"
@@ -100,6 +100,7 @@ int main() try {
   {
     const auto seed = parse_seed(voltfox_seed_text());
     const auto result = validate(seed);
+    if (!result.ok()) { for (auto const& d : result.diagnostics) std::cerr << "VOLTFOX_DIAG: " << d.code << ": " << d.message << "\n"; }
     check(result.ok(), "valid voltfox seed was rejected");
     check(seed.stable_id == "original.voltfox", "parsed stable_id mismatch");
     check(seed.name == "Voltfox", "parsed name mismatch");
