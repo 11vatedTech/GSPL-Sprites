@@ -2167,7 +2167,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     {
       auto anim_bytes = inv_read("animations-2d.json", limits.max_artifact_bytes);
       if (!check_embedded_schema("animations-2d.json", anim_bytes)) return result;
-      gspl::BoundedJsonConfig cfg{};
+      gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_object_members = 2048; cfg.max_array_length = 2048;
       gspl::BoundedJsonReader ar(anim_bytes, cfg);
       if (ar.begin_object("animations-2d")) {
         while (ar.has_more() && !ar.has_error()) {
@@ -2328,7 +2328,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     {
       auto ch_bytes = inv_read("channels.json", limits.max_artifact_bytes);
       if (!check_embedded_schema("channels.json", ch_bytes)) return result;
-      gspl::BoundedJsonConfig cfg{};
+      gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_object_members = 512; cfg.max_array_length = 512;
       gspl::BoundedJsonReader chr(ch_bytes, cfg);
       if (chr.begin_object("channels")) {
         while (chr.has_more() && !chr.has_error()) {
@@ -2381,7 +2381,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     {
       auto col_bytes = inv_read("collisions-2d.json", limits.max_artifact_bytes);
       if (!check_embedded_schema("collisions-2d.json", col_bytes)) return result;
-      gspl::BoundedJsonConfig cfg{};
+      gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_object_members = 512; cfg.max_array_length = 512;
       gspl::BoundedJsonReader cr(col_bytes, cfg);
       if (cr.begin_object("collisions")) {
         while (cr.has_more() && !cr.has_error()) {
@@ -2447,7 +2447,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     auto lv_parse_morph_json = [&](std::string_view bytes) -> EffectiveMorphology {
       EffectiveMorphology m;
       if (bytes.empty()) return m;
-      gspl::BoundedJsonConfig cfg{};
+      gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_object_members = 512; cfg.max_array_length = 512;
       gspl::BoundedJsonReader mr(bytes, cfg);
       if (mr.begin_object("morph")) {
         while (mr.has_more() && !mr.has_error()) {
@@ -2509,7 +2509,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     {
       auto tm_bytes = inv_read("transformation-morphologies.json", limits.max_artifact_bytes);
       if (!check_embedded_schema("transformation-morphologies.json", tm_bytes)) return result;
-      gspl::BoundedJsonConfig cfg{};
+      gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_object_members = 2048;
       gspl::BoundedJsonReader tmr(tm_bytes, cfg);
       if (tmr.begin_object("trans-morphs")) {
         while (tmr.has_more() && !tmr.has_error()) {
@@ -2585,7 +2585,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
       auto aj_bytes = inv_read("sheet/atlas.json", limits.max_artifact_bytes);
       if (!check_embedded_schema("sheet/atlas.json", aj_bytes)) return result;
       // Extract data field from wrapper
-      gspl::BoundedJsonConfig cfg{};
+      gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_object_members = 512;
       gspl::BoundedJsonReader ajr(aj_bytes, cfg);
       if (ajr.begin_object("atlas-wrapper")) {
         while (ajr.has_more() && !ajr.has_error()) {
@@ -2604,7 +2604,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     {
       auto fh_bytes = inv_read("frame-hashes.json", limits.max_artifact_bytes);
       if (!check_embedded_schema("frame-hashes.json", fh_bytes)) return result;
-      gspl::BoundedJsonConfig cfg{};
+      gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_object_members = 2048; cfg.max_array_length = 4096;
       gspl::BoundedJsonReader fhr(fh_bytes, cfg);
       if (fhr.begin_object("frame-hashes")) {
         std::map<std::string, std::string> fh_map;
@@ -2651,7 +2651,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     {
       auto ph_bytes = inv_read("pose-hashes.json", limits.max_artifact_bytes);
       if (!check_embedded_schema("pose-hashes.json", ph_bytes)) return result;
-      gspl::BoundedJsonConfig cfg{};
+      gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_object_members = 512; cfg.max_array_length = 512;
       gspl::BoundedJsonReader phr(ph_bytes, cfg);
       if (phr.begin_object("pose-hashes")) {
         // Key: "clip_id|frame_index" → pose_hash

@@ -550,7 +550,7 @@ int main() try {
       std::ofstream(md/"animation-events.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
       auto ml = m; refresh(ml, md, "animation-events.json"); finalize(ml, md);
       auto v = verify_living_visual_package(md);
-      check(!v.ok(), "SC9: mapped_source_tick change detected");
+      check(!v.ok() && has_diag(v, "LV_EVENT_NOT_FIRST_AT_OR_AFTER"), "SC9: LV_EVENT_NOT_FIRST_AT_OR_AFTER");
       fs::remove_all(md);
     }
     // SC11: generated authored_tick changed → LV_EVENT_AUTHORED_TICK
@@ -566,7 +566,7 @@ int main() try {
       std::ofstream(md/"animation-events.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
       auto ml = m; refresh(ml, md, "animation-events.json"); finalize(ml, md);
       auto v = verify_living_visual_package(md);
-      check(!v.ok(), "SC11: authored_tick change detected");
+      check(!v.ok() && has_diag(v, "LV_EVENT_AUTHORED_TICK"), "SC11: LV_EVENT_AUTHORED_TICK");
       fs::remove_all(md);
     }
     // SC12: source authored event tick changed → LV_EVENT_AUTHORED_TICK
@@ -574,15 +574,17 @@ int main() try {
       auto md = pkg_dir; md += "_sc12"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto sb = read_file_bytes(md/"source-skeletal-animations.json", 4ULL*1024*1024);
       std::string s(sb.begin(), sb.end());
-      auto pos = s.find("\"tick\":");
-      if (pos != std::string::npos) {
-        auto end = s.find_first_of(",}", pos);
-        s.replace(pos, end - pos, "\"tick\":999");
+      // Find a tick inside an events block (not a keyframe tick inside tracks)
+      auto ev_pos = s.find("\"events\":[");
+      auto tick_pos = (ev_pos != std::string::npos) ? s.find("\"tick\":", ev_pos) : std::string::npos;
+      if (tick_pos != std::string::npos) {
+        auto end = s.find_first_of(",}", tick_pos);
+        s.replace(tick_pos, end - tick_pos, "\"tick\":999");
       }
       std::ofstream(md/"source-skeletal-animations.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
       auto ml = m; refresh(ml, md, "source-skeletal-animations.json"); finalize(ml, md);
       auto v = verify_living_visual_package(md);
-      check(!v.ok(), "SC12: source authored event tick change detected");
+      check(!v.ok() && has_diag(v, "LV_EVENT_AUTHORED_TICK"), "SC12: LV_EVENT_AUTHORED_TICK");
       fs::remove_all(md);
     }
     // SC-positive: valid package passes after manifest refresh
