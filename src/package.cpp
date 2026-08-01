@@ -1584,11 +1584,18 @@ void build_living_visual_package(const LivingVisualPackageInput& input, const st
       }
       o << "]}"; lv_write(staging/"pose-hashes.json", o.str());
     }
-    // Frame hashes — ID-addressed records (single authority: use same FrameHashRecord vector as provenance)
-    { std::ostringstream o; o << "{\"schema\":\"" << kSchemaFrameHashes << "\",\"frames\":[";
-      for (std::size_t i=0; i<input.frames.size(); ++i) {
-        if (i) o << ","; auto const& f = input.frames[i];
-        o << "{\"frame_id\":\"" << lv_escape(f.id) << "\",\"frame_hash\":\"" << lv_escape(f.frame_hash) << "\"}";
+    // Frame hashes — single FrameHashRecord vector for serialization, validation, and provenance
+    std::string frame_hash_table_id;
+    {
+      std::vector<FrameHashRecord> fh_recs;
+      for (auto const& f : input.frames)
+        fh_recs.push_back({f.id, f.frame_hash});
+      frame_hash_table_id = compute_domain_id_impl(
+          kDomainFrameHashTable, canonicalize_frame_hash_table_preimage(fh_recs));
+      std::ostringstream o; o << "{\"schema\":\"" << kSchemaFrameHashes << "\",\"frames\":[";
+      for (std::size_t i=0; i<fh_recs.size(); ++i) {
+        if (i) o << ",";
+        o << "{\"frame_id\":\"" << lv_escape(fh_recs[i].frame_id) << "\",\"frame_hash\":\"" << lv_escape(fh_recs[i].frame_hash) << "\"}";
       }
       o << "]}"; lv_write(staging/"frame-hashes.json", o.str());
     }
@@ -1793,15 +1800,6 @@ void build_living_visual_package(const LivingVisualPackageInput& input, const st
     add_artifact("frame-samples.json", LivingArtifactKind::frame_samples,
                  {"animations-2d.json", "frames.json"}, sample_table_id);
 
-    // Frame-hash table identity (independent from frame-set)
-    std::string frame_hash_table_id;
-    {
-      std::vector<FrameHashRecord> fh_recs;
-      for (auto const& f : input.frames)
-        fh_recs.push_back({f.id, f.frame_hash});
-      frame_hash_table_id = compute_domain_id_impl(
-          kDomainFrameHashTable, canonicalize_frame_hash_table_preimage(fh_recs));
-    }
 
     // Frame hashes
     add_artifact("frame-hashes.json", LivingArtifactKind::frame_hashes,
