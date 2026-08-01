@@ -185,8 +185,8 @@ ValidationResult validate_manifest_model(const LivingPackageManifest& m, const P
     add("LV_MANIFEST_IDV", "unsupported identity version");
   if (m.entity_id.empty())
     add("LV_MANIFEST_NO_ENTITY", "missing entity ID");
-  if (m.canonical_entity_identity.empty())
-    add("LV_MANIFEST_NO_CANON", "missing canonical entity identity");
+  if (m.canonical_entity_identity.empty() || !lowercase_sha256(m.canonical_entity_identity))
+    add("LV_MANIFEST_NO_CANON", "missing or malformed canonical entity identity");
   if (!lowercase_sha256(m.seed_identity))
     add("LV_MANIFEST_SEEDID", "malformed seed identity");
   if (!m.package_identity.empty() && !lowercase_sha256(m.package_identity))
@@ -226,6 +226,20 @@ ValidationResult validate_manifest_model(const LivingPackageManifest& m, const P
   // Second pass: validate schemas, hashes, dependencies, provenance
   for (auto const& a : m.artifacts) {
     if (a.path.empty()) continue;
+
+    // Reject invalid artifact kind (out-of-range enum)
+    {
+      std::string_view ks = artifact_kind_string(a.kind);
+      if (ks.empty()) {
+        add("LV_MANIFEST_INVALID_KIND", "invalid/out-of-range artifact kind for: " + a.path);
+        continue;
+      }
+      // Check that kind string round-trips correctly
+      auto back = artifact_kind_from_string(ks);
+      if (!back || *back != a.kind)
+        add("LV_MANIFEST_INVALID_KIND", "artifact kind does not round-trip for: " + a.path);
+    }
+
     auto expected_schema = artifact_schema_for_kind(a.kind);
     if (a.schema != expected_schema)
       add("LV_MANIFEST_SCHEMA", "schema mismatch for " + a.path + ": expected '" + std::string(expected_schema) + "' got '" + a.schema + "'");
@@ -233,8 +247,8 @@ ValidationResult validate_manifest_model(const LivingPackageManifest& m, const P
     if (!lowercase_sha256(a.sha256))
       add("LV_MANIFEST_HASH", "malformed SHA-256 for: " + a.path);
 
-    if (a.provenance_identity.empty())
-      add("LV_MANIFEST_NO_PROV", "missing provenance identity for: " + a.path);
+    if (a.provenance_identity.empty() || !lowercase_sha256(a.provenance_identity))
+      add("LV_MANIFEST_NO_PROV", "missing or malformed provenance identity for: " + a.path);
 
     // Validate dependencies
     std::set<std::string> dep_set;
@@ -253,6 +267,223 @@ ValidationResult validate_manifest_model(const LivingPackageManifest& m, const P
   }
 
   return r;
+}
+
+/* ── Embedded schema extraction from JSON artifact ── */
+std::string extract_embedded_schema(std::string_view json_bytes, const PackageReadLimits& limits) {
+  gspl::BoundedJsonConfig cfg{};
+  cfg.max_object_members = 64;
+  cfg.max_input_bytes = json_bytes.size() + 1;
+  cfg.max_nesting_depth = limits.max_json_nesting;
+  gspl::BoundedJsonReader r(json_bytes, cfg);
+  if (!r.begin_object("schema-extract")) return "";
+  std::string schema;
+  while (r.has_more() && !r.has_error()) {
+    auto key = r.read_string_result();
+    if (!key.ok()) break;
+    if (!r.require(':', "schema-extract")) break;
+    if (*key.value == "schema") {
+      auto schema_result = r.read_string_result();
+      if (schema_result.ok()) schema = std::move(*schema_result.value);
+      else r.skip_value();
+    } else r.skip_value();
+    r.record_object_member("schema-extract");
+    if (!r.next_object_member("schema-extract")) break;
+  }
+  r.end_object("schema-extract");
+  return schema;
+}
+
+/* ── Path-confinement lexical validation (no filesystem access) ── */
+namespace {
+bool lexically_safe_package_path(std::string_view path, std::uint32_t max_bytes) {
+  if (path.empty() || path.size() > max_bytes) return false;
+  if (path.front() == '/' || path.back() == '/') return false;
+  if (path.find(':') != std::string_view::npos) return false;
+  if (path.find('\\') != std::string_view::npos) return false;
+  if (path.find("//") != std::string_view::npos) return false;
+  for (unsigned char c : path) if (c < 0x20 || c > 0x7e) return false;
+  std::size_t start = 0;
+  while (start < path.size()) {
+    auto end = path.find('/', start);
+    auto part = path.substr(start, end == std::string_view::npos ? path.size() - start : end - start);
+    if (part.empty() || part == "." || part == "..") return false;
+    if (part.back() == ' ' || part.back() == '.') return false;
+    if (end == std::string_view::npos) break;
+    start = end + 1;
+  }
+  return true;
+}
+} // anonymous namespace
+
+/* ── Validated artifact inventory (single authority for manifest path → OS path) ── */
+LivingPackageInventoryResult validate_living_package_inventory(
+    const std::filesystem::path& package_root,
+    const LivingPackageManifest& manifest,
+    const PackageReadLimits& limits,
+    const PackageVerificationOptions& options) {
+  LivingPackageInventoryResult result;
+  auto add = [&](std::string code, std::string msg) { result.diagnostics.diagnostics.push_back({std::move(code), std::move(msg)}); };
+
+  try {
+    auto canonical_root = std::filesystem::weakly_canonical(package_root);
+    ValidatedLivingPackageInventory inv;
+    inv.canonical_root = canonical_root;
+
+    // Phase 1: Lexical validation + inventory construction
+    for (auto const& art : manifest.artifacts) {
+      // Lexical safety
+      if (!lexically_safe_package_path(art.path, limits.max_path_bytes)) {
+        add("LV_INV_PATH_UNSAFE", "lexically unsafe artifact path: " + art.path);
+        continue;
+      }
+
+      // Build candidate absolute path
+      auto candidate = canonical_root / art.path;
+
+      // Walk every existing component for symlinks
+      bool symlink_found = false;
+      {
+        auto cur = canonical_root;
+        std::size_t start = 0;
+        while (start < art.path.size()) {
+          auto end = art.path.find('/', start);
+          auto part = art.path.substr(start, end == std::string_view::npos ? art.path.size() - start : end - start);
+          cur /= part;
+          if (std::filesystem::exists(cur)) {
+            auto st = std::filesystem::symlink_status(cur);
+            if (std::filesystem::is_symlink(st)) { symlink_found = true; break; }
+          }
+          if (end == std::string_view::npos) break;
+          start = end + 1;
+        }
+      }
+      if (symlink_found && options.require_no_symlinks) {
+        add("LV_INV_SYMLINK", "symlink in artifact path: " + art.path);
+        continue;
+      }
+
+      // Final path confinement: canonicalize and prove stays under root
+      auto canon = std::filesystem::weakly_canonical(candidate);
+      auto cs = canon.string();
+      auto rs = canonical_root.string();
+      if (cs.size() < rs.size() || cs.compare(0, rs.size(), rs) != 0) {
+        add("LV_INV_PATH_ESCAPE", "path escapes package root: " + art.path);
+        continue;
+      }
+      if (cs.size() > rs.size() && cs[rs.size()] != '/' && cs[rs.size()] != '\\') {
+        add("LV_INV_PATH_ESCAPE", "path escapes package root: " + art.path);
+        continue;
+      }
+
+      // Must exist and be regular file
+      if (!std::filesystem::is_regular_file(canon)) {
+        add("LV_INV_MISSING", "declared artifact missing: " + art.path);
+        continue;
+      }
+
+      // Verify byte size
+      auto fsz = std::filesystem::file_size(canon);
+      if (fsz != art.byte_size) {
+        add("LV_INV_SIZE", "byte size mismatch: " + art.path);
+        continue;
+      }
+
+      // Enforce byte limits
+      if (fsz > limits.max_artifact_bytes) {
+        add("LV_INV_ARTIFACT_LIMIT", "artifact exceeds byte limit: " + art.path);
+        continue;
+      }
+      if (inv.total_artifact_bytes > limits.max_total_bytes - fsz) {
+        add("LV_INV_TOTAL_LIMIT", "total package byte limit exceeded");
+        continue;
+      }
+      inv.total_artifact_bytes += fsz;
+
+      // Enforce artifact count
+      if (inv.by_path.size() >= limits.max_artifacts) {
+        add("LV_INV_COUNT_LIMIT", "artifact count exceeds limit");
+        break;
+      }
+
+      // Read and verify SHA-256
+      auto file_bytes = read_bounded(canon, limits.max_artifact_bytes);
+      auto computed_hash = sha256(file_bytes);
+      if (computed_hash != art.sha256) {
+        add("LV_INV_HASH", "artifact hash mismatch: " + art.path);
+        continue;
+      }
+
+      // Register
+      ValidatedLivingArtifact va;
+      va.record = &art;
+      va.absolute_path = canon;
+      va.verified_byte_size = fsz;
+      va.verified_sha256 = computed_hash;
+      inv.by_path[art.path] = std::move(va);
+      inv.paths_by_kind.insert({art.kind, art.path});
+    }
+
+    // Phase 2: Directory enumeration (undeclared files, entry limits, symlinks)
+    std::set<std::string> actual_files;
+    try {
+      for (auto const& entry : std::filesystem::recursive_directory_iterator(canonical_root)) {
+        if (++inv.directory_entry_count > limits.max_directory_entries) {
+          add("LV_INV_ENTRY_LIMIT", "directory entry count exceeds limit");
+          break;
+        }
+
+        auto st = entry.symlink_status();
+        if (std::filesystem::is_symlink(st)) {
+          if (options.require_no_symlinks) {
+            auto rel = entry.path().lexically_relative(canonical_root).generic_string();
+            add("LV_INV_SYMLINK_ENTRY", "symlink in package tree: " + rel);
+          }
+          continue;
+        }
+
+        if (entry.is_regular_file()) {
+          auto rel = entry.path().lexically_relative(canonical_root).generic_string();
+          if (rel != "manifest.json")
+            actual_files.insert(rel);
+        } else if (entry.is_directory()) {
+          // allow directories
+        } else {
+          auto rel = entry.path().lexically_relative(canonical_root).generic_string();
+          add("LV_INV_SPECIAL", "special/non-regular file in package: " + rel);
+        }
+      }
+    } catch (...) {
+      add("LV_INV_ENUM_ERR", "directory enumeration failed");
+    }
+
+    // Phase 3: File-set equality
+    std::set<std::string> declared_paths;
+    for (auto const& art : manifest.artifacts) declared_paths.insert(art.path);
+
+    // Check for missing declared files (those not in inventory)
+    for (auto const& dp : declared_paths) {
+      if (!inv.by_path.contains(dp))
+        add("LV_INV_DECLARED_MISSING", "declared artifact not found on disk: " + dp);
+    }
+
+    // Check for undeclared files
+    if (options.require_no_undeclared_files) {
+      for (auto const& af : actual_files) {
+        if (!declared_paths.contains(af))
+          add("LV_INV_UNDECLARED", "undeclared file: " + af);
+      }
+    }
+
+    // Check for declared but missing files from actual set
+    // (actual_files - declared_paths handled by LV_INV_UNDECLARED above;
+    //  declared_paths - actual_files handled by LV_INV_DECLARED_MISSING above;
+    //  inventory vs. actual mismatch is an internal invariant; we trust the inventory)
+
+    if (!result.diagnostics.ok()) return result;
+    result.value = std::move(inv);
+  } catch (std::exception const& e) { add("LV_INV_ERROR", e.what()); }
+  return result;
 }
 
 PackageVerification verify_package(const std::filesystem::path& root, const PackageLimits& limits) {
@@ -1243,7 +1474,7 @@ void build_living_visual_package(const LivingVisualPackageInput& input, const st
     manifest.format = std::string(kSchemaLivingVisualPackage);
     manifest.identity_version = std::string(kIdentityPreimageVersion);
     manifest.entity_id = input.seed.stable_id;
-    manifest.canonical_entity_identity = sha256(std::string("gspl.canonical-entity.identity/0.1\n") + seed_id);
+    manifest.canonical_entity_identity = sha256(std::string("gspl.canonical-entity.identity/0.1\n") + seed_json);
     manifest.seed_identity = seed_id;
     manifest.frame_count = static_cast<std::uint32_t>(input.frames.size());
     manifest.clip_count = static_cast<std::uint32_t>(input.generated_clips.size());
@@ -1417,6 +1648,19 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     pkg.seed_identity = m.seed_identity;
     pkg.package_identity = m.package_identity;
     pkg.manifest = std::move(m);
+
+    // ── Validate artifact inventory (path confinement, byte sizes, SHA-256, file-set equality) ──
+    PackageVerificationOptions inv_opts{};
+    inv_opts.require_no_symlinks = true;
+    inv_opts.require_no_undeclared_files = true;
+    auto inv_result = validate_living_package_inventory(package_path, pkg.manifest, limits, inv_opts);
+    if (!inv_result.ok()) {
+      for (auto const& d : inv_result.diagnostics.diagnostics)
+        add(d.code, d.message);
+      return result;  // Stop before any semantic artifact access
+    }
+    auto& inv = *inv_result.value;
+    (void)inv;  // inventory validated; all paths have passed confinement + hash checks
 
     // ── Load and parse seed ──
     auto seed_wrapper = lv_read(package_path/"seed.json", limits.max_artifact_bytes);
@@ -1681,30 +1925,6 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
         }
       }
     }
-
-    // ── Path confinement helper: reject hostile paths before filesystem access ──
-    auto safe_package_subpath = [&](std::string_view rel) -> bool {
-      if (rel.empty() || rel.size() > limits.max_path_bytes) return false;
-      if (rel[0] == '/' || rel[0] == '\\') return false;
-      if (rel.find(":") != std::string_view::npos) return false;
-      if (rel.find("\\") != std::string_view::npos) return false;
-      std::size_t s = 0;
-      while (s < rel.size()) {
-        auto e = rel.find('/', s);
-        auto part = rel.substr(s, e == std::string_view::npos ? rel.size()-s : e-s);
-        if (part.empty() || part == "." || part == "..") return false;
-        if (part.back() == ' ' || part.back() == '.') return false;
-        if (e == std::string_view::npos) break;
-        s = e + 1;
-      }
-      auto full = package_path / rel;
-      auto canon = std::filesystem::weakly_canonical(full);
-      auto root_canon = std::filesystem::weakly_canonical(package_path);
-      std::string cs = canon.string(), rs = root_canon.string();
-      if (cs.size() < rs.size() || cs.substr(0, rs.size()) != rs) return false;
-      if (cs.size() > rs.size() && cs[rs.size()] != '/' && cs[rs.size()] != '\\') return false;
-      return true;
-    };
 
     // ── Reconstruct channels ──
     if (std::filesystem::exists(package_path/"channels.json")) {
@@ -2191,14 +2411,25 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
       add("LV_VERIFY_CSHAPE_CNT", "collision shape count mismatch");
     if (result.collision_window_count != pkg.manifest.collision_window_count)
       add("LV_VERIFY_CWIN_CNT", "collision window count mismatch");
+    if (static_cast<std::uint32_t>(pkg.transformation_morphologies.size()) != pkg.manifest.transformation_morphology_count)
+      add("LV_VERIFY_TRANSMORPH_CNT", "transformation morphology count mismatch");
 
     // Governance counts
     if (result.frame_count != 48) add("LV_VERIFY_FRAME_COUNT", "expected 48 frames");
     if (result.clip_count != 9) add("LV_VERIFY_CLIP_COUNT", "expected 9 clips");
     if (result.sample_count != 48) add("LV_VERIFY_SAMPLE_COUNT", "expected 48 samples");
 
+    // ── Semantic provenance verification (recomputed from reconstructed content) ──
+    if (options.verify_pixel_hashes) {
+      auto recomputed_canonical_entity = sha256(std::string(kDomainCanonicalEntity) + "\n" + canonicalize(pkg.seed));
+      if (recomputed_canonical_entity != pkg.manifest.canonical_entity_identity)
+        add("LV_PROV_CANONICAL_ENTITY", "canonical entity identity mismatch");
+    }
+    if (pkg.manifest.transformation_morphology_count != 10)
+      add("LV_VERIFY_TRANSMORPH_COUNT", "expected 10 transformation morphologies");
+
     // Package identity already verified by reader (parse + canonicalize + recompute)
-    // Verify encoded artifact hashes from typed manifest records
+    // Verify encoded artifact hashes from typed manifest records (inventory-verified paths)
     {
       std::set<std::string> declared;
       for (auto const& art : pkg.manifest.artifacts) {

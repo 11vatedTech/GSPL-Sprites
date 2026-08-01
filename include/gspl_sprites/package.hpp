@@ -189,6 +189,55 @@ struct PackageVerificationOptions {
   bool require_no_undeclared_files{true};
 };
 
+/* ── Validated artifact inventory ── */
+struct ValidatedLivingArtifact {
+  const LivingPackageArtifactRecord* record{};
+  std::filesystem::path absolute_path;
+  std::uint64_t verified_byte_size{};
+  std::string verified_sha256;
+};
+
+struct ValidatedLivingPackageInventory {
+  std::filesystem::path canonical_root;
+  std::map<std::string, ValidatedLivingArtifact> by_path;
+  std::multimap<LivingArtifactKind, std::string> paths_by_kind;
+  std::uint64_t total_artifact_bytes{};
+  std::uint32_t directory_entry_count{};
+};
+
+struct LivingPackageInventoryResult {
+  std::optional<ValidatedLivingPackageInventory> value;
+  ValidationResult diagnostics;
+  [[nodiscard]] bool ok() const noexcept { return value.has_value() && diagnostics.ok(); }
+};
+
+[[nodiscard]] LivingPackageInventoryResult validate_living_package_inventory(
+    const std::filesystem::path& package_root,
+    const LivingPackageManifest& manifest,
+    const PackageReadLimits& limits,
+    const PackageVerificationOptions& options);
+
+/* ── Diagnostic test helper ── */
+[[nodiscard]] inline bool has_diagnostic(const ValidationResult& result, std::string_view code) {
+  return std::ranges::any_of(result.diagnostics, [&](auto const& d) { return d.code == code; });
+}
+
+/* ── Semantic provenance identity domains ── */
+inline constexpr std::string_view kDomainCanonicalEntity  = "gspl.canonical-entity.identity/0.1";
+inline constexpr std::string_view kDomainFrameSet         = "gspl.frame-set.identity/0.1";
+inline constexpr std::string_view kDomainSourceAnimSet    = "gspl.source-animation-set.identity/0.1";
+inline constexpr std::string_view kDomainGeneratedClipSet = "gspl.generated-clip-set.identity/0.1";
+inline constexpr std::string_view kDomainSampleTable      = "gspl.sample-table.identity/0.1";
+inline constexpr std::string_view kDomainPoseTable        = "gspl.pose-table.identity/0.1";
+inline constexpr std::string_view kDomainEventSchedule    = "gspl.event-schedule.identity/0.1";
+inline constexpr std::string_view kDomainChannelSet       = "gspl.channel-set.identity/0.1";
+inline constexpr std::string_view kDomainCollisionSet     = "gspl.collision-set.identity/0.1";
+inline constexpr std::string_view kDomainMorphologySet    = "gspl.morphology-set.identity/0.1";
+inline constexpr std::string_view kDomainSpriteAtlas      = "gspl.sprite-atlas.identity/0.1";
+
+/* ── Embedded schema extraction ── */
+[[nodiscard]] std::string extract_embedded_schema(std::string_view json_bytes, const PackageReadLimits& limits);
+
 struct LivingVisualPackageVerificationResult {
   ValidationResult validation;
   std::string package_identity;
