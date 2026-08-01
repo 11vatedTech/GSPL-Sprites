@@ -1304,6 +1304,36 @@ int main() {
                 r.skip_value();
                 check(!r.has_error(), "DEF-0014: 3 elements at limit 3 should succeed");
             }
+
+            // max_tokens: token-budget accounting — limit-1, limit, limit+1
+            {
+                gspl::BoundedJsonConfig cfg;
+                cfg.max_tokens = 5;  // {"a":1,"b":2} = { "a" : 1 , "b" : 2 } = 11 tokens
+
+                // under-limit: 5-token JSON {"a":1} (tokens: { "a" : 1 }) should succeed
+                std::string under = "{\"a\":1}";
+                gspl::BoundedJsonReader r1(under, cfg);
+                r1.skip_value();
+                check(!r1.has_error(), "DEF-0014: 5 tokens at limit 5 should succeed");
+
+                // over-limit: 11-token JSON {"a":1,"b":2} should fail
+                cfg.max_tokens = 5;
+                std::string over = "{\"a\":1,\"b\":2}";
+                gspl::BoundedJsonReader r2(over, cfg);
+                r2.skip_value();
+                check(r2.has_error(), "DEF-0014: 11 tokens over limit 5 should fail");
+                check(r2.error_message().find("token budget exhausted") != std::string::npos,
+                      "DEF-0014: token budget exhausted diagnostic");
+
+                // verify token_count() accessor
+                gspl::BoundedJsonConfig cfg2;
+                cfg2.max_tokens = 0;  // unlimited
+                std::string json = "{\"x\":[1,true,null]}";
+                gspl::BoundedJsonReader r3(json, cfg2);
+                r3.skip_value();
+                check(!r3.has_error(), "DEF-0014: unlimited tokens should succeed");
+                check(r3.token_count() > 0, "DEF-0014: token_count() reports consumed tokens");
+            }
         }
 
         // ---- 23. DEF-0015: Malformed-input tests for production deserializers ----
