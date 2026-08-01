@@ -2,6 +2,7 @@
 
 #include "gspl_sprites/animation.hpp"
 #include "gspl_sprites/animation3d.hpp"
+#include "gspl_sprites/animation_sampling.hpp"
 #include "gspl_sprites/channel_map.hpp"
 #include "gspl_sprites/projection25d.hpp"
 #include "gspl_sprites/projection3d.hpp"
@@ -1697,30 +1698,18 @@ LivingAnimation2dBuildResult synthesize_living_animation2d(const SpriteSeed& see
         } else {
           geclip_id = std::string(entity_id) + ".transform";
         }
-        // True first-at-or-after: select min(source_tick, frame_index, frame_id)
-        // among retained samples with source_tick >= authored_tick for this clip.
-        const GeneratedFrameSample* selected = nullptr;
-        for (auto const& smp : result.samples) {
-          if (smp.clip_id == geclip_id && smp.source_tick >= ev_tick) {
-            if (!selected ||
-                std::make_tuple(smp.source_tick, smp.frame_index, smp.frame_id) <
-                std::make_tuple(selected->source_tick, selected->frame_index, selected->frame_id)) {
-              selected = &smp;
-            }
-          }
-        }
-        if (selected) {
-          events.push_back({ev_name, selected->frame_index});
+        // True first-at-or-after via shared temporal selector
+        auto sel = select_first_retained_sample_at_or_after(result.samples, geclip_id, ev_tick);
+        if (sel) {
+          events.push_back({ev_name, sel->get().frame_index});
           GeneratedAnimationEvent gen_ev;
           gen_ev.clip_id = geclip_id;
           gen_ev.event_id = ev_name;
           gen_ev.authored_tick = ev_tick;
-          gen_ev.frame_index = selected->frame_index;
-          gen_ev.frame_id = selected->frame_id;
-          gen_ev.mapped_source_tick = selected->source_tick;
+          gen_ev.frame_index = sel->get().frame_index;
+          gen_ev.frame_id = sel->get().frame_id;
+          gen_ev.mapped_source_tick = sel->get().source_tick;
           result.generated_events.push_back(std::move(gen_ev));
-        } else {
-          add("EVENT_NO_SAMPLE", std::string(ev_name) + ": no retained sample with source_tick >= " + std::to_string(ev_tick));
         }
       }
     }
