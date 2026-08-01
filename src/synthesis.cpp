@@ -1697,34 +1697,47 @@ LivingAnimation2dBuildResult synthesize_living_animation2d(const SpriteSeed& see
         } else {
           geclip_id = std::string(entity_id) + ".transform";
         }
-        // Find the sample matching this tick (exact, or first after)
-        std::uint32_t fi = entry.output_frame_count - 1; // default to last
+        // Find the sample matching this tick (exact, or first at-or-after)
+        std::uint32_t fi = entry.output_frame_count - 1;
         std::string geframe_id;
+        std::uint32_t mapped_tick = 0;
+        bool found_exact = false;
         for (auto const& smp : result.samples) {
           if (smp.clip_id == geclip_id) {
             if (smp.source_tick == ev_tick) {
               fi = smp.frame_index;
               geframe_id = smp.frame_id;
+              mapped_tick = smp.source_tick;
+              found_exact = true;
               break;
             }
-            if (smp.source_tick > ev_tick && smp.frame_index < fi) {
+            if (!found_exact && smp.source_tick > ev_tick && smp.frame_index < fi) {
               fi = smp.frame_index;
               geframe_id = smp.frame_id;
+              mapped_tick = smp.source_tick;
             }
           }
         }
-        // If no sample found after event tick, use last sample (valid endpoint)
+        // If no sample found at-or-after event tick, use last sample
         if (geframe_id.empty()) {
           for (auto const& smp : result.samples) {
             if (smp.clip_id == geclip_id && smp.frame_index == entry.output_frame_count - 1) {
               geframe_id = smp.frame_id;
+              mapped_tick = smp.source_tick;
               break;
             }
           }
         }
         if (fi < entry.output_frame_count && !geframe_id.empty()) {
           events.push_back({ev_name, fi});
-          result.generated_events.push_back({geclip_id, ev_name, ev_tick, fi, geframe_id});
+          GeneratedAnimationEvent gen_ev;
+          gen_ev.clip_id = geclip_id;
+          gen_ev.event_id = ev_name;
+          gen_ev.authored_tick = ev_tick;
+          gen_ev.frame_index = fi;
+          gen_ev.frame_id = geframe_id;
+          gen_ev.mapped_source_tick = mapped_tick;
+          result.generated_events.push_back(std::move(gen_ev));
         }
       }
     }

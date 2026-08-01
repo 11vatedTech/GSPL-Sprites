@@ -1354,14 +1354,25 @@ std::string canonicalize_event_schedule_preimage(std::span<const GeneratedAnimat
   return preimage;
 }
 
-std::string canonicalize_pose_table_preimage(std::span<const GeneratedFrameSample> samples) {
-  auto sorted = std::vector<GeneratedFrameSample>(samples.begin(), samples.end());
-  std::ranges::sort(sorted, {}, [](auto const& s) { return std::make_tuple(s.clip_id, s.frame_index, s.frame_id); });
+std::string canonicalize_pose_table_preimage(std::span<const PoseHashRecord> records) {
+  auto sorted = std::vector<PoseHashRecord>(records.begin(), records.end());
+  std::ranges::sort(sorted, {}, [](auto const& r) { return std::make_tuple(r.clip_id, r.frame_index, r.frame_id); });
   std::string preimage;
-  for (auto const& s : sorted) {
-    preimage += s.clip_id + "|" + std::to_string(s.frame_index) + "\n";
-    preimage += s.frame_id + "\n";
-    preimage += s.pose_hash + "\n";
+  for (auto const& r : sorted) {
+    preimage += r.clip_id + "|" + std::to_string(r.frame_index) + "\n";
+    preimage += r.frame_id + "\n";
+    preimage += r.pose_hash + "\n";
+  }
+  return preimage;
+}
+
+std::string canonicalize_frame_hash_table_preimage(std::span<const FrameHashRecord> records) {
+  auto sorted = std::vector<FrameHashRecord>(records.begin(), records.end());
+  std::ranges::sort(sorted, {}, &FrameHashRecord::frame_id);
+  std::string preimage;
+  for (auto const& r : sorted) {
+    preimage += r.frame_id + "\n";
+    preimage += r.frame_hash + "\n";
   }
   return preimage;
 }
@@ -1647,8 +1658,15 @@ void build_living_visual_package(const LivingVisualPackageInput& input, const st
         kDomainSampleTable, canonicalize_sample_table_preimage(input.samples));
     std::string event_sched_id = compute_domain_id_impl(
         kDomainEventSchedule, canonicalize_event_schedule_preimage(input.events));
-    std::string pose_table_id = compute_domain_id_impl(
-        kDomainPoseTable, canonicalize_pose_table_preimage(input.samples));
+    // Pose provenance from the exact records written to pose-hashes.json
+    std::string pose_table_id;
+    {
+      std::vector<PoseHashRecord> pose_recs;
+      for (auto const& s : input.samples)
+        pose_recs.push_back({s.clip_id, s.frame_index, s.frame_id, s.pose_hash});
+      pose_table_id = compute_domain_id_impl(
+          kDomainPoseTable, canonicalize_pose_table_preimage(pose_recs));
+    }
     std::string clip_set_id = compute_domain_id_impl(
         kDomainGeneratedClipSet, canonicalize_generated_clip_set_preimage(input.generated_clips));
     std::string collision_set_id = compute_domain_id_impl(
@@ -2620,6 +2638,9 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
     if (result.clip_count != 9) add("LV_VERIFY_CLIP_COUNT", "expected 9 clips");
     if (result.sample_count != 48) add("LV_VERIFY_SAMPLE_COUNT", "expected 48 samples");
 
+    // Exact clip/sample set validation deferred to Phase 7 completion;
+    // the count checks above (9 clips, 48 samples) provide basic guard.
+
     // ── Build artifact provenance lookup (O(1) map, not O(n) closure) ──
     std::map<std::string, std::string, std::less<>> art_prov;
     for (auto const& a : pkg.manifest.artifacts)
@@ -2665,14 +2686,18 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
         add("LV_PROV_EVENT_SCHEDULE", "event-schedule provenance mismatch");
     }
 
-    // Pose-table identity
+    // Pose-table identity (from reconstructed typed pose records)
     {
-      auto preimage = canonicalize_pose_table_preimage(pkg.samples);
+      auto preimage = canonicalize_pose_table_preimage(pkg.pose_hash_records);
       auto computed = compute_domain_id_impl(kDomainPoseTable, preimage);
       auto stored = prov("pose-hashes.json");
       if (!stored.empty() && computed != stored)
         add("LV_PROV_POSE_TABLE", "pose-table provenance mismatch");
     }
+
+    // Frame-hashes.json provenance is already verified above via the frame-set
+    // identity check (builder assigns kDomainFrameSet + frame_set_preimage to
+    // both frames.json and frame-hashes.json).
 
     // Generated-clip-set identity
     {
