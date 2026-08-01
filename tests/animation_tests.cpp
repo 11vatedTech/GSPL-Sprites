@@ -15,8 +15,8 @@ int main() {
     const std::array vertices{SkinnedVertex{0,0,{{"root",1.0}}},SkinnedVertex{4,0,{{"root",0.25},{"head",0.75}}}}; check(validate_skin(vertices,rig).ok(), "valid skin rejected");
     auto bad_vertices=vertices; bad_vertices[1].influences[1].weight=0.5; check(!validate_skin(bad_vertices,rig).ok(), "invalid weight sum accepted");
 
-    const SkeletalClip idle{"idle",10,true,{{"head",{{0,{4,0,350,1,1}},{10,{4,0,10,1,1}}}}},{{"blink",5}}};
-    const SkeletalClip attack{"attack",6,false,{{"head",{{0,{4,0,0,1,1}},{6,{6,0,25,1,1}}}}},{{"release",3}}};
+    const SkeletalClip idle{"idle",11,true,{{"head",{{0,{4,0,350,1,1}},{10,{4,0,10,1,1}}}}},{{"blink",5}}};
+    const SkeletalClip attack{"attack",6,false,{{"head",{{0,{4,0,0,1,1}},{5,{6,0,25,1,1}}}}},{{"release",3}}};
     check(validate_skeletal_clip(idle,rig).ok() && validate_skeletal_clip(attack,rig).ok(), "valid clip rejected");
     const auto middle=sample_track(idle.tracks[0],5); check(std::abs(middle.rotation_degrees-360.0)<1e-9, "angle did not interpolate shortest path");
     auto bad_clip=idle; bad_clip.tracks[0].keys[1].tick=0; check(!validate_skeletal_clip(bad_clip,rig).ok(), "unordered keys accepted");
