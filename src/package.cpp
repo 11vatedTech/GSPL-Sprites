@@ -1402,8 +1402,8 @@ std::string canonicalize_collision_set_preimage(std::span<const CollisionShape> 
     preimage += s.id + "\n";
     preimage += std::to_string(static_cast<int>(s.kind)) + "\n";
     preimage += s.bone_id + "\n";
-    preimage += std::to_string(s.offset_x) + "," + std::to_string(s.offset_y) + "\n";
-    preimage += std::to_string(s.extent_x) + "," + std::to_string(s.extent_y) + "\n";
+    preimage += canonical_double(s.offset_x) + "," + canonical_double(s.offset_y) + "\n";
+    preimage += canonical_double(s.extent_x) + "," + canonical_double(s.extent_y) + "\n";
   }
   auto sorted_windows = std::vector<CollisionWindow>(windows.begin(), windows.end());
   std::ranges::sort(sorted_windows, {}, [](auto const& w) { return std::make_tuple(w.start_tick, w.end_tick, w.shape_id, w.ability_id); });
@@ -1438,9 +1438,9 @@ std::string canonicalize_morphology_preimage(const EffectiveMorphology& morph) {
     preimage += mp.semantic_role + "\n";
     preimage += mp.color + "\n";
     preimage += mp.parent + "\n";
-    preimage += std::to_string(mp.x) + "," + std::to_string(mp.y) + "," + std::to_string(mp.z) + "\n";
-    preimage += std::to_string(mp.size_x) + "," + std::to_string(mp.size_y) + "," + std::to_string(mp.size_z) + "\n";
-    preimage += std::to_string(mp.rotation_degrees) + "\n";
+    preimage += canonical_double(mp.x) + "," + canonical_double(mp.y) + "," + canonical_double(mp.z) + "\n";
+    preimage += canonical_double(mp.size_x) + "," + canonical_double(mp.size_y) + "," + canonical_double(mp.size_z) + "\n";
+    preimage += canonical_double(mp.rotation_degrees) + "\n";
     preimage += std::to_string(mp.z_order) + "\n";
   }
   return preimage;
@@ -1477,9 +1477,9 @@ std::string canonicalize_source_animation_set_preimage(std::span<const SkeletalC
       preimage += t.bone_id + "^{";
       for (auto const& k : t.keys) {
         preimage += std::to_string(k.tick) + ",";
-        preimage += std::to_string(k.transform.x) + "," + std::to_string(k.transform.y) + ",";
-        preimage += std::to_string(k.transform.rotation_degrees) + ",";
-        preimage += std::to_string(k.transform.scale_x) + "," + std::to_string(k.transform.scale_y) + ";";
+        preimage += canonical_double(k.transform.x) + "," + canonical_double(k.transform.y) + ",";
+        preimage += canonical_double(k.transform.rotation_degrees) + ",";
+        preimage += canonical_double(k.transform.scale_x) + "," + canonical_double(k.transform.scale_y) + ";";
       }
       preimage += "}";
     }
