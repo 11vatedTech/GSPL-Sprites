@@ -295,8 +295,9 @@ Projection2dDefinition synthesize_projection2d_voltfox(
     std::string_view entity_id, std::string_view form_id,
     const SynthesisPalette& palette,
     const std::map<std::string, MorphologyPart, std::less<>>& morphology,
-    const RigDefinition& rig) {
-  return synthesize_morphology_projection2d(entity_id, form_id, palette, morphology, rig);
+    const RigDefinition& rig,
+    std::span<const SkeletalClip> clips) {
+  return synthesize_morphology_projection2d(entity_id, form_id, palette, morphology, rig, clips);
 }
 
 Projection2dDefinition synthesize_morphology_projection2d(
@@ -716,8 +717,8 @@ SynthesisResult synthesize_unified_entity(const SpriteIr& ir) {
     result.proj25d_transformed = synthesize_projection25d_voltfox(ir.entity_id, "storm", storm_pal, ir.morphology);
     result.proj3d_base = synthesize_projection3d_voltfox(ir.entity_id, "base", base_pal, ir.morphology);
     result.proj3d_transformed = synthesize_projection3d_voltfox(ir.entity_id, "storm", storm_pal, ir.morphology);
-    result.proj2d_base = synthesize_projection2d_voltfox(ir.entity_id, "base", base_pal, ir.morphology, rig);
-    result.proj2d_transformed = synthesize_projection2d_voltfox(ir.entity_id, "storm", storm_pal, ir.morphology, rig);
+    result.proj2d_base = synthesize_projection2d_voltfox(ir.entity_id, "base", base_pal, ir.morphology, rig, ir.clips);
+    result.proj2d_transformed = synthesize_projection2d_voltfox(ir.entity_id, "storm", storm_pal, ir.morphology, rig, ir.clips);
     result.animations3d = synthesize_animation3d_voltfox(ir.entity_id, "base", ir.morphology, ir.clips, ir.animation_intents);
   }
 

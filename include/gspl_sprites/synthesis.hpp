@@ -52,7 +52,8 @@ struct SynthesisPalette {
     std::string_view entity_id, std::string_view form_id,
     const SynthesisPalette& palette,
     const std::map<std::string, MorphologyPart, std::less<>>& morphology,
-    const RigDefinition& rig);
+    const RigDefinition& rig,
+    std::span<const SkeletalClip> clips = {});
 
 [[nodiscard]] Projection2dDefinition synthesize_morphology_projection2d(
     std::string_view entity_id, std::string_view form_id,
