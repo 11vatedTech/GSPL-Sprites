@@ -1517,8 +1517,6 @@ void build_living_visual_package(const LivingVisualPackageInput& input, const st
       frame_preimage += std::to_string(f.image.width) + "x" + std::to_string(f.image.height) + "\n";
       frame_preimage += std::to_string(f.pivot_x) + "," + std::to_string(f.pivot_y) + "\n";
       frame_preimage += std::to_string(f.duration_ticks) + "\n";
-      frame_preimage += std::to_string(static_cast<int>(f.image.color_space)) + "\n";
-      frame_preimage += std::to_string(static_cast<int>(f.image.alpha_mode)) + "\n";
     }
     std::string frame_set_id = compute_domain_id("gspl.frame-set.identity/0.1", frame_preimage);
 
@@ -1532,14 +1530,15 @@ void build_living_visual_package(const LivingVisualPackageInput& input, const st
     }
     std::string sample_table_id = compute_domain_id("gspl.sample-table.identity/0.1", sample_preimage);
 
+    auto sorted_events = input.events;
+    std::ranges::sort(sorted_events, {}, [](auto const& e) { return e.clip_id + "|" + e.event_id; });
     std::string event_preimage;
-    for (auto const& ev : input.events) {
+    for (auto const& ev : sorted_events) {
       event_preimage += ev.clip_id + "\n";
       event_preimage += ev.event_id + "\n";
       event_preimage += std::to_string(ev.authored_tick) + "\n";
       event_preimage += std::to_string(ev.frame_index) + "\n";
       event_preimage += ev.frame_id + "\n";
-      event_preimage += std::to_string(ev.mapped_source_tick) + "\n";
     }
     std::string event_sched_id = compute_domain_id("gspl.event-schedule.identity/0.1", event_preimage);
 
@@ -2479,8 +2478,6 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
           preimage += std::to_string(f.image.width) + "x" + std::to_string(f.image.height) + "\n";
           preimage += std::to_string(f.pivot_x) + "," + std::to_string(f.pivot_y) + "\n";
           preimage += std::to_string(f.duration_ticks) + "\n";
-          preimage += std::to_string(static_cast<int>(f.image.color_space)) + "\n";
-          preimage += std::to_string(static_cast<int>(f.image.alpha_mode)) + "\n";
         }
         auto computed = sha256(std::string(kDomainFrameSet) + "\n" + preimage);
         auto stored_frame_set = art_prov("frames.json");
@@ -2509,14 +2506,15 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
 
       // Event-schedule identity
       {
+        auto sorted_events = pkg.events;
+        std::ranges::sort(sorted_events, {}, [](auto const& e) { return e.clip_id + "|" + e.event_id; });
         std::string preimage;
-        for (auto const& ev : pkg.events) {
+        for (auto const& ev : sorted_events) {
           preimage += ev.clip_id + "\n";
           preimage += ev.event_id + "\n";
           preimage += std::to_string(ev.authored_tick) + "\n";
           preimage += std::to_string(ev.frame_index) + "\n";
           preimage += ev.frame_id + "\n";
-          preimage += std::to_string(ev.mapped_source_tick) + "\n";
         }
         auto computed = sha256(std::string(kDomainEventSchedule) + "\n" + preimage);
         auto stored = art_prov("animation-events.json");
