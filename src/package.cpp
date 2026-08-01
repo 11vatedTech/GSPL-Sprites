@@ -1506,10 +1506,45 @@ void build_living_visual_package(const LivingVisualPackageInput& input, const st
     auto compute_domain_id = [](std::string_view domain, std::string_view preimage) -> std::string {
       return sha256(std::string(domain) + "\n" + std::string(preimage));
     };
-    std::string frame_set_id = compute_domain_id("gspl.frame-set.identity/0.1", seed_id);
-    std::string sample_table_id = compute_domain_id("gspl.sample-table.identity/0.1", seed_id);
+
+    // Compute content-derived provenance identities (matches verifier recomputation)
+    auto sorted_frames = input.frames;
+    std::ranges::sort(sorted_frames, {}, &FrameSource::id);
+    std::string frame_preimage;
+    for (auto const& f : sorted_frames) {
+      frame_preimage += f.id + "\n";
+      frame_preimage += f.frame_hash + "\n";
+      frame_preimage += std::to_string(f.image.width) + "x" + std::to_string(f.image.height) + "\n";
+      frame_preimage += std::to_string(f.pivot_x) + "," + std::to_string(f.pivot_y) + "\n";
+      frame_preimage += std::to_string(f.duration_ticks) + "\n";
+      frame_preimage += std::to_string(static_cast<int>(f.image.color_space)) + "\n";
+      frame_preimage += std::to_string(static_cast<int>(f.image.alpha_mode)) + "\n";
+    }
+    std::string frame_set_id = compute_domain_id("gspl.frame-set.identity/0.1", frame_preimage);
+
+    std::string sample_preimage;
+    for (auto const& s : input.samples) {
+      sample_preimage += s.clip_id + "|" + std::to_string(s.frame_index) + "\n";
+      sample_preimage += s.frame_id + "\n";
+      sample_preimage += std::to_string(s.source_tick) + "\n";
+      sample_preimage += s.frame_hash + "\n";
+      sample_preimage += s.pose_hash + "\n";
+    }
+    std::string sample_table_id = compute_domain_id("gspl.sample-table.identity/0.1", sample_preimage);
+
+    std::string event_preimage;
+    for (auto const& ev : input.events) {
+      event_preimage += ev.clip_id + "\n";
+      event_preimage += ev.event_id + "\n";
+      event_preimage += std::to_string(ev.authored_tick) + "\n";
+      event_preimage += std::to_string(ev.frame_index) + "\n";
+      event_preimage += ev.frame_id + "\n";
+      event_preimage += std::to_string(ev.mapped_source_tick) + "\n";
+    }
+    std::string event_sched_id = compute_domain_id("gspl.event-schedule.identity/0.1", event_preimage);
+
+    // Remaining identities still seed-derived (updated in future passes)
     std::string pose_table_id = compute_domain_id("gspl.pose-table.identity/0.1", seed_id);
-    std::string event_sched_id = compute_domain_id("gspl.event-schedule.identity/0.1", seed_id);
     std::string clip_set_id = compute_domain_id("gspl.generated-clip-set.identity/0.1", seed_id);
     std::string channel_set_id = compute_domain_id("gspl.channel-set.identity/0.1", seed_id);
     std::string collision_set_id = compute_domain_id("gspl.collision-set.identity/0.1", seed_id);
@@ -2421,103 +2456,98 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
 
     // ── Semantic provenance verification (recomputed from reconstructed content) ──
     if (options.verify_pixel_hashes) {
+      // Helper: find artifact provenance by path
+      auto art_prov = [&](std::string_view path) -> std::string {
+        for (auto const& a : pkg.manifest.artifacts)
+          if (a.path == path) return a.provenance_identity;
+        return "";
+      };
+
+      // Canonical entity identity: SHA-256(domain + "\n" + canonicalize(seed))
       auto recomputed_canonical_entity = sha256(std::string(kDomainCanonicalEntity) + "\n" + canonicalize(pkg.seed));
       if (recomputed_canonical_entity != pkg.manifest.canonical_entity_identity)
         add("LV_PROV_CANONICAL_ENTITY", "canonical entity identity mismatch");
+
+      // Frame-set identity: sorted by frame ID, includes frame_id + frame_hash + dimensions
+      {
+        auto sorted_frames = pkg.frames;
+        std::ranges::sort(sorted_frames, {}, &FrameSource::id);
+        std::string preimage;
+        for (auto const& f : sorted_frames) {
+          preimage += f.id + "\n";
+          preimage += f.frame_hash + "\n";
+          preimage += std::to_string(f.image.width) + "x" + std::to_string(f.image.height) + "\n";
+          preimage += std::to_string(f.pivot_x) + "," + std::to_string(f.pivot_y) + "\n";
+          preimage += std::to_string(f.duration_ticks) + "\n";
+          preimage += std::to_string(static_cast<int>(f.image.color_space)) + "\n";
+          preimage += std::to_string(static_cast<int>(f.image.alpha_mode)) + "\n";
+        }
+        auto computed = sha256(std::string(kDomainFrameSet) + "\n" + preimage);
+        auto stored_frame_set = art_prov("frames.json");
+        auto stored_frame_hashes = art_prov("frame-hashes.json");
+        if (!stored_frame_set.empty() && computed != stored_frame_set)
+          add("LV_PROV_FRAME_SET", "frame-set provenance mismatch");
+        if (!stored_frame_hashes.empty() && computed != stored_frame_hashes)
+          add("LV_PROV_FRAME_HASHES", "frame-hashes provenance mismatch");
+      }
+
+      // Sample-table identity
+      {
+        std::string preimage;
+        for (auto const& s : pkg.samples) {
+          preimage += s.clip_id + "|" + std::to_string(s.frame_index) + "\n";
+          preimage += s.frame_id + "\n";
+          preimage += std::to_string(s.source_tick) + "\n";
+          preimage += s.frame_hash + "\n";
+          preimage += s.pose_hash + "\n";
+        }
+        auto computed = sha256(std::string(kDomainSampleTable) + "\n" + preimage);
+        auto stored = art_prov("frame-samples.json");
+        if (!stored.empty() && computed != stored)
+          add("LV_PROV_SAMPLE_TABLE", "sample-table provenance mismatch");
+      }
+
+      // Event-schedule identity
+      {
+        std::string preimage;
+        for (auto const& ev : pkg.events) {
+          preimage += ev.clip_id + "\n";
+          preimage += ev.event_id + "\n";
+          preimage += std::to_string(ev.authored_tick) + "\n";
+          preimage += std::to_string(ev.frame_index) + "\n";
+          preimage += ev.frame_id + "\n";
+          preimage += std::to_string(ev.mapped_source_tick) + "\n";
+        }
+        auto computed = sha256(std::string(kDomainEventSchedule) + "\n" + preimage);
+        auto stored = art_prov("animation-events.json");
+        if (!stored.empty() && computed != stored)
+          add("LV_PROV_EVENT_SCHEDULE", "event-schedule provenance mismatch");
+      }
     }
     if (pkg.manifest.transformation_morphology_count != 10)
       add("LV_VERIFY_TRANSMORPH_COUNT", "expected 10 transformation morphologies");
 
-    // Package identity already verified by reader (parse + canonicalize + recompute)
-    // Verify encoded artifact hashes from typed manifest records (inventory-verified paths)
-    {
+    // Package identity already verified by reader (parse + canonicalize + recompute).
+    // Encoded artifact hashes, path confinement, symlink safety, byte sizes, and
+    // file-set equality are all validated by the inventory during reader construction.
+    // No duplicate validation needed here.
+
+    // ── Undeclared files check (reader inventory already checked this, but
+    //     verify independently if options require it) ──
+    if (options.require_no_undeclared_files) {
       std::set<std::string> declared;
-      for (auto const& art : pkg.manifest.artifacts) {
-        if (!declared.insert(art.path).second)
-          { add("LV_VERIFY_DUP_PATH", "duplicate artifact path: "+art.path); continue; }
-        if (!lowercase_sha256(art.sha256))
-          { add("LV_VERIFY_BAD_HASH", "malformed sha256 for: "+art.path); continue; }
-
-        // Path confinement: validate path before filesystem access
-        if (art.path.empty() || art.path.size() > rlim.max_path_bytes)
-          { add("LV_VERIFY_PATH_LEN", "path length invalid: "+art.path); continue; }
-        if (art.path[0] == '/' || art.path.find(":") != std::string::npos || art.path.find("\\") != std::string::npos)
-          { add("LV_VERIFY_PATH_UNSAFE", "unsafe path: "+art.path); continue; }
-        {
-          std::size_t s = 0; bool bad = false;
-          while (s < art.path.size()) {
-            auto e = art.path.find('/', s);
-            auto part = art.path.substr(s, e == std::string::npos ? art.path.size()-s : e-s);
-            if (part.empty() || part == "." || part == "..") { bad = true; break; }
-            if (part.back() == ' ' || part.back() == '.') { bad = true; break; }
-            if (e == std::string::npos) break;
-            s = e + 1;
-          }
-          if (bad) { add("LV_VERIFY_PATH_UNSAFE", "unsafe path component: "+art.path); continue; }
+      for (auto const& art : pkg.manifest.artifacts) declared.insert(art.path);
+      for (auto const& e : std::filesystem::recursive_directory_iterator(package_path)) {
+        if (e.is_regular_file()) {
+          if (std::filesystem::is_symlink(std::filesystem::symlink_status(e.path())))
+            { add("LV_VERIFY_SYMLINK_FILE", "symlink file in package: " + e.path().filename().string()); continue; }
+          auto rel = e.path().lexically_relative(package_path).generic_string();
+          if (rel != "manifest.json" && !declared.contains(rel))
+            add("LV_VERIFY_UNDECLARED", "undeclared file: "+rel);
+        } else if (std::filesystem::is_symlink(std::filesystem::symlink_status(e.path()))) {
+          auto rel = e.path().lexically_relative(package_path).generic_string();
+          add("LV_VERIFY_SYMLINK_ENTRY", "symlink entry in package: " + rel);
         }
-
-        // Canonicalize and check confinement
-        auto full = package_path / art.path;
-        auto canon = std::filesystem::weakly_canonical(full);
-        auto root_canon = std::filesystem::weakly_canonical(package_path);
-        std::string cs = canon.string(), rs = root_canon.string();
-        if (cs.size() < rs.size() || cs.compare(0, rs.size(), rs) != 0)
-          { add("LV_VERIFY_PATH_ESCAPE", "path escapes package root: "+art.path); continue; }
-        if (cs.size() > rs.size() && cs[rs.size()] != '/' && cs[rs.size()] != '\\')
-          { add("LV_VERIFY_PATH_ESCAPE", "path escapes package root: "+art.path); continue; }
-
-        // Symlink check per component
-        {
-          auto cur = package_path;
-          std::size_t start = 0;
-          bool symlink_found = false;
-          while (start < art.path.size()) {
-            auto end = art.path.find('/', start);
-            auto part = art.path.substr(start, end == std::string::npos ? art.path.size()-start : end-start);
-            cur /= part;
-            if (std::filesystem::exists(cur)) {
-              auto st = std::filesystem::symlink_status(cur);
-              if (std::filesystem::is_symlink(st)) { symlink_found = true; break; }
-            }
-            if (end == std::string::npos) break;
-            start = end + 1;
-          }
-          if (symlink_found) { add("LV_VERIFY_SYMLINK", "symlink in artifact path: "+art.path); continue; }
-        }
-
-        if (!std::filesystem::is_regular_file(full))
-          { add("LV_VERIFY_MISSING", "declared artifact missing: "+art.path); continue; }
-
-        // Verify byte size
-        auto fsz = std::filesystem::file_size(full);
-        if (fsz != art.byte_size)
-          add("LV_VERIFY_SIZE", "byte size mismatch for " + art.path + ": manifest=" + std::to_string(art.byte_size) + " disk=" + std::to_string(fsz));
-
-        // Verify SHA-256
-        try {
-          auto file_bytes = lv_read(full, rlim.max_artifact_bytes);
-          if (sha256(file_bytes) != art.sha256)
-            add("LV_VERIFY_HASH", "artifact hash mismatch: "+art.path);
-        } catch (...) { add("LV_VERIFY_READ_ERR", "cannot read artifact: "+art.path); }
-      }
-
-      // Undeclared files check
-      if (options.require_no_undeclared_files) {
-        for (auto const& e : std::filesystem::recursive_directory_iterator(package_path)) {
-          if (e.is_regular_file()) {
-            if (std::filesystem::is_symlink(std::filesystem::symlink_status(e.path())))
-              { add("LV_VERIFY_SYMLINK_FILE", "symlink file in package: " + e.path().filename().string()); continue; }
-            auto rel = e.path().lexically_relative(package_path).generic_string();
-            if (rel != "manifest.json" && !declared.contains(rel))
-              add("LV_VERIFY_UNDECLARED", "undeclared file: "+rel);
-          }
-        }
-      }
-
-      // Check for missing declared files
-      for (auto const& art : pkg.manifest.artifacts) {
-        if (!std::filesystem::is_regular_file(package_path / art.path))
-          add("LV_VERIFY_DECLARED_MISSING", "declared artifact missing from disk: " + art.path);
       }
     }
   } catch (std::exception const& e) { add("LV_VERIFY_ERROR", e.what()); }
