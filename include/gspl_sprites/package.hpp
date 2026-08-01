@@ -249,6 +249,7 @@ inline constexpr std::string_view kDomainEventSchedule    = "gspl.event-schedule
 inline constexpr std::string_view kDomainChannelSet       = "gspl.channel-set.identity/0.1";
 inline constexpr std::string_view kDomainCollisionSet     = "gspl.collision-set.identity/0.1";
 inline constexpr std::string_view kDomainMorphologySet    = "gspl.morphology-set.identity/0.1";
+inline constexpr std::string_view kDomainFrameHashTable   = "gspl.frame-hash-table.identity/0.1";
 inline constexpr std::string_view kDomainSpriteAtlas      = "gspl.sprite-atlas.identity/0.1";
 
 /* ── Embedded schema extraction ── */

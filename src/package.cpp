@@ -1571,6 +1571,32 @@ void build_living_visual_package(const LivingVisualPackageInput& input, const st
       }
       o << "]}"; lv_write(staging/"frames.json", o.str());
     }
+    // ── Builder event authority validation (reject, never repair) ──
+    for (auto const& e : input.events) {
+      // Validate clip exists
+      auto clip_it = std::find_if(input.generated_clips.begin(), input.generated_clips.end(),
+        [&](auto const& c) { return c.id == e.clip_id; });
+      if (clip_it == input.generated_clips.end())
+        throw std::runtime_error("builder: event clip not found: " + e.clip_id);
+      // Validate frame index in range
+      if (e.frame_index >= clip_it->frame_ids.size())
+        throw std::runtime_error("builder: event frame_index out of range: " + e.event_id);
+      // Validate frame ID matches clip
+      if (e.frame_id != clip_it->frame_ids[e.frame_index])
+        throw std::runtime_error("builder: event frame_id mismatch: " + e.event_id);
+      // Validate sample exists
+      auto sample_it = std::find_if(input.samples.begin(), input.samples.end(),
+        [&](auto const& s) { return s.clip_id == e.clip_id && s.frame_index == e.frame_index; });
+      if (sample_it == input.samples.end())
+        throw std::runtime_error("builder: no sample for event: " + e.event_id);
+      // Validate sample consistency
+      if (sample_it->frame_id != e.frame_id)
+        throw std::runtime_error("builder: event/sample frame_id mismatch: " + e.event_id);
+      if (sample_it->source_tick != e.mapped_source_tick)
+        throw std::runtime_error("builder: event mapped_source_tick != sample source_tick: " + e.event_id);
+      if (e.mapped_source_tick < e.authored_tick)
+        throw std::runtime_error("builder: event mapped_source_tick < authored_tick: " + e.event_id);
+    }
     // Generated events — use synthesis's mapped_source_tick directly
     { std::ostringstream o; o << "{\"schema\":\"" << kSchemaGeneratedAnimationEvents << "\",\"events\":[";
       for (std::size_t i=0; i<input.events.size(); ++i) {
@@ -1719,9 +1745,19 @@ void build_living_visual_package(const LivingVisualPackageInput& input, const st
     add_artifact("frame-samples.json", LivingArtifactKind::frame_samples,
                  {"animations-2d.json", "frames.json"}, sample_table_id);
 
+    // Frame-hash table identity (independent from frame-set)
+    std::string frame_hash_table_id;
+    {
+      std::vector<FrameHashRecord> fh_recs;
+      for (auto const& f : input.frames)
+        fh_recs.push_back({f.id, f.frame_hash});
+      frame_hash_table_id = compute_domain_id_impl(
+          kDomainFrameHashTable, canonicalize_frame_hash_table_preimage(fh_recs));
+    }
+
     // Frame hashes
     add_artifact("frame-hashes.json", LivingArtifactKind::frame_hashes,
-                 {"frames.json", "frame-samples.json"}, frame_set_id);
+                 {"frames.json", "frame-samples.json"}, frame_hash_table_id);
 
     // Pose hashes
     add_artifact("pose-hashes.json", LivingArtifactKind::pose_hashes,
@@ -2638,8 +2674,219 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
     if (result.clip_count != 9) add("LV_VERIFY_CLIP_COUNT", "expected 9 clips");
     if (result.sample_count != 48) add("LV_VERIFY_SAMPLE_COUNT", "expected 48 samples");
 
-    // Exact clip/sample set validation deferred to Phase 7 completion;
-    // the count checks above (9 clips, 48 samples) provide basic guard.
+    // ── Exact nine-clip contract ──
+    {
+      struct ClipExpect { const char* suffix; std::uint32_t frames; bool looping; };
+      static const ClipExpect expected_clips[] = {
+        {"storm.idle",  4, true},  {"storm.locomotion", 6, true},
+        {"storm.attack",6, false}, {"storm.hit",        3, false},
+        {"base.idle",   4, true},  {"base.locomotion",  6, true},
+        {"base.attack", 6, false}, {"base.hit",         3, false},
+        {"transform",  10, false},
+      };
+      std::set<std::string> seen_roles;
+      for (auto const& exp : expected_clips) {
+        bool found = false;
+        for (auto const& c : pkg.generated_clips) {
+          // Match by suffix: "original.voltfox.storm.idle".ends_with("storm.idle")
+          auto suffix = std::string(exp.suffix);
+          if (c.id.size() >= suffix.size() &&
+              c.id.compare(c.id.size() - suffix.size(), std::string::npos, suffix) == 0) {
+            if (seen_roles.count(suffix))
+              add("LV_CLIP_DUP_ROLE", "duplicate clip role: " + suffix);
+            seen_roles.insert(suffix);
+            found = true;
+            if (c.frame_ids.size() != exp.frames)
+              add("LV_CLIP_FRAME_COUNT", "clip " + c.id + " frame count " + std::to_string(c.frame_ids.size()) + " != " + std::to_string(exp.frames));
+            if (c.looping != exp.looping)
+              add("LV_CLIP_LOOP", "clip " + c.id + " looping flag mismatch");
+            if (c.frame_ids.size() != c.frame_durations.size())
+              add("LV_CLIP_DUR_MISMATCH", "clip " + c.id + " frame/duration vector mismatch");
+            for (auto const& fid : c.frame_ids) {
+              auto frame_it = std::find_if(pkg.frames.begin(), pkg.frames.end(),
+                [&](auto const& f) { return f.id == fid; });
+              if (frame_it == pkg.frames.end())
+                add("LV_CLIP_UNKNOWN_FRAME", "clip " + c.id + " references unknown frame: " + fid);
+            }
+            // Check for duplicate frame positions within clip
+            std::set<std::string> pos_seen;
+            for (auto const& fid : c.frame_ids) {
+              if (!pos_seen.insert(fid).second)
+                add("LV_CLIP_DUP_POS", "clip " + c.id + " duplicate frame position: " + fid);
+            }
+            break;
+          }
+        }
+        if (!found)
+          add("LV_CLIP_MISSING", "missing required clip role: " + std::string(exp.suffix));
+      }
+      // Check for extra clips
+      for (auto const& c : pkg.generated_clips) {
+        bool known = false;
+        for (auto const& exp : expected_clips) {
+          auto suffix = std::string(exp.suffix);
+          if (c.id.size() >= suffix.size() &&
+              c.id.compare(c.id.size() - suffix.size(), std::string::npos, suffix) == 0) {
+            known = true; break;
+          }
+        }
+        if (!known)
+          add("LV_CLIP_EXTRA", "unexpected clip: " + c.id);
+      }
+    }
+
+    // ── Exact 48-position sample coverage ──
+    {
+      std::set<std::tuple<std::string, std::uint32_t>> expected_positions;
+      for (auto const& c : pkg.generated_clips) {
+        for (std::uint32_t fi = 0; fi < c.frame_ids.size(); ++fi)
+          expected_positions.emplace(c.id, fi);
+      }
+      std::set<std::tuple<std::string, std::uint32_t>> actual_positions;
+      for (auto const& s : pkg.samples) {
+        auto key = std::make_tuple(s.clip_id, s.frame_index);
+        if (!actual_positions.insert(key).second)
+          add("LV_SAMPLE_DUP", "duplicate sample: " + s.clip_id + "/" + std::to_string(s.frame_index));
+      }
+      for (auto const& exp_pos : expected_positions) {
+        if (!actual_positions.count(exp_pos))
+          add("LV_SAMPLE_MISSING", "missing sample: " + std::get<0>(exp_pos) + "/" + std::to_string(std::get<1>(exp_pos)));
+      }
+      for (auto const& act_pos : actual_positions) {
+        if (!expected_positions.count(act_pos))
+          add("LV_SAMPLE_EXTRA", "extra sample: " + std::get<0>(act_pos) + "/" + std::to_string(std::get<1>(act_pos)));
+      }
+      // Cross-validate sample fields
+      for (auto const& s : pkg.samples) {
+        auto clip_it = std::find_if(pkg.generated_clips.begin(), pkg.generated_clips.end(),
+          [&](auto const& c) { return c.id == s.clip_id; });
+        if (clip_it == pkg.generated_clips.end()) continue; // already caught above
+        if (s.frame_index >= clip_it->frame_ids.size()) {
+          add("LV_SAMPLE_OOB", "sample frame_index out of bounds: " + s.clip_id);
+          continue;
+        }
+        if (s.frame_id != clip_it->frame_ids[s.frame_index])
+          add("LV_SAMPLE_FRAME_ID", "sample frame_id mismatch: " + s.clip_id + "/" + std::to_string(s.frame_index));
+      }
+    }
+
+    // ── Frame-hash exact-set equality ──
+    {
+      std::set<std::string> frame_ids;
+      for (auto const& f : pkg.frames) frame_ids.insert(f.id);
+      std::set<std::string> fh_ids;
+      for (auto const& fh : pkg.frame_hash_records) {
+        if (!fh_ids.insert(fh.frame_id).second)
+          add("LV_FH_DUP", "duplicate frame-hash record: " + fh.frame_id);
+        if (fh.frame_hash.size() != 64 || !std::all_of(fh.frame_hash.begin(), fh.frame_hash.end(),
+              [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); }))
+          add("LV_FH_HASH_FORMAT", "malformed frame hash: " + fh.frame_id);
+      }
+      for (auto const& fid : frame_ids) {
+        if (!fh_ids.count(fid))
+          add("LV_FH_MISSING", "frame-hashes missing record: " + fid);
+      }
+      for (auto const& fid : fh_ids) {
+        if (!frame_ids.count(fid))
+          add("LV_FH_EXTRA", "frame-hashes extra record: " + fid);
+      }
+    }
+
+    // ── Pose exact-set equality ──
+    {
+      std::set<std::tuple<std::string, std::uint32_t>> sample_keys;
+      for (auto const& s : pkg.samples) sample_keys.emplace(s.clip_id, s.frame_index);
+      std::set<std::tuple<std::string, std::uint32_t>> pose_keys;
+      for (auto const& pr : pkg.pose_hash_records) {
+        auto key = std::make_tuple(pr.clip_id, pr.frame_index);
+        if (!pose_keys.insert(key).second)
+          add("LV_POSE_DUP", "duplicate pose record: " + pr.clip_id + "/" + std::to_string(pr.frame_index));
+        if (pr.pose_hash.size() != 64 || !std::all_of(pr.pose_hash.begin(), pr.pose_hash.end(),
+              [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); }))
+          add("LV_POSE_HASH_FORMAT", "malformed pose hash: " + pr.clip_id);
+      }
+      for (auto const& sk : sample_keys) {
+        if (!pose_keys.count(sk))
+          add("LV_POSE_MISSING", "pose record missing: " + std::get<0>(sk) + "/" + std::to_string(std::get<1>(sk)));
+      }
+      for (auto const& pk : pose_keys) {
+        if (!sample_keys.count(pk))
+          add("LV_POSE_EXTRA", "pose record extra: " + std::get<0>(pk) + "/" + std::to_string(std::get<1>(pk)));
+      }
+      // Cross-validate pose frame_id and hash against matching sample
+      for (auto const& pr : pkg.pose_hash_records) {
+        auto sample_it = std::find_if(pkg.samples.begin(), pkg.samples.end(),
+          [&](auto const& s) { return s.clip_id == pr.clip_id && s.frame_index == pr.frame_index; });
+        if (sample_it == pkg.samples.end()) continue;
+        if (pr.frame_id != sample_it->frame_id)
+          add("LV_POSE_FRAME_ID", "pose frame_id mismatch: " + pr.clip_id);
+        if (pr.pose_hash != sample_it->pose_hash)
+          add("LV_POSE_HASH", "pose hash mismatch: " + pr.clip_id);
+      }
+    }
+
+    // ── Event exact-set: require exactly the 4 governed events ──
+    // Match by (clip_suffix, event_id) only; ticks are validated below.
+    {
+      struct GovEvent { const char* clip_suffix; const char* event_id; };
+      static const GovEvent governed_events[] = {
+        {"base.attack", "release"},
+        {"storm.attack", "release"},
+        {"transform", "midpoint"},
+        {"transform", "complete"},
+      };
+      auto clip_matches = [&](std::string const& clip_id, const char* suffix) -> bool {
+        auto s = std::string(suffix);
+        return clip_id.size() >= s.size() &&
+               clip_id.compare(clip_id.size() - s.size(), std::string::npos, s) == 0;
+      };
+      for (auto const& gev : governed_events) {
+        bool found = false;
+        for (auto const& e : pkg.events) {
+          if (e.event_id == gev.event_id && clip_matches(e.clip_id, gev.clip_suffix)) {
+            found = true;
+            // Validate event temporal authority
+            if (e.mapped_source_tick < e.authored_tick)
+              add("LV_EVENT_BEFORE_AUTHORED", "event mapped_tick < authored_tick: " + e.event_id);
+            // Validate sample exists and mapped_tick matches
+            auto sample_it = std::find_if(pkg.samples.begin(), pkg.samples.end(),
+              [&](auto const& s) { return s.clip_id == e.clip_id && s.frame_index == e.frame_index; });
+            if (sample_it == pkg.samples.end())
+              add("LV_EVENT_SAMPLE_MISSING", "no sample for event: " + e.event_id);
+            else if (sample_it->source_tick != e.mapped_source_tick)
+              add("LV_EVENT_MAPPED_TICK", "event mapped_tick != sample source_tick: " + e.event_id);
+            // Validate frame_id matches clip position
+            auto clip_it = std::find_if(pkg.generated_clips.begin(), pkg.generated_clips.end(),
+              [&](auto const& c) { return c.id == e.clip_id; });
+            if (clip_it != pkg.generated_clips.end() && e.frame_index < clip_it->frame_ids.size()) {
+              if (e.frame_id != clip_it->frame_ids[e.frame_index])
+                add("LV_EVENT_FRAME_ID", "event frame_id mismatch: " + e.event_id);
+            }
+            break;
+          }
+        }
+        if (!found)
+          add("LV_EVENT_MISSING", "missing governed event: " + std::string(gev.event_id) + " in " + std::string(gev.clip_suffix));
+      }
+      // Check for extra events
+      for (auto const& e : pkg.events) {
+        bool known = false;
+        for (auto const& gev : governed_events) {
+          if (e.event_id == gev.event_id && clip_matches(e.clip_id, gev.clip_suffix)) {
+            known = true; break;
+          }
+        }
+        if (!known)
+          add("LV_EVENT_EXTRA", "unexpected event: " + e.event_id + " in " + e.clip_id);
+      }
+      // Validate transform.complete maps to frame index 9 (terminal transform frame)
+      for (auto const& e : pkg.events) {
+        if (e.event_id == "complete" && clip_matches(e.clip_id, "transform")) {
+          if (e.frame_index != 9)
+            add("LV_EVENT_TRANSFORM_COMPLETION", "transform completion not at frame index 9 (got " + std::to_string(e.frame_index) + ")");
+        }
+      }
+    }
 
     // ── Build artifact provenance lookup (O(1) map, not O(n) closure) ──
     std::map<std::string, std::string, std::less<>> art_prov;
@@ -2661,11 +2908,8 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
       auto preimage = canonicalize_frame_set_preimage(pkg.frames);
       auto computed = compute_domain_id_impl(kDomainFrameSet, preimage);
       auto stored_frame_set = prov("frames.json");
-      auto stored_frame_hashes = prov("frame-hashes.json");
       if (!stored_frame_set.empty() && computed != stored_frame_set)
         add("LV_PROV_FRAME_SET", "frame-set provenance mismatch");
-      if (!stored_frame_hashes.empty() && computed != stored_frame_hashes)
-        add("LV_PROV_FRAME_HASHES", "frame-hashes provenance mismatch");
     }
 
     // Sample-table identity
@@ -2695,9 +2939,14 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
         add("LV_PROV_POSE_TABLE", "pose-table provenance mismatch");
     }
 
-    // Frame-hashes.json provenance is already verified above via the frame-set
-    // identity check (builder assigns kDomainFrameSet + frame_set_preimage to
-    // both frames.json and frame-hashes.json).
+    // Frame-hashes.json provenance (independent domain from frame-set)
+    if (!pkg.frame_hash_records.empty()) {
+      auto preimage = canonicalize_frame_hash_table_preimage(pkg.frame_hash_records);
+      auto computed = compute_domain_id_impl(kDomainFrameHashTable, preimage);
+      auto stored = prov("frame-hashes.json");
+      if (!stored.empty() && computed != stored)
+        add("LV_PROV_FRAME_HASH_TABLE", "frame-hash-table provenance mismatch");
+    }
 
     // Generated-clip-set identity
     {
