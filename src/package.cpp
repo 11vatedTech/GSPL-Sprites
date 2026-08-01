@@ -1694,10 +1694,31 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
       return result;  // Stop before any semantic artifact access
     }
     auto& inv = *inv_result.value;
-    (void)inv;  // inventory validated; all paths have passed confinement + hash checks
+
+    // Inventory-based read helper: resolves path through validated inventory
+    auto inv_read = [&](std::string_view rel_path, std::uint64_t max_bytes) -> std::string {
+      auto it = inv.by_path.find(std::string(rel_path));
+      if (it == inv.by_path.end())
+        throw std::runtime_error("artifact not in inventory: " + std::string(rel_path));
+      return lv_read(it->second.absolute_path, max_bytes);
+    };
+
+    // Embedded schema cross-check helper
+    auto check_embedded_schema = [&](std::string_view rel_path, std::string_view bytes) {
+      for (auto const& art : pkg.manifest.artifacts) {
+        if (art.path == rel_path) {
+          auto expected_schema = artifact_schema_for_kind(art.kind);
+          auto embedded = extract_embedded_schema(bytes, limits);
+          if (embedded != expected_schema)
+            add("LV_READ_EMBEDDED_SCHEMA", std::string("embedded schema mismatch for ") + std::string(rel_path) + ": expected '" + std::string(expected_schema) + "' got '" + embedded + "'");
+          return;
+        }
+      }
+    };
 
     // ── Load and parse seed ──
-    auto seed_wrapper = lv_read(package_path/"seed.json", limits.max_artifact_bytes);
+    auto seed_wrapper = inv_read("seed.json", limits.max_artifact_bytes);
+    check_embedded_schema("seed.json", seed_wrapper);
     std::string seed_json;
     {
       gspl::BoundedJsonConfig cfg{};
@@ -1723,8 +1744,9 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
       add("LV_READ_SEED_MISMATCH", "seed identity mismatch: manifest vs computed");
 
     // ── Reconstruct frames from frames.json + PNG files ──
-    if (std::filesystem::exists(package_path/"frames.json")) {
-      auto fm_bytes = lv_read(package_path/"frames.json", limits.max_artifact_bytes);
+    {
+      auto fm_bytes = inv_read("frames.json", limits.max_artifact_bytes);
+      check_embedded_schema("frames.json", fm_bytes);
       gspl::BoundedJsonConfig fcfg{}; fcfg.max_object_members = 512;
       gspl::BoundedJsonReader fmr(fm_bytes, fcfg);
       bool frames_schema_ok = false;
@@ -1761,30 +1783,25 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
                 if (!fmr.next_object_member("frame")) break;
               }
               fmr.end_object("frame");
-              // Load frame PNG
-              auto frame_path = package_path / "frames" / (encode_pc(fs.id) + ".png");
-              if (std::filesystem::is_regular_file(frame_path)) {
-                try {
-                  auto png_bytes = lv_read(frame_path, limits.max_artifact_bytes);
-                  ImageLimits img_lim{};
-                  img_lim.max_width = limits.max_image_width;
-                  img_lim.max_height = limits.max_image_height;
-                  img_lim.max_decoded_bytes = limits.max_decoded_pixel_bytes;
-                  img_lim.max_input_bytes = limits.max_artifact_bytes;
-                  fs.image = decode_png(std::span<const std::byte>(
-                      reinterpret_cast<const std::byte*>(png_bytes.data()), png_bytes.size()), img_lim);
-                  if (fs.image.width != declared_w || fs.image.height != declared_h)
-                    add("LV_READ_FRAME_DIMS", "frame dimensions mismatch: " + fs.id);
-                  // Recompute frame hash from decoded pixels and verify
-                  auto computed_hash = compute_frame_hash(fs.image);
-                  if (!fs.frame_hash.empty() && computed_hash != fs.frame_hash)
-                    add("LV_READ_FRAME_HASH", "frame hash mismatch: " + fs.id);
-                  else if (fs.frame_hash.empty()) fs.frame_hash = computed_hash;
-                } catch (std::exception const& ex) {
-                  add("LV_READ_FRAME_PNG", std::string("failed to decode frame PNG: ") + fs.id + " — " + ex.what());
-                }
-              } else {
-                add("LV_READ_FRAME_MISSING", "frame PNG file missing: " + fs.id);
+              // Load frame PNG through inventory
+              auto frame_png_path = std::string("frames/") + encode_pc(fs.id) + ".png";
+              try {
+                auto png_bytes = inv_read(frame_png_path, limits.max_artifact_bytes);
+                ImageLimits img_lim{};
+                img_lim.max_width = limits.max_image_width;
+                img_lim.max_height = limits.max_image_height;
+                img_lim.max_decoded_bytes = limits.max_decoded_pixel_bytes;
+                img_lim.max_input_bytes = limits.max_artifact_bytes;
+                fs.image = decode_png(std::span<const std::byte>(
+                    reinterpret_cast<const std::byte*>(png_bytes.data()), png_bytes.size()), img_lim);
+                if (fs.image.width != declared_w || fs.image.height != declared_h)
+                  add("LV_READ_FRAME_DIMS", "frame dimensions mismatch: " + fs.id);
+                auto computed_hash = compute_frame_hash(fs.image);
+                if (!fs.frame_hash.empty() && computed_hash != fs.frame_hash)
+                  add("LV_READ_FRAME_HASH", "frame hash mismatch: " + fs.id);
+                else if (fs.frame_hash.empty()) fs.frame_hash = computed_hash;
+              } catch (std::exception const& ex) {
+                add("LV_READ_FRAME_PNG", std::string("failed to decode frame PNG: ") + fs.id + " — " + ex.what());
               }
               if (!fs.id.empty()) pkg.frames.push_back(std::move(fs));
               fmr.record_array_element("frames-json.frames");
@@ -1803,8 +1820,9 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     }
 
     // ── Reconstruct generated clips from animations-2d.json ──
-    if (std::filesystem::exists(package_path/"animations-2d.json")) {
-      auto anim_bytes = lv_read(package_path/"animations-2d.json", limits.max_artifact_bytes);
+    {
+      auto anim_bytes = inv_read("animations-2d.json", limits.max_artifact_bytes);
+      check_embedded_schema("animations-2d.json", anim_bytes);
       gspl::BoundedJsonConfig cfg{};
       gspl::BoundedJsonReader ar(anim_bytes, cfg);
       if (ar.begin_object("animations-2d")) {
@@ -1878,8 +1896,9 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
       }
 
       // Parse frame-samples.json
-      if (std::filesystem::exists(package_path/"frame-samples.json")) {
-        auto fs_bytes = lv_read(package_path/"frame-samples.json", limits.max_artifact_bytes);
+      {
+        auto fs_bytes = inv_read("frame-samples.json", limits.max_artifact_bytes);
+        check_embedded_schema("frame-samples.json", fs_bytes);
         gspl::BoundedJsonConfig cfg2{};
         gspl::BoundedJsonReader fsr(fs_bytes, cfg2);
         if (fsr.begin_object("frame-samples")) {
@@ -1919,8 +1938,9 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
       }
 
       // Parse animation-events.json
-      if (std::filesystem::exists(package_path/"animation-events.json")) {
-        auto ev_bytes = lv_read(package_path/"animation-events.json", limits.max_artifact_bytes);
+      {
+        auto ev_bytes = inv_read("animation-events.json", limits.max_artifact_bytes);
+        check_embedded_schema("animation-events.json", ev_bytes);
         gspl::BoundedJsonConfig cfg3{};
         gspl::BoundedJsonReader evr(ev_bytes, cfg3);
         if (evr.begin_object("anim-events")) {
@@ -1961,8 +1981,9 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     }
 
     // ── Reconstruct channels ──
-    if (std::filesystem::exists(package_path/"channels.json")) {
-      auto ch_bytes = lv_read(package_path/"channels.json", limits.max_artifact_bytes);
+    {
+      auto ch_bytes = inv_read("channels.json", limits.max_artifact_bytes);
+      check_embedded_schema("channels.json", ch_bytes);
       gspl::BoundedJsonConfig cfg{};
       gspl::BoundedJsonReader chr(ch_bytes, cfg);
       if (chr.begin_object("channels")) {
@@ -1987,10 +2008,10 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
                 if (!chr.next_object_member("chMap")) break;
               }
               chr.end_object("chMap");
-              // Load channel PNG with explicit limits
-              auto ch_path = package_path / "channels" / (encode_pc(cm.id) + ".png");
-              if (std::filesystem::is_regular_file(ch_path)) {
-                auto ch_png = lv_read(ch_path, limits.max_artifact_bytes);
+              // Load channel PNG through inventory
+              {
+                auto ch_png_path = std::string("channels/") + encode_pc(cm.id) + ".png";
+                auto ch_png = inv_read(ch_png_path, limits.max_artifact_bytes);
                 ImageLimits ch_lim{};
                 ch_lim.max_width = limits.max_image_width;
                 ch_lim.max_height = limits.max_image_height;
@@ -2013,8 +2034,9 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     }
 
     // ── Reconstruct collisions ──
-    if (std::filesystem::exists(package_path/"collisions-2d.json")) {
-      auto col_bytes = lv_read(package_path/"collisions-2d.json", limits.max_artifact_bytes);
+    {
+      auto col_bytes = inv_read("collisions-2d.json", limits.max_artifact_bytes);
+      check_embedded_schema("collisions-2d.json", col_bytes);
       gspl::BoundedJsonConfig cfg{};
       gspl::BoundedJsonReader cr(col_bytes, cfg);
       if (cr.begin_object("collisions")) {
@@ -2131,10 +2153,24 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
       }
       return m;
     };
-    pkg.base_morphology = lv_parse_morph_json(package_path/"resolved-base-morphology.json");
-    pkg.storm_morphology = lv_parse_morph_json(package_path/"resolved-storm-morphology.json");
-    if (std::filesystem::exists(package_path/"transformation-morphologies.json")) {
-      auto tm_bytes = lv_read(package_path/"transformation-morphologies.json", limits.max_artifact_bytes);
+    auto inv_path = [&](std::string_view rel) -> std::filesystem::path {
+      auto it = inv.by_path.find(std::string(rel));
+      if (it == inv.by_path.end()) throw std::runtime_error("path not in inventory: " + std::string(rel));
+      return it->second.absolute_path;
+    };
+    {
+      auto base_bytes = inv_read("resolved-base-morphology.json", limits.max_artifact_bytes);
+      check_embedded_schema("resolved-base-morphology.json", base_bytes);
+      pkg.base_morphology = lv_parse_morph_json(inv_path("resolved-base-morphology.json"));
+    }
+    {
+      auto storm_bytes = inv_read("resolved-storm-morphology.json", limits.max_artifact_bytes);
+      check_embedded_schema("resolved-storm-morphology.json", storm_bytes);
+      pkg.storm_morphology = lv_parse_morph_json(inv_path("resolved-storm-morphology.json"));
+    }
+    {
+      auto tm_bytes = inv_read("transformation-morphologies.json", limits.max_artifact_bytes);
+      check_embedded_schema("transformation-morphologies.json", tm_bytes);
       gspl::BoundedJsonConfig cfg{};
       gspl::BoundedJsonReader tmr(tm_bytes, cfg);
       if (tmr.begin_object("trans-morphs")) {
@@ -2197,8 +2233,8 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     }
 
     // ── Reconstruct sprite sheet ──
-    if (std::filesystem::exists(package_path/"sheet"/"atlas.png")) {
-      auto atlas_bytes = lv_read(package_path/"sheet"/"atlas.png", limits.max_artifact_bytes);
+    {
+      auto atlas_bytes = inv_read("sheet/atlas.png", limits.max_artifact_bytes);
       ImageLimits atlas_lim{};
       atlas_lim.max_width = limits.max_image_width;
       atlas_lim.max_height = limits.max_image_height;
@@ -2207,8 +2243,9 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
       pkg.sheet.atlas.image = decode_png(std::span<const std::byte>(
           reinterpret_cast<const std::byte*>(atlas_bytes.data()), atlas_bytes.size()), atlas_lim);
     }
-    if (std::filesystem::exists(package_path/"sheet"/"atlas.json")) {
-      auto aj_bytes = lv_read(package_path/"sheet"/"atlas.json", limits.max_artifact_bytes);
+    {
+      auto aj_bytes = inv_read("sheet/atlas.json", limits.max_artifact_bytes);
+      check_embedded_schema("sheet/atlas.json", aj_bytes);
       // Extract data field from wrapper
       gspl::BoundedJsonConfig cfg{};
       gspl::BoundedJsonReader ajr(aj_bytes, cfg);
@@ -2226,8 +2263,9 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     }
 
     // ── Cross-artifact hash verification: frame-hashes.json (ID-addressed) ──
-    if (std::filesystem::exists(package_path/"frame-hashes.json")) {
-      auto fh_bytes = lv_read(package_path/"frame-hashes.json", limits.max_artifact_bytes);
+    {
+      auto fh_bytes = inv_read("frame-hashes.json", limits.max_artifact_bytes);
+      check_embedded_schema("frame-hashes.json", fh_bytes);
       gspl::BoundedJsonConfig cfg{};
       gspl::BoundedJsonReader fhr(fh_bytes, cfg);
       if (fhr.begin_object("frame-hashes")) {
@@ -2272,8 +2310,9 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
       }
     }
     // ── Cross-artifact hash verification: pose-hashes.json (ID-addressed) ──
-    if (std::filesystem::exists(package_path/"pose-hashes.json")) {
-      auto ph_bytes = lv_read(package_path/"pose-hashes.json", limits.max_artifact_bytes);
+    {
+      auto ph_bytes = inv_read("pose-hashes.json", limits.max_artifact_bytes);
+      check_embedded_schema("pose-hashes.json", ph_bytes);
       gspl::BoundedJsonConfig cfg{};
       gspl::BoundedJsonReader phr(ph_bytes, cfg);
       if (phr.begin_object("pose-hashes")) {
