@@ -1899,8 +1899,9 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     // Independently recompute package identity
     auto manifest_preimage = canonicalize_manifest(*manifest_parse.value, false);
     auto computed_pkg_id = sha256(std::string(kIdentityPreimageVersion) + "\n" + manifest_preimage);
+    // Fail closed: stop before inventory and semantic artifact parsing
     if (computed_pkg_id != manifest_parse.value->package_identity)
-      add("LV_READ_PKG_ID", "package identity recomputation mismatch");
+      { add("LV_READ_PKG_ID", "package identity recomputation mismatch"); return result; }
 
     auto& m = *manifest_parse.value;
 
@@ -1940,21 +1941,25 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     };
 
     // Embedded schema cross-check helper
-    auto check_embedded_schema = [&](std::string_view rel_path, std::string_view bytes) {
+    auto check_embedded_schema = [&](std::string_view rel_path, std::string_view bytes) -> bool {
       for (auto const& art : pkg.manifest.artifacts) {
         if (art.path == rel_path) {
           auto expected_schema = artifact_schema_for_kind(art.kind);
           auto embedded = extract_embedded_schema(bytes, limits);
-          if (embedded != expected_schema)
+          // Fail closed: stop before semantic parsing on schema mismatch
+          if (embedded != expected_schema) {
             add("LV_READ_EMBEDDED_SCHEMA", std::string("embedded schema mismatch for ") + std::string(rel_path) + ": expected '" + std::string(expected_schema) + "' got '" + embedded + "'");
-          return;
+            return false;
+          }
+          return true;
         }
       }
+      return true;
     };
 
     // ── Load and parse seed ──
     auto seed_wrapper = inv_read("seed.json", limits.max_artifact_bytes);
-    check_embedded_schema("seed.json", seed_wrapper);
+    if (!check_embedded_schema("seed.json", seed_wrapper)) return result;
     std::string seed_json;
     {
       gspl::BoundedJsonConfig cfg{};
@@ -1979,13 +1984,114 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     if (pkg.manifest.seed_identity != pkg.seed_identity)
       add("LV_READ_SEED_MISMATCH", "seed identity mismatch: manifest vs computed");
 
-    // Reconstructed source skeletal animations (same data as written to source-skeletal-animations.json)
-    pkg.source_skeletal_animations = pkg.seed.clips;
+    // Reconstructed source skeletal animations from independent artifact parser
+    {
+      auto sa_bytes = inv_read("source-skeletal-animations.json", limits.max_artifact_bytes);
+      auto sa_schema = extract_embedded_schema(sa_bytes, limits);
+      if (sa_schema != kSchemaSourceSkeletalAnimations)
+        { add("LV_SOURCE_SCHEMA", "source animations schema mismatch: " + sa_schema); return result; }
+      gspl::BoundedJsonConfig sacfg{}; sacfg.max_object_members = 4096; sacfg.max_array_length = 4096;
+      sacfg.max_nesting_depth = limits.max_json_nesting;
+      gspl::BoundedJsonReader r(sa_bytes, sacfg);
+      if (!r.begin_object("sa")) { add("LV_SOURCE_PARSE", "not a JSON object"); return result; }
+      while (r.has_more() && !r.has_error()) {
+        auto sk = r.read_string_result(); if (!sk.ok()) break;
+        if (!r.require(':', "sa")) break;
+        if (*sk.value == "clips") {
+          if (!r.begin_array("sa-clips")) break;
+          while (r.has_more() && !r.has_error()) {
+            if (!r.begin_object("sa-clip")) break;
+            SkeletalClip clip;
+            while (r.has_more() && !r.has_error()) {
+              auto ck = r.read_string_result(); if (!ck.ok()) break;
+              if (!r.require(':', "sa-clip")) break;
+              if (*ck.value == "id") clip.id = lv_rd_str(r, "clip.id");
+              else if (*ck.value == "duration_ticks") clip.duration_ticks = lv_rd_u32(r, "clip.dur");
+              else if (*ck.value == "looping") clip.looping = lv_rd_bool(r, "clip.loop");
+              else if (*ck.value == "tracks") {
+                if (!r.begin_array("tracks")) break;
+                while (r.has_more() && !r.has_error()) {
+                  if (!r.begin_object("track")) break;
+                  BoneTrack track;
+                  while (r.has_more() && !r.has_error()) {
+                    auto tk = r.read_string_result(); if (!tk.ok()) break;
+                    if (!r.require(':', "track")) break;
+                    if (*tk.value == "bone_id") track.bone_id = lv_rd_str(r, "track.bone");
+                    else if (*tk.value == "keys") {
+                      if (!r.begin_array("keys")) break;
+                      while (r.has_more() && !r.has_error()) {
+                        if (!r.begin_object("key")) break;
+                        BoneKeyframe bkf;
+                        while (r.has_more() && !r.has_error()) {
+                          auto kk = r.read_string_result(); if (!kk.ok()) break;
+                          if (!r.require(':', "key")) break;
+                          if (*kk.value == "tick") bkf.tick = lv_rd_u32(r, "key.tick");
+                          else if (*kk.value == "x") bkf.transform.x = lv_rd_dbl(r, "key.x");
+                          else if (*kk.value == "y") bkf.transform.y = lv_rd_dbl(r, "key.y");
+                          else if (*kk.value == "rotation_degrees") bkf.transform.rotation_degrees = lv_rd_dbl(r, "key.rot");
+                          else if (*kk.value == "scale_x") bkf.transform.scale_x = lv_rd_dbl(r, "key.sx");
+                          else if (*kk.value == "scale_y") bkf.transform.scale_y = lv_rd_dbl(r, "key.sy");
+                          else r.skip_value();
+                          r.record_object_member("key");
+                          if (!r.next_object_member("key")) break;
+                        }
+                        r.end_object("key");
+                        track.keys.push_back(std::move(bkf));
+                        r.record_array_element("keys");
+                        if (!r.next_array_element("keys")) break;
+                      }
+                      r.end_array("keys");
+                    } else r.skip_value();
+                    r.record_object_member("track");
+                    if (!r.next_object_member("track")) break;
+                  }
+                  r.end_object("track");
+                  if (!track.bone_id.empty()) clip.tracks.push_back(std::move(track));
+                  r.record_array_element("tracks");
+                  if (!r.next_array_element("tracks")) break;
+                }
+                r.end_array("tracks");
+              } else if (*ck.value == "events") {
+                if (!r.begin_array("events")) break;
+                while (r.has_more() && !r.has_error()) {
+                  if (!r.begin_object("event")) break;
+                  std::string ev_name; std::uint32_t ev_tick = 0;
+                  while (r.has_more() && !r.has_error()) {
+                    auto ek = r.read_string_result(); if (!ek.ok()) break;
+                    if (!r.require(':', "event")) break;
+                    if (*ek.value == "name") ev_name = lv_rd_str(r, "event.name");
+                    else if (*ek.value == "tick") ev_tick = lv_rd_u32(r, "event.tick");
+                    else r.skip_value();
+                    r.record_object_member("event");
+                    if (!r.next_object_member("event")) break;
+                  }
+                  r.end_object("event");
+                  if (!ev_name.empty()) clip.events.emplace_back(std::move(ev_name), ev_tick);
+                  r.record_array_element("events");
+                  if (!r.next_array_element("events")) break;
+                }
+                r.end_array("events");
+              } else r.skip_value();
+              r.record_object_member("sa-clip");
+              if (!r.next_object_member("sa-clip")) break;
+            }
+            r.end_object("sa-clip");
+            if (!clip.id.empty()) pkg.source_skeletal_animations.push_back(std::move(clip));
+            r.record_array_element("sa-clips");
+            if (!r.next_array_element("sa-clips")) break;
+          }
+          r.end_array("sa-clips");
+        } else { r.skip_value(); }
+        r.record_object_member("sa");
+        if (!r.next_object_member("sa")) break;
+      }
+      r.end_object("sa");
+    }
 
     // ── Reconstruct frames from frames.json + PNG files ──
     {
       auto fm_bytes = inv_read("frames.json", limits.max_artifact_bytes);
-      check_embedded_schema("frames.json", fm_bytes);
+      if (!check_embedded_schema("frames.json", fm_bytes)) return result;
       gspl::BoundedJsonConfig fcfg{}; fcfg.max_object_members = 512;
       gspl::BoundedJsonReader fmr(fm_bytes, fcfg);
       bool frames_schema_ok = false;
@@ -2061,7 +2167,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     // ── Reconstruct generated clips from animations-2d.json ──
     {
       auto anim_bytes = inv_read("animations-2d.json", limits.max_artifact_bytes);
-      check_embedded_schema("animations-2d.json", anim_bytes);
+      if (!check_embedded_schema("animations-2d.json", anim_bytes)) return result;
       gspl::BoundedJsonConfig cfg{};
       gspl::BoundedJsonReader ar(anim_bytes, cfg);
       if (ar.begin_object("animations-2d")) {
@@ -2137,7 +2243,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
       // Parse frame-samples.json
       {
         auto fs_bytes = inv_read("frame-samples.json", limits.max_artifact_bytes);
-        check_embedded_schema("frame-samples.json", fs_bytes);
+        if (!check_embedded_schema("frame-samples.json", fs_bytes)) return result;
         gspl::BoundedJsonConfig cfg2{};
         gspl::BoundedJsonReader fsr(fs_bytes, cfg2);
         if (fsr.begin_object("frame-samples")) {
@@ -2179,7 +2285,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
       // Parse animation-events.json
       {
         auto ev_bytes = inv_read("animation-events.json", limits.max_artifact_bytes);
-        check_embedded_schema("animation-events.json", ev_bytes);
+        if (!check_embedded_schema("animation-events.json", ev_bytes)) return result;
         gspl::BoundedJsonConfig cfg3{};
         gspl::BoundedJsonReader evr(ev_bytes, cfg3);
         if (evr.begin_object("anim-events")) {
@@ -2222,7 +2328,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     // ── Reconstruct channels ──
     {
       auto ch_bytes = inv_read("channels.json", limits.max_artifact_bytes);
-      check_embedded_schema("channels.json", ch_bytes);
+      if (!check_embedded_schema("channels.json", ch_bytes)) return result;
       gspl::BoundedJsonConfig cfg{};
       gspl::BoundedJsonReader chr(ch_bytes, cfg);
       if (chr.begin_object("channels")) {
@@ -2275,7 +2381,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     // ── Reconstruct collisions ──
     {
       auto col_bytes = inv_read("collisions-2d.json", limits.max_artifact_bytes);
-      check_embedded_schema("collisions-2d.json", col_bytes);
+      if (!check_embedded_schema("collisions-2d.json", col_bytes)) return result;
       gspl::BoundedJsonConfig cfg{};
       gspl::BoundedJsonReader cr(col_bytes, cfg);
       if (cr.begin_object("collisions")) {
@@ -2393,17 +2499,17 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     };
     {
       auto base_bytes = inv_read("resolved-base-morphology.json", limits.max_artifact_bytes);
-      check_embedded_schema("resolved-base-morphology.json", base_bytes);
+      if (!check_embedded_schema("resolved-base-morphology.json", base_bytes)) return result;
       pkg.base_morphology = lv_parse_morph_json(base_bytes);
     }
     {
       auto storm_bytes = inv_read("resolved-storm-morphology.json", limits.max_artifact_bytes);
-      check_embedded_schema("resolved-storm-morphology.json", storm_bytes);
+      if (!check_embedded_schema("resolved-storm-morphology.json", storm_bytes)) return result;
       pkg.storm_morphology = lv_parse_morph_json(storm_bytes);
     }
     {
       auto tm_bytes = inv_read("transformation-morphologies.json", limits.max_artifact_bytes);
-      check_embedded_schema("transformation-morphologies.json", tm_bytes);
+      if (!check_embedded_schema("transformation-morphologies.json", tm_bytes)) return result;
       gspl::BoundedJsonConfig cfg{};
       gspl::BoundedJsonReader tmr(tm_bytes, cfg);
       if (tmr.begin_object("trans-morphs")) {
@@ -2478,7 +2584,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     }
     {
       auto aj_bytes = inv_read("sheet/atlas.json", limits.max_artifact_bytes);
-      check_embedded_schema("sheet/atlas.json", aj_bytes);
+      if (!check_embedded_schema("sheet/atlas.json", aj_bytes)) return result;
       // Extract data field from wrapper
       gspl::BoundedJsonConfig cfg{};
       gspl::BoundedJsonReader ajr(aj_bytes, cfg);
@@ -2498,7 +2604,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     // ── Cross-artifact hash verification: frame-hashes.json (ID-addressed) ──
     {
       auto fh_bytes = inv_read("frame-hashes.json", limits.max_artifact_bytes);
-      check_embedded_schema("frame-hashes.json", fh_bytes);
+      if (!check_embedded_schema("frame-hashes.json", fh_bytes)) return result;
       gspl::BoundedJsonConfig cfg{};
       gspl::BoundedJsonReader fhr(fh_bytes, cfg);
       if (fhr.begin_object("frame-hashes")) {
@@ -2545,7 +2651,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     // ── Cross-artifact hash verification: pose-hashes.json (ID-addressed) ──
     {
       auto ph_bytes = inv_read("pose-hashes.json", limits.max_artifact_bytes);
-      check_embedded_schema("pose-hashes.json", ph_bytes);
+      if (!check_embedded_schema("pose-hashes.json", ph_bytes)) return result;
       gspl::BoundedJsonConfig cfg{};
       gspl::BoundedJsonReader phr(ph_bytes, cfg);
       if (phr.begin_object("pose-hashes")) {
@@ -3019,10 +3125,14 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
         add("LV_PROV_FRAME_HASH_TABLE", "frame-hash-table provenance mismatch");
     }
 
-    // NOTE: Source-animation provenance (kDomainSourceAnimSet) is declared in the manifest
-    // but verification requires parsing source-skeletal-animations.json directly from the
-    // immutable inventory bytes rather than from seed.json (which loses float precision).
-    // Deferred until source-skeletal-animations.json has its own parser in the reader.
+    // Source-animation provenance (independently recomputed from reconstructed artifact)
+    if (!pkg.source_skeletal_animations.empty()) {
+      auto preimage = canonicalize_source_animation_set_preimage(pkg.source_skeletal_animations);
+      auto computed = compute_domain_id_impl(kDomainSourceAnimSet, preimage);
+      auto stored = prov("source-skeletal-animations.json");
+      if (!stored.empty() && computed != stored)
+        add("LV_PROV_SOURCE_ANIMATIONS", "source-animation provenance mismatch");
+    }
 
     // Generated-clip-set identity
     {
