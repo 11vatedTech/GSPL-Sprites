@@ -455,9 +455,16 @@ add_test(NAME gspl_sprites_voltfox_phase_isolation_tests
 add_executable(gspl_sprites_living_package_tests tests/living_package_tests.cpp)
 target_link_libraries(gspl_sprites_living_package_tests PRIVATE gspl_sprites_core)
 target_compile_definitions(gspl_sprites_living_package_tests PRIVATE
-  GSPL_SPRITES_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+  GSPL_SPRITES_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+  GSPL_SPRITES_GSPLC_PATH="$<TARGET_FILE:gsplc>")
+add_dependencies(gspl_sprites_living_package_tests gsplc)
 add_test(NAME gspl_sprites_living_package_tests
   COMMAND gspl_sprites_living_package_tests)
+# The living-package acceptance test decodes 48 frames, 192 channels, and the
+# atlas and runs CLI subprocess checks; a single Debug run is ~100 s locally.
+# Give it headroom beyond the default gate timeout so a loaded CI/OneDrive
+# machine does not kill it mid-run (it must still complete fully to pass).
+set_tests_properties(gspl_sprites_living_package_tests PROPERTIES TIMEOUT 300)
 
 add_executable(gspl_sprites_utf8_tests tests/utf8_tests.cpp)
 target_link_libraries(gspl_sprites_utf8_tests PRIVATE gspl_sprites_core)
