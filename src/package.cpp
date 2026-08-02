@@ -1425,6 +1425,8 @@ std::string canonicalize_channel_set_preimage(std::span<const ChannelMap> channe
     preimage += ch.id + "\n";
     preimage += ch.target_frame_id + "\n";
     preimage += std::to_string(static_cast<int>(ch.kind)) + "\n";
+    preimage += std::to_string(ch.image.width) + "x" + std::to_string(ch.image.height) + "\n";
+    preimage += compute_frame_hash(ch.image) + "\n";
   }
   return preimage;
 }
@@ -1442,16 +1444,29 @@ std::string canonicalize_morphology_preimage(const EffectiveMorphology& morph) {
     preimage += canonical_double(mp.size_x) + "," + canonical_double(mp.size_y) + "," + canonical_double(mp.size_z) + "\n";
     preimage += canonical_double(mp.rotation_degrees) + "\n";
     preimage += std::to_string(mp.z_order) + "\n";
+    preimage += std::string(mp.emissive ? "1" : "0") + "\n";
+    preimage += std::string(mp.electrical_marking ? "1" : "0") + "\n";
   }
   return preimage;
 }
 
+std::string canonicalize_channel_image_preimage(const ChannelMap& ch) {
+  std::string preimage;
+  preimage += ch.id + "\n";
+  preimage += ch.target_frame_id + "\n";
+  preimage += std::to_string(static_cast<int>(ch.kind)) + "\n";
+  preimage += std::to_string(ch.image.width) + "x" + std::to_string(ch.image.height) + "\n";
+  preimage += compute_frame_hash(ch.image);
+  return preimage;
+}
+
 std::string canonicalize_atlas_preimage(std::span<const AtlasPlacement> placements,
-                                         std::uint32_t atlas_width, std::uint32_t atlas_height) {
+                                         const ImageRgba8& atlas_image) {
   auto sorted = std::vector<AtlasPlacement>(placements.begin(), placements.end());
   std::ranges::sort(sorted, {}, &AtlasPlacement::frame_id);
   std::string preimage;
-  preimage += std::to_string(atlas_width) + "x" + std::to_string(atlas_height) + "\n";
+  preimage += std::to_string(atlas_image.width) + "x" + std::to_string(atlas_image.height) + "\n";
+  preimage += compute_frame_hash(atlas_image) + "\n";
   for (auto const& p : sorted) {
     preimage += p.frame_id + "\n";
     preimage += std::to_string(p.x) + "," + std::to_string(p.y) + "\n";
@@ -1768,7 +1783,7 @@ void build_living_visual_package(const LivingVisualPackageInput& input, const st
     }
     std::string atlas_id = compute_domain_id_impl(
         kDomainSpriteAtlas, canonicalize_atlas_preimage(
-            input.sheet.atlas.placements, input.sheet.atlas.image.width, input.sheet.atlas.image.height));
+            input.sheet.atlas.placements, input.sheet.atlas.image));
     // Source-animation identity: semantic provenance from seed clips
     std::string source_anim_id;
     {
@@ -1813,9 +1828,9 @@ void build_living_visual_package(const LivingVisualPackageInput& input, const st
     add_artifact("animation-events.json", LivingArtifactKind::generated_events,
                  {"animations-2d.json", "frame-samples.json"}, event_sched_id);
 
-    // Channels
+    // Channels — per-channel image provenance derived from decoded pixel semantics
     for (auto const& ch : input.channels) {
-      auto ch_hash = sha256(std::string("gspl.channel-pixel.identity/0.1\n") + seed_id + ":" + ch.id);
+      auto ch_hash = compute_domain_id_impl(kDomainChannelImage, canonicalize_channel_image_preimage(ch));
       add_artifact("channels/" + encode_pc(ch.id) + ".png", LivingArtifactKind::channel_image,
                    {"channels.json", ("frames/" + encode_pc(ch.target_frame_id) + ".png")}, ch_hash);
     }
@@ -1992,49 +2007,59 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
       sacfg.max_nesting_depth = limits.max_json_nesting;
       gspl::BoundedJsonReader r(sa_bytes, sacfg);
       if (!r.begin_object("sa")) { add("LV_SOURCE_PARSE", "not a JSON object"); return result; }
+      std::set<std::string, std::less<>> sa_seen;
       while (r.has_more() && !r.has_error()) {
         auto sk = r.read_string_result(); if (!sk.ok()) break;
         if (!r.require(':', "sa")) break;
-        if (*sk.value == "schema") { r.skip_value(); }
-        else if (*sk.value == "clips") {
+        if (*sk.value == "schema") { sa_seen.insert("schema"); r.skip_value(); }
+        else if (*sk.value == "clips") { sa_seen.insert("clips");
           if (!r.begin_array("sa-clips")) break;
           while (r.has_more() && !r.has_error()) {
             if (!r.begin_object("sa-clip")) break;
             SkeletalClip clip;
+            std::set<std::string, std::less<>> clip_seen;
             while (r.has_more() && !r.has_error()) {
               auto ck = r.read_string_result(); if (!ck.ok()) break;
               if (!r.require(':', "sa-clip")) break;
-              if (*ck.value == "id") clip.id = lv_rd_str(r, "clip.id");
-              else if (*ck.value == "duration_ticks") clip.duration_ticks = lv_rd_u32(r, "clip.dur");
-              else if (*ck.value == "looping") clip.looping = lv_rd_bool(r, "clip.loop");
-              else if (*ck.value == "tracks") {
+              if (*ck.value == "id") { if (!clip_seen.insert("id").second) add("LV_SOURCE_PARSE", "duplicate source clip field: id"); clip.id = lv_rd_str(r, "clip.id"); }
+              else if (*ck.value == "duration_ticks") { if (!clip_seen.insert("duration_ticks").second) add("LV_SOURCE_PARSE", "duplicate source clip field: duration_ticks"); clip.duration_ticks = lv_rd_u32(r, "clip.dur"); }
+              else if (*ck.value == "looping") { if (!clip_seen.insert("looping").second) add("LV_SOURCE_PARSE", "duplicate source clip field: looping"); clip.looping = lv_rd_bool(r, "clip.loop"); }
+              else if (*ck.value == "tracks") { if (!clip_seen.insert("tracks").second) add("LV_SOURCE_PARSE", "duplicate source clip field: tracks");
                 if (!r.begin_array("tracks")) break;
                 while (r.has_more() && !r.has_error()) {
                   if (!r.begin_object("track")) break;
                   BoneTrack track;
+                  std::set<std::string, std::less<>> track_seen;
                   while (r.has_more() && !r.has_error()) {
                     auto tk = r.read_string_result(); if (!tk.ok()) break;
                     if (!r.require(':', "track")) break;
-                    if (*tk.value == "bone_id") track.bone_id = lv_rd_str(r, "track.bone");
-                    else if (*tk.value == "keys") {
+                    if (*tk.value == "bone_id") { if (!track_seen.insert("bone_id").second) add("LV_SOURCE_PARSE", "duplicate source track field: bone_id"); track.bone_id = lv_rd_str(r, "track.bone"); }
+                    else if (*tk.value == "keys") { if (!track_seen.insert("keys").second) add("LV_SOURCE_PARSE", "duplicate source track field: keys");
                       if (!r.begin_array("keys")) break;
                       while (r.has_more() && !r.has_error()) {
                         if (!r.begin_object("key")) break;
                         BoneKeyframe bkf;
+                        std::set<std::string, std::less<>> key_seen;
                         while (r.has_more() && !r.has_error()) {
                           auto kk = r.read_string_result(); if (!kk.ok()) break;
                           if (!r.require(':', "key")) break;
-                          if (*kk.value == "tick") bkf.tick = lv_rd_u32(r, "key.tick");
-                          else if (*kk.value == "x") bkf.transform.x = lv_rd_dbl(r, "key.x");
-                          else if (*kk.value == "y") bkf.transform.y = lv_rd_dbl(r, "key.y");
-                          else if (*kk.value == "rotation_degrees") bkf.transform.rotation_degrees = lv_rd_dbl(r, "key.rot");
-                          else if (*kk.value == "scale_x") bkf.transform.scale_x = lv_rd_dbl(r, "key.sx");
-                          else if (*kk.value == "scale_y") bkf.transform.scale_y = lv_rd_dbl(r, "key.sy");
+                          if (*kk.value == "tick") { if (!key_seen.insert("tick").second) add("LV_SOURCE_PARSE", "duplicate source key field: tick"); bkf.tick = lv_rd_u32(r, "key.tick"); }
+                          else if (*kk.value == "x") { if (!key_seen.insert("x").second) add("LV_SOURCE_PARSE", "duplicate source key field: x"); bkf.transform.x = lv_rd_dbl(r, "key.x"); }
+                          else if (*kk.value == "y") { if (!key_seen.insert("y").second) add("LV_SOURCE_PARSE", "duplicate source key field: y"); bkf.transform.y = lv_rd_dbl(r, "key.y"); }
+                          else if (*kk.value == "rotation_degrees") { if (!key_seen.insert("rotation_degrees").second) add("LV_SOURCE_PARSE", "duplicate source key field: rotation_degrees"); bkf.transform.rotation_degrees = lv_rd_dbl(r, "key.rot"); }
+                          else if (*kk.value == "scale_x") { if (!key_seen.insert("scale_x").second) add("LV_SOURCE_PARSE", "duplicate source key field: scale_x"); bkf.transform.scale_x = lv_rd_dbl(r, "key.sx"); }
+                          else if (*kk.value == "scale_y") { if (!key_seen.insert("scale_y").second) add("LV_SOURCE_PARSE", "duplicate source key field: scale_y"); bkf.transform.scale_y = lv_rd_dbl(r, "key.sy"); }
                           else { add("LV_SOURCE_PARSE", "unknown key field: " + *kk.value); r.skip_value(); }
                           r.record_object_member("key");
                           if (!r.next_object_member("key")) break;
                         }
                         r.end_object("key");
+                        {
+                          static constexpr std::string_view kKeyFields[] = {"tick", "x", "y", "rotation_degrees", "scale_x", "scale_y"};
+                          for (auto const& f : kKeyFields)
+                            if (!key_seen.count(f))
+                              add("LV_SOURCE_SCHEMA", "source key missing required field: " + std::string(f));
+                        }
                         track.keys.push_back(std::move(bkf));
                         r.record_array_element("keys");
                         if (!r.next_array_element("keys")) break;
@@ -2045,26 +2070,31 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
                     if (!r.next_object_member("track")) break;
                   }
                   r.end_object("track");
+                  if (!track_seen.count("bone_id")) add("LV_SOURCE_SCHEMA", "source track missing required field: bone_id");
+                  if (!track_seen.count("keys")) add("LV_SOURCE_SCHEMA", "source track missing required field: keys");
                   if (!track.bone_id.empty()) clip.tracks.push_back(std::move(track));
                   r.record_array_element("tracks");
                   if (!r.next_array_element("tracks")) break;
                 }
                 r.end_array("tracks");
-              } else if (*ck.value == "events") {
+              } else if (*ck.value == "events") { if (!clip_seen.insert("events").second) add("LV_SOURCE_PARSE", "duplicate source clip field: events");
                 if (!r.begin_array("events")) break;
                 while (r.has_more() && !r.has_error()) {
                   if (!r.begin_object("event")) break;
                   std::string ev_name; std::uint32_t ev_tick = 0;
+                  std::set<std::string, std::less<>> ev_seen;
                   while (r.has_more() && !r.has_error()) {
                     auto ek = r.read_string_result(); if (!ek.ok()) break;
                     if (!r.require(':', "event")) break;
-                    if (*ek.value == "name") ev_name = lv_rd_str(r, "event.name");
-                    else if (*ek.value == "tick") ev_tick = lv_rd_u32(r, "event.tick");
+                    if (*ek.value == "name") { if (!ev_seen.insert("name").second) add("LV_SOURCE_PARSE", "duplicate source event field: name"); ev_name = lv_rd_str(r, "event.name"); }
+                    else if (*ek.value == "tick") { if (!ev_seen.insert("tick").second) add("LV_SOURCE_PARSE", "duplicate source event field: tick"); ev_tick = lv_rd_u32(r, "event.tick"); }
                     else { add("LV_SOURCE_PARSE", "unknown event field: " + *ek.value); r.skip_value(); }
                     r.record_object_member("event");
                     if (!r.next_object_member("event")) break;
                   }
                   r.end_object("event");
+                  if (!ev_seen.count("name")) add("LV_SOURCE_SCHEMA", "source event missing required field: name");
+                  if (!ev_seen.count("tick")) add("LV_SOURCE_SCHEMA", "source event missing required field: tick");
                   if (!ev_name.empty()) clip.events.emplace_back(std::move(ev_name), ev_tick);
                   r.record_array_element("events");
                   if (!r.next_array_element("events")) break;
@@ -2075,6 +2105,12 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
               if (!r.next_object_member("sa-clip")) break;
             }
             r.end_object("sa-clip");
+            {
+              static constexpr std::string_view kClipFields[] = {"id", "duration_ticks", "looping", "tracks", "events"};
+              for (auto const& f : kClipFields)
+                if (!clip_seen.count(f))
+                  add("LV_SOURCE_SCHEMA", "source clip missing required field: " + std::string(f));
+            }
             if (!clip.id.empty()) pkg.source_skeletal_animations.push_back(std::move(clip));
             r.record_array_element("sa-clips");
             if (!r.next_array_element("sa-clips")) break;
@@ -2085,6 +2121,51 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
         if (!r.next_object_member("sa")) break;
       }
       r.end_object("sa");
+      if (!sa_seen.count("schema") || !sa_seen.count("clips"))
+        add("LV_SOURCE_SCHEMA", "source animations root missing required field");
+      // ── Strict post-parse validation of the reconstructed source animations ──
+      {
+        std::set<std::string> clip_ids;
+        for (auto const& c : pkg.source_skeletal_animations) {
+          if (!clip_ids.insert(c.id).second)
+            add("LV_SOURCE_DUP_CLIP", "duplicate source clip ID: " + c.id);
+          if (c.duration_ticks == 0)
+            add("LV_SOURCE_DUR_ZERO", "zero-duration source clip: " + c.id);
+          std::set<std::string> track_bones;
+          for (auto const& t : c.tracks) {
+            if (!track_bones.insert(t.bone_id).second)
+              add("LV_SOURCE_DUP_TRACK", "duplicate track bone in clip " + c.id + ": " + t.bone_id);
+            bool first_key = true;
+            std::uint32_t prev_tick = 0;
+            for (auto const& k : t.keys) {
+              if (!first_key && k.tick <= prev_tick)
+                add("LV_SOURCE_KEY_ORDER", "keyframe ticks not strictly increasing: " + c.id + "/" + t.bone_id);
+              if (k.tick >= c.duration_ticks)
+                add("LV_SOURCE_KEY_RANGE", "keyframe tick outside clip duration: " + c.id + "/" + t.bone_id);
+              if (!std::isfinite(k.transform.x) || !std::isfinite(k.transform.y) ||
+                  !std::isfinite(k.transform.rotation_degrees) ||
+                  !std::isfinite(k.transform.scale_x) || !std::isfinite(k.transform.scale_y))
+                add("LV_SOURCE_NONFINITE", "non-finite keyframe transform: " + c.id + "/" + t.bone_id);
+              prev_tick = k.tick; first_key = false;
+            }
+          }
+          std::set<std::string> event_ids;
+          for (auto const& [ev_id, ev_tick] : c.events) {
+            if (!event_ids.insert(ev_id).second)
+              add("LV_SOURCE_DUP_EVENT", "duplicate source event in clip " + c.id + ": " + ev_id);
+            if (ev_tick >= c.duration_ticks)
+              add("LV_SOURCE_EVENT_RANGE", "authored event tick outside clip duration: " + c.id + "/" + ev_id);
+          }
+          // Unresolved bone reference check against the reconstructed seed rig
+          if (pkg.seed.rig && !pkg.seed.rig->bones.empty()) {
+            std::set<std::string, std::less<>> rig_bones;
+            for (auto const& b : pkg.seed.rig->bones) rig_bones.insert(b.id);
+            for (auto const& t : c.tracks)
+              if (!rig_bones.count(t.bone_id))
+                add("LV_SOURCE_BONE_REF", "unresolved bone reference: " + t.bone_id + " in clip " + c.id);
+          }
+        }
+      }
     }
 
     // ── Reconstruct frames from frames.json + PNG files ──
@@ -2147,7 +2228,12 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
               } catch (std::exception const& ex) {
                 add("LV_READ_FRAME_PNG", std::string("failed to decode frame PNG: ") + fs.id + " — " + ex.what());
               }
-              if (!fs.id.empty()) pkg.frames.push_back(std::move(fs));
+              if (!fs.id.empty()) {
+                if (pkg.frames.size() >= limits.max_frames)
+                  add("LV_READ_FRAME_LIMIT", "frame count exceeds configured limit " + std::to_string(limits.max_frames));
+                else
+                  pkg.frames.push_back(std::move(fs));
+              }
               fmr.record_array_element("frames-json.frames");
               if (!fmr.next_array_element("frames-json.frames")) break;
             }
@@ -2364,7 +2450,12 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
                 cm.image = decode_png(std::span<const std::byte>(
                     reinterpret_cast<const std::byte*>(ch_png.data()), ch_png.size()), ch_lim);
               }
-              if (!cm.id.empty()) pkg.channels.push_back(std::move(cm));
+              if (!cm.id.empty()) {
+                if (pkg.channels.size() >= limits.max_channels)
+                  add("LV_READ_CHANNEL_LIMIT", "channel count exceeds configured limit " + std::to_string(limits.max_channels));
+                else
+                  pkg.channels.push_back(std::move(cm));
+              }
               chr.record_array_element("ch.maps");
               if (!chr.next_array_element("ch.maps")) break;
             }
@@ -2483,7 +2574,13 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
                 if (!mr.next_object_member("morphPart3")) break;
               }
               mr.end_object("morphPart3");
-              if (pid.ok() && !pid.value->empty()) m[std::move(*pid.value)] = mp;
+              if (pid.ok() && !pid.value->empty()) {
+                if (m.size() >= limits.max_morphology_parts) {
+                  add("LV_READ_MORPH_PARTS_LIMIT", "morphology part count exceeds configured limit " + std::to_string(limits.max_morphology_parts));
+                  break;
+                }
+                m[std::move(*pid.value)] = mp;
+              }
               mr.record_object_member("morph.parts");
               if (!mr.next_object_member("morph.parts")) break;
             }
@@ -2597,6 +2694,53 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
           if (!ajr.next_object_member("atlas-wrapper")) break;
         }
         ajr.end_object("atlas-wrapper");
+      }
+      // Reconstruct typed atlas placements from the canonical metadata
+      if (!pkg.sheet.metadata.empty()) {
+        gspl::BoundedJsonConfig mcfg{}; mcfg.max_nesting_depth = limits.max_json_nesting; mcfg.max_tokens = limits.max_json_tokens; mcfg.max_object_members = 512; mcfg.max_array_length = 512;
+        gspl::BoundedJsonReader amr(pkg.sheet.metadata, mcfg);
+        if (amr.begin_object("atlas-meta")) {
+          std::uint32_t meta_w = 0, meta_h = 0;
+          while (amr.has_more() && !amr.has_error()) {
+            auto mk = amr.read_string_result(); if (!mk.ok()) break;
+            if (!amr.require(':', "atlas-meta")) break;
+            if (*mk.value == "width") meta_w = lv_rd_u32(amr, "atlas-meta.width");
+            else if (*mk.value == "height") meta_h = lv_rd_u32(amr, "atlas-meta.height");
+            else if (*mk.value == "frames") {
+              if (!amr.begin_array("atlas-meta.frames")) break;
+              while (amr.has_more() && !amr.has_error()) {
+                if (!amr.begin_object("placement")) break;
+                AtlasPlacement pl;
+                while (amr.has_more() && !amr.has_error()) {
+                  auto pk = amr.read_string_result(); if (!pk.ok()) break;
+                  if (!amr.require(':', "placement")) break;
+                  if (*pk.value == "id") pl.frame_id = lv_rd_str(amr, "pl.id");
+                  else if (*pk.value == "x") pl.x = lv_rd_u32(amr, "pl.x");
+                  else if (*pk.value == "y") pl.y = lv_rd_u32(amr, "pl.y");
+                  else if (*pk.value == "width") pl.width = lv_rd_u32(amr, "pl.w");
+                  else if (*pk.value == "height") pl.height = lv_rd_u32(amr, "pl.h");
+                  else if (*pk.value == "pivotX") pl.pivot_x = lv_rd_i32(amr, "pl.px");
+                  else if (*pk.value == "pivotY") pl.pivot_y = lv_rd_i32(amr, "pl.py");
+                  else if (*pk.value == "durationTicks") pl.duration_ticks = lv_rd_u32(amr, "pl.dur");
+                  else amr.skip_value();
+                  amr.record_object_member("placement");
+                  if (!amr.next_object_member("placement")) break;
+                }
+                amr.end_object("placement");
+                if (!pl.frame_id.empty()) pkg.sheet.atlas.placements.push_back(std::move(pl));
+                amr.record_array_element("atlas-meta.frames");
+                if (!amr.next_array_element("atlas-meta.frames")) break;
+              }
+              amr.end_array("atlas-meta.frames");
+            } else amr.skip_value();
+            amr.record_object_member("atlas-meta");
+            if (!amr.next_object_member("atlas-meta")) break;
+          }
+          amr.end_object("atlas-meta");
+          if (meta_w != 0 && meta_h != 0 &&
+              (meta_w != pkg.sheet.atlas.image.width || meta_h != pkg.sheet.atlas.image.height))
+            add("LV_READ_ATLAS_DIMS", "atlas metadata dimensions mismatch decoded image");
+        }
       }
     }
 
@@ -2753,7 +2897,29 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
       }
     }
 
-    result.value = std::move(pkg);
+    // Fail closed only for FATAL read conditions: package identity, manifest
+    // canonicality, inventory integrity, embedded schemas, source-animation
+    // parse/strict validation, and parser limits. Semantic relation diagnostics
+    // (e.g. LV_READ_FH_MISSING, LV_READ_DUP_SAMPLE) are re-validated by the
+    // verifier's semantic layer and must not block package reconstruction.
+    auto fatal_read = [](std::string const& code) {
+      if (code == "LV_READ_PKG_ID" || code == "LV_READ_MANIFEST_NONCANONICAL" ||
+          code == "LV_READ_NO_DIR" || code == "LV_READ_NO_DATA" ||
+          code == "LV_READ_ERROR")
+        return true;
+      if (code.starts_with("LV_INV_")) return true;
+      if (code.starts_with("LV_SOURCE_")) return true;
+      if (code.starts_with("LV_PARSE_")) return true;
+      if (code.find("SCHEMA") != std::string::npos) return true;
+      if (code == "LV_READ_FRAME_LIMIT" || code == "LV_READ_CHANNEL_LIMIT" ||
+          code == "LV_READ_MORPH_PARTS_LIMIT")
+        return true;
+      return false;
+    };
+    bool fatal = false;
+    for (auto const& d : result.diagnostics.diagnostics)
+      if (fatal_read(d.code)) { fatal = true; break; }
+    if (!fatal) result.value = std::move(pkg);
   } catch (std::exception const& e) { add("LV_READ_ERROR", e.what()); }
   return result;
 }
@@ -3224,6 +3390,21 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
       auto stored = prov("collisions-2d.json");
       if (!stored.empty() && computed != stored)
         add("LV_PROV_COLLISIONS", "collision-set provenance mismatch");
+      // Strict optional collision reference policy (gated by strict_collision_refs)
+      if (options.strict_collision_refs && pkg.seed.rig && !pkg.seed.rig->bones.empty()) {
+        // Collision attachments may reference rig bones OR rig sockets (e.g. head_top, muzzle).
+        std::set<std::string, std::less<>> rig_bones;
+        for (auto const& b : pkg.seed.rig->bones) rig_bones.insert(b.id);
+        for (auto const& s : pkg.seed.rig->sockets) rig_bones.insert(s.id);
+        for (auto const& s : pkg.collision_shapes)
+          if (!rig_bones.count(s.bone_id))
+            add("LV_COLLISION_BONE_REF", "collision shape references unresolved bone/socket: " + s.bone_id);
+        std::set<std::string, std::less<>> shape_ids;
+        for (auto const& s : pkg.collision_shapes) shape_ids.insert(s.id);
+        for (auto const& w : pkg.collision_windows)
+          if (!shape_ids.count(w.shape_id))
+            add("LV_COLLISION_WINDOW_REF", "collision window references unknown shape: " + w.shape_id);
+      }
     }
 
     // ── Channel-set semantic authority (mandatory, not gated) ──
@@ -3234,6 +3415,12 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
         if (!channel_ids.insert(ch.id).second)
           add("LV_CHANNEL_DUP_ID", "duplicate channel ID: " + ch.id);
       }
+      // Note: no "unique (target, kind)" relation check here. The production
+      // synthesis contract emits both `.alpha` and `.effects` channels with
+      // ChannelMapKind::effects on the same target frame by design, so a
+      // target/kind uniqueness requirement would reject the canonical fixture.
+      // Channel identity is enforced through unique channel IDs instead.
+
       // Known target frames
       std::map<std::string, const FrameSource*, std::less<>> frame_by_id;
       for (auto const& f : pkg.frames) frame_by_id[f.id] = &f;
@@ -3241,12 +3428,28 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
         if (!frame_by_id.count(ch.target_frame_id))
           add("LV_CHANNEL_UNKNOWN_FRAME", "channel " + ch.id + " references unknown frame " + ch.target_frame_id);
       }
+      // Per-channel decoded-image provenance (semantic authority, mandatory)
+      for (auto const& ch : pkg.channels) {
+        auto ch_prov = compute_domain_id_impl(kDomainChannelImage, canonicalize_channel_image_preimage(ch));
+        auto stored_ch = prov("channels/" + encode_pc(ch.id) + ".png");
+        if (!stored_ch.empty() && ch_prov != stored_ch)
+          add("LV_PROV_CHANNEL_IMAGE", "channel image provenance mismatch: " + ch.id);
+      }
       // Channel-set provenance
       auto preimage = canonicalize_channel_set_preimage(pkg.channels);
       auto computed = compute_domain_id_impl(kDomainChannelSet, preimage);
       auto stored = prov("channels.json");
       if (!stored.empty() && computed != stored)
         add("LV_PROV_CHANNEL_SET", "channel-set provenance mismatch");
+      // Optional dimension authority: decoded dims must equal target-frame dims
+      if (options.verify_channel_dimensions) {
+        for (auto const& ch : pkg.channels) {
+          auto fit = frame_by_id.find(ch.target_frame_id);
+          if (fit != frame_by_id.end() &&
+              (ch.image.width != fit->second->image.width || ch.image.height != fit->second->image.height))
+            add("LV_CHANNEL_DIMENSIONS", "channel dims do not match target frame: " + ch.id);
+        }
+      }
     }
 
     // ── Morphology semantic authority (mandatory) ──
@@ -3297,11 +3500,83 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
         add("LV_MORPH_TRANSFORM_STORM", "transformation[9] does not equal storm morphology");
     }
 
+    // ── Optional deeper morphology validation (gated by verify_morphologies) ──
+    if (options.verify_morphologies) {
+      auto validate_morph = [&](EffectiveMorphology const& m, std::string_view label) {
+        if (m.empty()) return;
+        // Package artifacts carry one layer of embedded JSON quotes around string
+        // fields (canonical pipeline convention); strip them for semantic comparison.
+        auto unq = [](std::string const& s) {
+          if (s.size() >= 2 && s.front() == '"' && s.back() == '"') return s.substr(1, s.size() - 2);
+          return s;
+        };
+        static const std::set<std::string, std::less<>> kPrimitives{
+            "ellipse", "capsule", "triangle", "segmented_curve", "aura_contour", "electrical_arc", "box"};
+        std::set<std::string, std::less<>> part_ids;
+        for (auto const& [pid, mp] : m) {
+          if (!part_ids.insert(pid).second)
+            add("LV_MORPH_DUP_PART", std::string(label) + ": duplicate part ID: " + pid);
+          auto primitive = unq(mp.primitive);
+          if (!kPrimitives.count(primitive))
+            add("LV_MORPH_PRIMITIVE", std::string(label) + ": unsupported primitive: " + primitive);
+          if (mp.size_x <= 0.0 || mp.size_y <= 0.0 || mp.size_z <= 0.0)
+            add("LV_MORPH_SIZE", std::string(label) + ": non-positive dimensions for part " + pid);
+          if (!std::isfinite(mp.x) || !std::isfinite(mp.y) || !std::isfinite(mp.z) ||
+              !std::isfinite(mp.rotation_degrees) || !std::isfinite(mp.size_x) ||
+              !std::isfinite(mp.size_y) || !std::isfinite(mp.size_z))
+            add("LV_MORPH_NONFINITE", std::string(label) + ": non-finite transform for part " + pid);
+          auto valid_color = [](std::string const& c) {
+            if (c.size() != 7 && c.size() != 9) return false;
+            if (c[0] != '#') return false;
+            auto hex = [](char ch) { return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F'); };
+            for (std::size_t i = 1; i < c.size(); ++i) if (!hex(c[i])) return false;
+            return true;
+          };
+          if (!valid_color(unq(mp.color)))
+            add("LV_MORPH_COLOR", std::string(label) + ": invalid color encoding for part " + pid);
+        }
+        // Resolved bone references: morphology parts attach to rig bones OR sockets.
+        std::set<std::string, std::less<>> rig_refs;
+        if (pkg.seed.rig) {
+          for (auto const& b : pkg.seed.rig->bones) rig_refs.insert(b.id);
+          for (auto const& s : pkg.seed.rig->sockets) rig_refs.insert(s.id);
+        }
+        if (!rig_refs.empty()) {
+          for (auto const& [pid, mp] : m)
+            if (!rig_refs.count(unq(mp.bone_id)))
+              add("LV_MORPH_BONE_REF", std::string(label) + ": unresolved bone reference: " + unq(mp.bone_id));
+        }
+        // Parent references may point to another part OR to a rig bone (e.g. "root").
+        for (auto const& [pid, mp] : m) {
+          auto parent = unq(mp.parent);
+          if (parent.empty()) continue;
+          if (!part_ids.count(parent) && !rig_refs.count(parent))
+            add("LV_MORPH_PARENT_REF", std::string(label) + ": unresolved parent: " + parent);
+        }
+        for (auto const& [pid, mp] : m) {
+          std::set<std::string, std::less<>> seen{pid};
+          std::string cur = unq(mp.parent);
+          while (!cur.empty()) {
+            if (!seen.insert(cur).second) { add("LV_MORPH_PARENT_CYCLE", std::string(label) + ": parent cycle at " + pid); break; }
+            auto it = m.find(cur);
+            if (it == m.end()) break;
+            cur = unq(it->second.parent);
+          }
+        }
+      };
+      validate_morph(pkg.base_morphology, "base");
+      validate_morph(pkg.storm_morphology, "storm");
+      for (std::size_t i = 0; i < pkg.transformation_morphologies.size(); ++i)
+        validate_morph(pkg.transformation_morphologies[i], "transformation[" + std::to_string(i) + "]");
+    }
+
     // ── Atlas semantic authority (mandatory) ──
     if (!pkg.sheet.atlas.placements.empty()) {
       // Placement/frame set equality
       std::set<std::string> frame_ids;
       for (auto const& f : pkg.frames) frame_ids.insert(f.id);
+      std::map<std::string, const FrameSource*, std::less<>> frame_by_id;
+      for (auto const& f : pkg.frames) frame_by_id[f.id] = &f;
       std::set<std::string> placement_ids;
       for (auto const& p : pkg.sheet.atlas.placements) {
         if (!placement_ids.insert(p.frame_id).second)
@@ -3313,11 +3588,38 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
         if (!placement_ids.count(fid))
           add("LV_ATLAS_MISSING_PLACEMENT", "missing atlas placement for frame " + fid);
       }
-      // Atlas provenance
+      // Placement geometry authority: bounds, overlap, dims, pivot, duration
+      for (auto const& p : pkg.sheet.atlas.placements) {
+        if (p.width == 0 || p.height == 0)
+          add("LV_ATLAS_DIM_MISMATCH", "atlas placement has zero dimension: " + p.frame_id);
+        if (p.x > pkg.sheet.atlas.image.width || p.y > pkg.sheet.atlas.image.height ||
+            p.width > pkg.sheet.atlas.image.width - p.x || p.height > pkg.sheet.atlas.image.height - p.y)
+          add("LV_ATLAS_OOB", "atlas placement out of bounds: " + p.frame_id);
+        auto fit = frame_by_id.find(p.frame_id);
+        if (fit != frame_by_id.end()) {
+          auto const& fimg = fit->second->image;
+          if (p.width != fimg.width || p.height != fimg.height)
+            add("LV_ATLAS_DIM_MISMATCH", "atlas placement dims differ from frame: " + p.frame_id);
+          if (p.pivot_x != fit->second->pivot_x || p.pivot_y != fit->second->pivot_y)
+            add("LV_ATLAS_PIVOT_MISMATCH", "atlas placement pivot differs from frame: " + p.frame_id);
+          if (p.duration_ticks != fit->second->duration_ticks)
+            add("LV_ATLAS_DURATION_MISMATCH", "atlas placement duration differs from frame: " + p.frame_id);
+        }
+      }
+      // Placement overlap authority
+      for (std::size_t i = 0; i < pkg.sheet.atlas.placements.size(); ++i) {
+        for (std::size_t j = i + 1; j < pkg.sheet.atlas.placements.size(); ++j) {
+          auto const& a = pkg.sheet.atlas.placements[i];
+          auto const& b = pkg.sheet.atlas.placements[j];
+          if (a.x < b.x + b.width && b.x < a.x + a.width &&
+              a.y < b.y + b.height && b.y < a.y + a.height)
+            add("LV_ATLAS_OVERLAP", "atlas placements overlap: " + a.frame_id + " / " + b.frame_id);
+        }
+      }
+      // Atlas provenance: metadata + decoded atlas pixel identity
       auto preimage = canonicalize_atlas_preimage(
           pkg.sheet.atlas.placements,
-          pkg.sheet.atlas.image.width,
-          pkg.sheet.atlas.image.height);
+          pkg.sheet.atlas.image);
       auto computed = compute_domain_id_impl(kDomainSpriteAtlas, preimage);
       auto stored_meta = prov("sheet/atlas.json");
       auto stored_png = prov("sheet/atlas.png");
@@ -3327,10 +3629,30 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
         add("LV_PROV_ATLAS", "atlas image provenance mismatch");
     }
 
-    // ── Optional pixel-level checks (gated by verify_pixel_hashes) ──
-    // Reserved for expensive decoded-pixel recomputation:
-    // channel pixel-level checks, atlas/frame pixel equivalence, etc.
-    (void)options.verify_pixel_hashes;
+    // ── Optional decoded-pixel recomputation (gated by verify_pixel_hashes) ──
+    if (options.verify_pixel_hashes && !pkg.sheet.atlas.placements.empty() && !pkg.frames.empty()) {
+      // Atlas region ↔ standalone frame pixel equality (real RGBA comparison)
+      std::map<std::string, const FrameSource*, std::less<>> frame_by_id;
+      for (auto const& f : pkg.frames) frame_by_id[f.id] = &f;
+      for (auto const& p : pkg.sheet.atlas.placements) {
+        auto fit = frame_by_id.find(p.frame_id);
+        if (fit == frame_by_id.end()) continue;
+        if (p.x + p.width > pkg.sheet.atlas.image.width || p.y + p.height > pkg.sheet.atlas.image.height) continue;
+        auto const& atlas = pkg.sheet.atlas.image;
+        auto const& frame = fit->second->image;
+        if (p.width != frame.width || p.height != frame.height) { continue; }
+        bool equal = true;
+        for (std::uint32_t row = 0; row < p.height && equal; ++row) {
+          auto const a_off = (static_cast<std::size_t>(p.y + row) * atlas.width + p.x) * 4ULL;
+          auto const f_off = static_cast<std::size_t>(row) * frame.width * 4ULL;
+          if (std::memcmp(atlas.pixels.data() + a_off, frame.pixels.data() + f_off,
+                          static_cast<std::size_t>(p.width) * 4ULL) != 0)
+            equal = false;
+        }
+        if (!equal)
+          add("LV_ATLAS_REGION_MISMATCH", "atlas region differs from standalone frame: " + p.frame_id);
+      }
+    }
 
     // Package identity already verified by reader (parse + canonicalize + recompute).
     // Encoded artifact hashes, path confinement, symlink safety, byte sizes, and

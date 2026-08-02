@@ -248,6 +248,7 @@ inline constexpr std::string_view kDomainSampleTable      = "gspl.sample-table.i
 inline constexpr std::string_view kDomainPoseTable        = "gspl.pose-table.identity/0.1";
 inline constexpr std::string_view kDomainEventSchedule    = "gspl.event-schedule.identity/0.1";
 inline constexpr std::string_view kDomainChannelSet       = "gspl.channel-set.identity/0.1";
+inline constexpr std::string_view kDomainChannelImage     = "gspl.channel-image.identity/0.1";
 inline constexpr std::string_view kDomainCollisionSet     = "gspl.collision-set.identity/0.1";
 inline constexpr std::string_view kDomainMorphologySet    = "gspl.morphology-set.identity/0.1";
 inline constexpr std::string_view kDomainFrameHashTable   = "gspl.frame-hash-table.identity/0.1";
