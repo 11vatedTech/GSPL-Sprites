@@ -1,13 +1,17 @@
 #include "gspl_sprites/synthesis.hpp"
 #include "gspl_sprites/core.hpp"
 #include "gspl_sprites/package.hpp"
+#include "gspl_sprites/image.hpp"
 #include "gspl/sdk.hpp"
 #include "gspl/semantics.hpp"
 #include "gspl/lowering.hpp"
 
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
+#include <set>
 #include <sstream>
 #include <string>
 
@@ -48,6 +52,10 @@ int main() try {
 
   // ── Scope 1: compile, synthesize, build, record identities ──
   auto pkg_dir = fs::temp_directory_path() / "lv_pkg_test";
+  // Self-heal against leftover state from an interrupted run so repeated
+  // executions (20-run stability proof) never collide with stale temp data.
+  fs::remove_all(pkg_dir);
+  fs::remove_all(pkg_dir.string() + ".staging");
   fs::remove_all(pkg_dir);
 
   std::string expected_seed_id;
@@ -114,6 +122,7 @@ int main() try {
       auto dA = fs::temp_directory_path() / "lv_pkg_det_A";
       auto dB = fs::temp_directory_path() / "lv_pkg_det_B";
       fs::remove_all(dA); fs::remove_all(dB);
+      fs::remove_all(dA.string() + ".staging"); fs::remove_all(dB.string() + ".staging");
       gspl::sprites::build_living_visual_package(pkg_input, dA);
       gspl::sprites::build_living_visual_package(pkg_input, dB);
       auto vA = gspl::sprites::verify_living_visual_package(dA);
@@ -618,7 +627,10 @@ int main() try {
       auto tick_pos = (ev_pos != std::string::npos) ? s.find("\"tick\":", ev_pos) : std::string::npos;
       if (tick_pos != std::string::npos) {
         auto end = s.find_first_of(",}", tick_pos);
-        s.replace(tick_pos, end - tick_pos, "\"tick\":999");
+        // Pick a tick that stays strictly inside every clip duration (min 13)
+        // so the strict source parser accepts the artifact and the semantic
+        // authored-tick binding layer emits LV_EVENT_AUTHORED_TICK.
+        s.replace(tick_pos, end - tick_pos, "\"tick\":12");
       }
       std::ofstream(md/"source-skeletal-animations.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
       auto ml = m; refresh(ml, md, "source-skeletal-animations.json"); finalize(ml, md);
@@ -635,6 +647,795 @@ int main() try {
       auto v = verify_living_visual_package(md);
       check(v.ok(), "SC: valid package passes after manifest regeneration");
       fs::remove_all(md);
+    }
+  }
+
+  // ── Visual-Semantic Self-Consistent Mutations SC13-SC19 ──
+  {
+    using namespace gspl::sprites;
+    std::cout << "\n--- Visual-Semantic Mutation Tests (SC13-SC19) ---\n";
+    PackageReadLimits rlim{};
+    auto mf_bytes = read_file_bytes(pkg_dir/"manifest.json", 4ULL*1024*1024);
+    auto mf_parse = parse_living_package_manifest({mf_bytes.begin(), mf_bytes.end()}, rlim);
+    check(mf_parse.ok(), "SCV: base manifest parse ok");
+    auto m = *mf_parse.value;
+    auto refresh = [&](auto& manifest, auto d, auto path) {
+      auto b = read_file_bytes(d/path, 512ULL*1024*1024);
+      auto h = sha256({b.begin(), b.end()});
+      for (auto& a : manifest.artifacts) if (a.path == path) {
+        a.byte_size = static_cast<std::uint32_t>(b.size()); a.sha256 = std::move(h); return;
+      }
+    };
+    auto finalize = [&](auto& manifest, auto d) {
+      auto cn = canonicalize_manifest(manifest, false);
+      manifest.package_identity = sha256(std::string(kIdentityPreimageVersion) + "\n" + cn);
+      auto cw = canonicalize_manifest(manifest, true);
+      std::ofstream(d/"manifest.json", std::ios::trunc | std::ios::binary).write(cw.data(), cw.size());
+    };
+    auto has_diag = [](auto const& r, std::string_view code) {
+      for (auto const& d : r.validation.diagnostics) if (d.code == code) return true;
+      return false;
+    };
+    auto reached_semantic = [&](auto const& v) {
+      return !has_diag(v, "LV_READ_PKG_ID") && !has_diag(v, "LV_READ_MANIFEST_NONCANONICAL") &&
+             !has_diag(v, "LV_INV_SIZE") && !has_diag(v, "LV_INV_HASH");
+    };
+    auto find_quoted = [](std::string const& s, std::string_view key, std::size_t from) -> std::pair<std::size_t, std::size_t> {
+      auto kp = s.find(key, from);
+      if (kp == std::string::npos) return {std::string::npos, std::string::npos};
+      auto vs = s.find('"', kp + key.size());
+      if (vs == std::string::npos) return {std::string::npos, std::string::npos};
+      auto ve = s.find('"', vs + 1);
+      if (ve == std::string::npos) return {std::string::npos, std::string::npos};
+      return {vs + 1, ve};
+    };
+    auto match_closer = [](std::string const& s, std::size_t open) -> std::size_t {
+      if (open >= s.size() || (s[open] != '{' && s[open] != '[')) return std::string::npos;
+      char open_c = s[open]; char close_c = (open_c == '{') ? '}' : ']';
+      int depth = 0; bool in_str = false;
+      for (std::size_t i = open; i < s.size(); ++i) {
+        char c = s[i];
+        if (in_str) { if (c == '\\') ++i; else if (c == '"') in_str = false; }
+        else if (c == '"') in_str = true;
+        else if (c == open_c) ++depth;
+        else if (c == close_c) { --depth; if (depth == 0) return i; }
+      }
+      return std::string::npos;
+    };
+    auto tiny_png = []() {
+      ImageRgba8 img{2, 2, ColorSpace::srgb, AlphaMode::straight, std::vector<std::uint8_t>(16, 255)};
+      return encode_png(img);
+    };
+
+    // SC13: channel target_frame_id changed → LV_CHANNEL_UNKNOWN_FRAME
+    {
+      auto md = pkg_dir; md += "_sc13"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto cb = read_file_bytes(md/"channels.json", 4ULL*1024*1024);
+      std::string s(cb.begin(), cb.end());
+      auto r = find_quoted(s, "\"target_frame_id\":", 0);
+      if (r.first != std::string::npos) s.replace(r.first, r.second - r.first, "ZZZ_UNKNOWN");
+      std::ofstream(md/"channels.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
+      auto ml = m; refresh(ml, md, "channels.json"); finalize(ml, md);
+      auto v = verify_living_visual_package(md);
+      check(reached_semantic(v), "SC13: reached semantic layer");
+      check(!v.ok() && has_diag(v, "LV_CHANNEL_UNKNOWN_FRAME"), "SC13: LV_CHANNEL_UNKNOWN_FRAME");
+      fs::remove_all(md);
+    }
+    // SC14: channel PNG pixels changed → LV_PROV_CHANNEL_IMAGE
+    {
+      auto md = pkg_dir; md += "_sc14"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      fs::path ch_png;
+      for (auto const& e : fs::directory_iterator(md/"channels"))
+        if (e.is_regular_file() && e.path().extension() == ".png") { ch_png = e.path(); break; }
+      check(!ch_png.empty(), "SC14: found channel png");
+      if (!ch_png.empty()) {
+        auto enc = tiny_png();
+        std::ofstream(ch_png, std::ios::trunc | std::ios::binary).write(
+            reinterpret_cast<const char*>(enc.data()), static_cast<std::streamsize>(enc.size()));
+        auto ml = m; refresh(ml, md, "channels/" + ch_png.filename().string()); finalize(ml, md);
+        auto v = verify_living_visual_package(md);
+        check(reached_semantic(v), "SC14: reached semantic layer");
+        check(!v.ok() && has_diag(v, "LV_PROV_CHANNEL_IMAGE"), "SC14: LV_PROV_CHANNEL_IMAGE");
+      }
+      fs::remove_all(md);
+    }
+    // SC15: morphology emissive changed, provenance stale → LV_PROV_BASE_MORPHOLOGY
+    {
+      auto md = pkg_dir; md += "_sc15"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto mb = read_file_bytes(md/"resolved-base-morphology.json", 8ULL*1024*1024);
+      std::string s(mb.begin(), mb.end());
+      // Compact canonical JSON has no whitespace after the colon; locate the
+      // boolean token robustly instead of matching a spaced serialization.
+      auto pos = s.find("\"emissive\":");
+      if (pos != std::string::npos) {
+        auto vp = s.find_first_not_of(" \t", pos + 11);
+        if (vp != std::string::npos && s.compare(vp, 4, "true") == 0) s.replace(vp, 4, "false");
+      }
+      std::ofstream(md/"resolved-base-morphology.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
+      auto ml = m; refresh(ml, md, "resolved-base-morphology.json"); finalize(ml, md);
+      auto v = verify_living_visual_package(md);
+      check(reached_semantic(v), "SC15: reached semantic layer");
+      check(!v.ok() && has_diag(v, "LV_PROV_BASE_MORPHOLOGY"), "SC15: LV_PROV_BASE_MORPHOLOGY");
+      fs::remove_all(md);
+    }
+    // SC16: morphology parent changed, structural → LV_MORPH_PARENT_REF
+    {
+      auto md = pkg_dir; md += "_sc16"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto mb = read_file_bytes(md/"resolved-base-morphology.json", 8ULL*1024*1024);
+      std::string s(mb.begin(), mb.end());
+      // Compact canonical JSON: no space after colon; resolve the parent value
+      // by key then replace the embedded root reference.
+      auto pos = s.find("\"parent\":");
+      if (pos != std::string::npos) {
+        auto inner = s.find("root", pos);
+        if (inner != std::string::npos) s.replace(inner, 4, "ZZZ");
+      }
+      std::ofstream(md/"resolved-base-morphology.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
+      auto ml = m; refresh(ml, md, "resolved-base-morphology.json"); finalize(ml, md);
+      auto v = verify_living_visual_package(md);
+      check(reached_semantic(v), "SC16: reached semantic layer");
+      check(!v.ok() && has_diag(v, "LV_MORPH_PARENT_REF"), "SC16: LV_MORPH_PARENT_REF");
+      fs::remove_all(md);
+    }
+    // SC17: transformation endpoint changed → LV_MORPH_TRANSFORM_BASE
+    {
+      auto md = pkg_dir; md += "_sc17"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto tb = read_file_bytes(md/"transformation-morphologies.json", 16ULL*1024*1024);
+      std::string s(tb.begin(), tb.end());
+      // Compact canonical JSON has no whitespace after the colon; locate the
+      // boolean token robustly instead of matching a spaced serialization.
+      auto pos = s.find("\"emissive\":");
+      if (pos != std::string::npos) {
+        auto vp = s.find_first_not_of(" \t", pos + 11);
+        if (vp != std::string::npos && s.compare(vp, 4, "true") == 0) s.replace(vp, 4, "false");
+      }
+      std::ofstream(md/"transformation-morphologies.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
+      auto ml = m; refresh(ml, md, "transformation-morphologies.json"); finalize(ml, md);
+      auto v = verify_living_visual_package(md);
+      check(reached_semantic(v), "SC17: reached semantic layer");
+      check(!v.ok() && has_diag(v, "LV_MORPH_TRANSFORM_BASE"), "SC17: LV_MORPH_TRANSFORM_BASE");
+      fs::remove_all(md);
+    }
+    // SC18: atlas placement frame changed → LV_ATLAS_UNKNOWN_FRAME
+    {
+      auto md = pkg_dir; md += "_sc18"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto ab = read_file_bytes(md/"sheet/atlas.json", 4ULL*1024*1024);
+      std::string s(ab.begin(), ab.end());
+      auto r = find_quoted(s, "\"id\":", 0);
+      if (r.first != std::string::npos) s.replace(r.first, r.second - r.first, "ZZZ_FRAME");
+      std::ofstream(md/"sheet/atlas.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
+      auto ml = m; refresh(ml, md, "sheet/atlas.json"); finalize(ml, md);
+      auto v = verify_living_visual_package(md);
+      check(reached_semantic(v), "SC18: reached semantic layer");
+      check(!v.ok() && has_diag(v, "LV_ATLAS_UNKNOWN_FRAME"), "SC18: LV_ATLAS_UNKNOWN_FRAME");
+      fs::remove_all(md);
+    }
+    // SC19: atlas PNG pixels changed → LV_PROV_ATLAS
+    {
+      auto md = pkg_dir; md += "_sc19"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto enc = tiny_png();
+      std::ofstream(md/"sheet/atlas.png", std::ios::trunc | std::ios::binary).write(
+          reinterpret_cast<const char*>(enc.data()), static_cast<std::streamsize>(enc.size()));
+      auto ml = m; refresh(ml, md, "sheet/atlas.png"); finalize(ml, md);
+      auto v = verify_living_visual_package(md);
+      check(reached_semantic(v), "SC19: reached semantic layer");
+      check(!v.ok() && has_diag(v, "LV_PROV_ATLAS"), "SC19: LV_PROV_ATLAS");
+      fs::remove_all(md);
+    }
+  }
+
+  // ── Verification option behavior ──
+  {
+    using namespace gspl::sprites;
+    std::cout << "\n--- Verification Option Behavior Tests ---\n";
+    PackageReadLimits rlim{};
+    auto mf_bytes = read_file_bytes(pkg_dir/"manifest.json", 4ULL*1024*1024);
+    auto mf_parse = parse_living_package_manifest({mf_bytes.begin(), mf_bytes.end()}, rlim);
+    auto m = *mf_parse.value;
+    auto refresh = [&](auto& manifest, auto d, auto path) {
+      auto b = read_file_bytes(d/path, 512ULL*1024*1024);
+      auto h = sha256({b.begin(), b.end()});
+      for (auto& a : manifest.artifacts) if (a.path == path) {
+        a.byte_size = static_cast<std::uint32_t>(b.size()); a.sha256 = std::move(h); return;
+      }
+    };
+    auto finalize = [&](auto& manifest, auto d) {
+      auto cn = canonicalize_manifest(manifest, false);
+      manifest.package_identity = sha256(std::string(kIdentityPreimageVersion) + "\n" + cn);
+      auto cw = canonicalize_manifest(manifest, true);
+      std::ofstream(d/"manifest.json", std::ios::trunc | std::ios::binary).write(cw.data(), cw.size());
+    };
+    auto has_diag = [](auto const& r, std::string_view code) {
+      for (auto const& d : r.validation.diagnostics) if (d.code == code) return true;
+      return false;
+    };
+    auto find_quoted = [](std::string const& s, std::string_view key, std::size_t from) -> std::pair<std::size_t, std::size_t> {
+      auto kp = s.find(key, from);
+      if (kp == std::string::npos) return {std::string::npos, std::string::npos};
+      auto vs = s.find('"', kp + key.size());
+      if (vs == std::string::npos) return {std::string::npos, std::string::npos};
+      auto ve = s.find('"', vs + 1);
+      if (ve == std::string::npos) return {std::string::npos, std::string::npos};
+      return {vs + 1, ve};
+    };
+    auto tiny_png = []() {
+      ImageRgba8 img{2, 2, ColorSpace::srgb, AlphaMode::straight, std::vector<std::uint8_t>(16, 255)};
+      return encode_png(img);
+    };
+
+    // All optional checks disabled: mandatory authority still passes
+    {
+      PackageVerificationOptions off{};
+      off.verify_pixel_hashes = false; off.verify_channel_dimensions = false;
+      off.verify_morphologies = false; off.strict_collision_refs = false;
+      off.require_no_symlinks = false; off.require_no_undeclared_files = false;
+      auto v = verify_living_visual_package(pkg_dir, off);
+      check(v.ok(), "opt: valid package passes with all optional checks disabled");
+    }
+    // verify_pixel_hashes gates atlas-region pixel recomputation only
+    {
+      auto md = pkg_dir; md += "_opt_px"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto ab = read_file_bytes(md/"sheet/atlas.png", 512ULL*1024*1024);
+      auto img = decode_png(std::span<const std::byte>(
+          reinterpret_cast<const std::byte*>(ab.data()), ab.size()), ImageLimits{});
+      auto off = (static_cast<std::size_t>(5) * img.width + 5) * 4ULL;
+      if (off + 4 <= img.pixels.size()) {
+        img.pixels[off] ^= 0xFF; img.pixels[off+1] ^= 0xFF; img.pixels[off+2] ^= 0xFF;
+      }
+      // The atlas is re-encoded after decoding; the decoded image may report an
+      // unknown color space if the source PNG lacks an sRGB chunk. Re-declaring
+      // sRGB keeps the round-trip deterministic (provenance still differs via pixels).
+      img.color_space = ColorSpace::srgb;
+      auto enc = encode_png(img);
+      std::ofstream(md/"sheet/atlas.png", std::ios::trunc | std::ios::binary).write(
+          reinterpret_cast<const char*>(enc.data()), static_cast<std::streamsize>(enc.size()));
+      auto ml = m; refresh(ml, md, "sheet/atlas.png"); finalize(ml, md);
+      PackageVerificationOptions pixel_off{}; pixel_off.verify_pixel_hashes = false;
+      auto von = verify_living_visual_package(md);
+      auto voff = verify_living_visual_package(md, pixel_off);
+      check(has_diag(von, "LV_ATLAS_REGION_MISMATCH"), "opt: pixel-on detects atlas region mismatch");
+      check(!has_diag(voff, "LV_ATLAS_REGION_MISMATCH"), "opt: pixel-off skips region recompute");
+      check(has_diag(voff, "LV_PROV_ATLAS"), "opt: atlas provenance mandatory even pixel-off");
+      fs::remove_all(md);
+    }
+    // verify_morphologies gates structural morphology checks
+    {
+      auto md = pkg_dir; md += "_opt_morph"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto mb = read_file_bytes(md/"resolved-base-morphology.json", 8ULL*1024*1024);
+      std::string s(mb.begin(), mb.end());
+      // Compact canonical JSON: no space after colon; resolve the parent value
+      // by key then replace the embedded root reference.
+      auto pos = s.find("\"parent\":");
+      if (pos != std::string::npos) {
+        auto inner = s.find("root", pos);
+        if (inner != std::string::npos) s.replace(inner, 4, "ZZZ");
+      }
+      std::ofstream(md/"resolved-base-morphology.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
+      auto ml = m; refresh(ml, md, "resolved-base-morphology.json"); finalize(ml, md);
+      PackageVerificationOptions moff{}; moff.verify_morphologies = false;
+      auto vdef = verify_living_visual_package(md);
+      auto vmoff = verify_living_visual_package(md, moff);
+      check(has_diag(vdef, "LV_MORPH_PARENT_REF"), "opt: morphology structural check on by default");
+      check(!has_diag(vmoff, "LV_MORPH_PARENT_REF"), "opt: verify_morphologies=false suppresses structural check");
+      check(has_diag(vmoff, "LV_PROV_BASE_MORPHOLOGY"), "opt: morphology provenance mandatory regardless");
+      fs::remove_all(md);
+    }
+    // verify_channel_dimensions gates channel dimension checks
+    {
+      auto md = pkg_dir; md += "_opt_chdim"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      fs::path ch_png;
+      for (auto const& e : fs::directory_iterator(md/"channels"))
+        if (e.is_regular_file() && e.path().extension() == ".png") { ch_png = e.path(); break; }
+      if (!ch_png.empty()) {
+        auto enc = tiny_png();
+        std::ofstream(ch_png, std::ios::trunc | std::ios::binary).write(
+            reinterpret_cast<const char*>(enc.data()), static_cast<std::streamsize>(enc.size()));
+        auto ml = m; refresh(ml, md, "channels/" + ch_png.filename().string()); finalize(ml, md);
+        PackageVerificationOptions coff{}; coff.verify_channel_dimensions = false;
+        auto vdef = verify_living_visual_package(md);
+        auto vcoff = verify_living_visual_package(md, coff);
+        check(has_diag(vdef, "LV_CHANNEL_DIMENSIONS"), "opt: channel dims check on by default");
+        check(!has_diag(vcoff, "LV_CHANNEL_DIMENSIONS"), "opt: verify_channel_dimensions=false suppresses dims check");
+        check(has_diag(vcoff, "LV_PROV_CHANNEL_IMAGE"), "opt: channel image provenance mandatory regardless");
+      }
+      fs::remove_all(md);
+    }
+    // strict_collision_refs gates collision reference policy
+    {
+      auto md = pkg_dir; md += "_opt_coll"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto cb = read_file_bytes(md/"collisions-2d.json", 4ULL*1024*1024);
+      std::string s(cb.begin(), cb.end());
+      auto r = find_quoted(s, "\"bone_id\":", 0);
+      if (r.first != std::string::npos) s.replace(r.first, r.second - r.first, "ZZZ");
+      std::ofstream(md/"collisions-2d.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
+      auto ml = m; refresh(ml, md, "collisions-2d.json"); finalize(ml, md);
+      PackageVerificationOptions soff{}; soff.strict_collision_refs = false;
+      auto vdef = verify_living_visual_package(md);
+      auto vsoff = verify_living_visual_package(md, soff);
+      check(has_diag(vdef, "LV_COLLISION_BONE_REF"), "opt: collision ref check on by default");
+      check(!has_diag(vsoff, "LV_COLLISION_BONE_REF"), "opt: strict_collision_refs=false suppresses ref check");
+      fs::remove_all(md);
+    }
+  }
+
+  // ── Parser limit enforcement (PackageReadLimits) ──
+  {
+    using namespace gspl::sprites;
+    std::cout << "\n--- Parser Limit Enforcement Tests ---\n";
+    auto has_rd = [](auto const& rd, std::string_view code) {
+      for (auto const& d : rd.diagnostics.diagnostics) if (d.code == code) return true;
+      return false;
+    };
+    {
+      PackageReadLimits tight{};
+      tight.max_frames = 10;
+      auto rd = read_living_visual_package(pkg_dir, tight);
+      check(!rd.value.has_value(), "limit: max_frames=10 blocks load");
+      check(has_rd(rd, "LV_READ_FRAME_LIMIT"), "limit: LV_READ_FRAME_LIMIT exact");
+    }
+    {
+      PackageReadLimits tight{};
+      tight.max_channels = 10;
+      auto rd = read_living_visual_package(pkg_dir, tight);
+      check(!rd.value.has_value(), "limit: max_channels=10 blocks load");
+      check(has_rd(rd, "LV_READ_CHANNEL_LIMIT"), "limit: LV_READ_CHANNEL_LIMIT exact");
+    }
+    {
+      PackageReadLimits tight{};
+      tight.max_morphology_parts = 2;
+      auto rd = read_living_visual_package(pkg_dir, tight);
+      check(!rd.value.has_value(), "limit: max_morphology_parts=2 blocks load");
+      check(has_rd(rd, "LV_READ_MORPH_PARTS_LIMIT"), "limit: LV_READ_MORPH_PARTS_LIMIT exact");
+    }
+    {
+      PackageReadLimits tight{};
+      tight.max_json_tokens = 100;
+      auto rd = read_living_visual_package(pkg_dir, tight);
+      check(!rd.value.has_value(), "limit: max_json_tokens=100 blocks load");
+      check(!rd.diagnostics.ok(), "limit: token budget exhaustion surfaced");
+    }
+    {
+      PackageReadLimits tight{};
+      tight.max_path_bytes = 8;
+      auto rd = read_living_visual_package(pkg_dir, tight);
+      check(!rd.value.has_value(), "limit: max_path_bytes=8 blocks load");
+    }
+  }
+
+  // ── Strict source-animation parser negatives ──
+  {
+    using namespace gspl::sprites;
+    std::cout << "\n--- Strict Source Parser Negative Tests ---\n";
+    PackageReadLimits rlim{};
+    auto mf_bytes = read_file_bytes(pkg_dir/"manifest.json", 4ULL*1024*1024);
+    auto mf_parse = parse_living_package_manifest({mf_bytes.begin(), mf_bytes.end()}, rlim);
+    auto m = *mf_parse.value;
+    auto refresh = [&](auto& manifest, auto d, auto path) {
+      auto b = read_file_bytes(d/path, 512ULL*1024*1024);
+      auto h = sha256({b.begin(), b.end()});
+      for (auto& a : manifest.artifacts) if (a.path == path) {
+        a.byte_size = static_cast<std::uint32_t>(b.size()); a.sha256 = std::move(h); return;
+      }
+    };
+    auto finalize = [&](auto& manifest, auto d) {
+      auto cn = canonicalize_manifest(manifest, false);
+      manifest.package_identity = sha256(std::string(kIdentityPreimageVersion) + "\n" + cn);
+      auto cw = canonicalize_manifest(manifest, true);
+      std::ofstream(d/"manifest.json", std::ios::trunc | std::ios::binary).write(cw.data(), cw.size());
+    };
+    auto has_diag = [](auto const& r, std::string_view code) {
+      for (auto const& d : r.validation.diagnostics) if (d.code == code) return true;
+      return false;
+    };
+    auto reached_semantic = [&](auto const& v) {
+      return !has_diag(v, "LV_READ_PKG_ID") && !has_diag(v, "LV_READ_MANIFEST_NONCANONICAL") &&
+             !has_diag(v, "LV_INV_SIZE") && !has_diag(v, "LV_INV_HASH");
+    };
+    auto match_closer = [](std::string const& s, std::size_t open) -> std::size_t {
+      if (open >= s.size() || (s[open] != '{' && s[open] != '[')) return std::string::npos;
+      char open_c = s[open]; char close_c = (open_c == '{') ? '}' : ']';
+      int depth = 0; bool in_str = false;
+      for (std::size_t i = open; i < s.size(); ++i) {
+        char c = s[i];
+        if (in_str) { if (c == '\\') ++i; else if (c == '"') in_str = false; }
+        else if (c == '"') in_str = true;
+        else if (c == open_c) ++depth;
+        else if (c == close_c) { --depth; if (depth == 0) return i; }
+      }
+      return std::string::npos;
+    };
+    auto src_bytes = [&](auto md) { return read_file_bytes(md/"source-skeletal-animations.json", 8ULL*1024*1024); };
+
+    // unknown clip field → LV_SOURCE_PARSE
+    {
+      auto md = pkg_dir; md += "_src_unknown"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto sb = src_bytes(md);
+      std::string s(sb.begin(), sb.end());
+      auto pos = s.find("\"looping\":");
+      if (pos != std::string::npos) s.insert(pos, "\"bogus\":0,");
+      std::ofstream(md/"source-skeletal-animations.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
+      auto ml = m; refresh(ml, md, "source-skeletal-animations.json"); finalize(ml, md);
+      auto v = verify_living_visual_package(md);
+      check(reached_semantic(v), "src: unknown field reached semantic layer");
+      check(!v.ok() && has_diag(v, "LV_SOURCE_PARSE"), "src: unknown field LV_SOURCE_PARSE");
+      fs::remove_all(md);
+    }
+    // duplicate clip ID → LV_SOURCE_DUP_CLIP
+    {
+      auto md = pkg_dir; md += "_src_dupclip"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto sb = src_bytes(md);
+      std::string s(sb.begin(), sb.end());
+      auto st = s.find("\"clips\":[");
+      auto co = (st != std::string::npos) ? s.find('{', st) : std::string::npos;
+      auto en = (co != std::string::npos) ? match_closer(s, co) : std::string::npos;
+      if (en != std::string::npos) {
+        auto obj = s.substr(co, en - co + 1);
+        s.insert(en + 1, "," + obj);
+      }
+      std::ofstream(md/"source-skeletal-animations.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
+      auto ml = m; refresh(ml, md, "source-skeletal-animations.json"); finalize(ml, md);
+      auto v = verify_living_visual_package(md);
+      check(reached_semantic(v), "src: dup clip reached semantic layer");
+      check(!v.ok() && has_diag(v, "LV_SOURCE_DUP_CLIP"), "src: LV_SOURCE_DUP_CLIP");
+      fs::remove_all(md);
+    }
+    // duplicate track bone → LV_SOURCE_DUP_TRACK
+    {
+      auto md = pkg_dir; md += "_src_duptrack"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto sb = src_bytes(md);
+      std::string s(sb.begin(), sb.end());
+      auto tr = s.find("\"tracks\":[");
+      auto to = (tr != std::string::npos) ? s.find('{', tr) : std::string::npos;
+      auto te = (to != std::string::npos) ? match_closer(s, to) : std::string::npos;
+      if (te != std::string::npos) {
+        auto obj = s.substr(to, te - to + 1);
+        s.insert(te + 1, "," + obj);
+      }
+      std::ofstream(md/"source-skeletal-animations.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
+      auto ml = m; refresh(ml, md, "source-skeletal-animations.json"); finalize(ml, md);
+      auto v = verify_living_visual_package(md);
+      check(reached_semantic(v), "src: dup track reached semantic layer");
+      check(!v.ok() && has_diag(v, "LV_SOURCE_DUP_TRACK"), "src: LV_SOURCE_DUP_TRACK");
+      fs::remove_all(md);
+    }
+    // duplicate source event → LV_SOURCE_DUP_EVENT
+    {
+      auto md = pkg_dir; md += "_src_dupevent"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto sb = src_bytes(md);
+      std::string s(sb.begin(), sb.end());
+      auto ev = s.find("\"events\":[");
+      auto eo = (ev != std::string::npos) ? s.find('{', ev) : std::string::npos;
+      auto ee = (eo != std::string::npos) ? match_closer(s, eo) : std::string::npos;
+      if (ee != std::string::npos) {
+        auto obj = s.substr(eo, ee - eo + 1);
+        s.insert(ee + 1, "," + obj);
+      }
+      std::ofstream(md/"source-skeletal-animations.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
+      auto ml = m; refresh(ml, md, "source-skeletal-animations.json"); finalize(ml, md);
+      auto v = verify_living_visual_package(md);
+      check(reached_semantic(v), "src: dup event reached semantic layer");
+      check(!v.ok() && has_diag(v, "LV_SOURCE_DUP_EVENT"), "src: LV_SOURCE_DUP_EVENT");
+      fs::remove_all(md);
+    }
+    // keyframe tick order broken → LV_SOURCE_KEY_ORDER
+    {
+      auto md = pkg_dir; md += "_src_keyorder"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto sb = src_bytes(md);
+      std::string s(sb.begin(), sb.end());
+      std::size_t from = 0; std::size_t t1 = std::string::npos, t2 = std::string::npos;
+      while (t2 == std::string::npos) {
+        auto ks = s.find("\"keys\":[", from);
+        if (ks == std::string::npos) break;
+        auto ko = ks + 7;
+        auto ke = match_closer(s, ko);
+        auto a = s.find("\"tick\":", ko);
+        if (a != std::string::npos && a < ke) {
+          auto b = s.find("\"tick\":", a + 1);
+          if (b != std::string::npos && b < ke) { t1 = a; t2 = b; break; }
+        }
+        from = ke + 1;
+      }
+      if (t2 != std::string::npos) {
+        auto v1s = t1 + 7; auto v1e = s.find_first_of(",}", v1s);
+        auto v2s = t2 + 7; auto v2e = s.find_first_of(",}", v2s);
+        s.replace(v2s, v2e - v2s, s.substr(v1s, v1e - v1s));
+      }
+      std::ofstream(md/"source-skeletal-animations.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
+      auto ml = m; refresh(ml, md, "source-skeletal-animations.json"); finalize(ml, md);
+      auto v = verify_living_visual_package(md);
+      check(reached_semantic(v), "src: key order reached semantic layer");
+      check(!v.ok() && has_diag(v, "LV_SOURCE_KEY_ORDER"), "src: LV_SOURCE_KEY_ORDER");
+      fs::remove_all(md);
+    }
+    // keyframe tick outside clip duration → LV_SOURCE_KEY_RANGE
+    {
+      auto md = pkg_dir; md += "_src_keyrange"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto sb = src_bytes(md);
+      std::string s(sb.begin(), sb.end());
+      auto ks = s.find("\"keys\":[");
+      auto t1 = (ks != std::string::npos) ? s.find("\"tick\":", ks) : std::string::npos;
+      if (t1 != std::string::npos) {
+        auto v1s = t1 + 7; auto v1e = s.find_first_of(",}", v1s);
+        s.replace(v1s, v1e - v1s, "999999");
+      }
+      std::ofstream(md/"source-skeletal-animations.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
+      auto ml = m; refresh(ml, md, "source-skeletal-animations.json"); finalize(ml, md);
+      auto v = verify_living_visual_package(md);
+      check(reached_semantic(v), "src: key range reached semantic layer");
+      check(!v.ok() && has_diag(v, "LV_SOURCE_KEY_RANGE"), "src: LV_SOURCE_KEY_RANGE");
+      fs::remove_all(md);
+    }
+    // authored event tick outside clip duration → LV_SOURCE_EVENT_RANGE
+    {
+      auto md = pkg_dir; md += "_src_evrange"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto sb = src_bytes(md);
+      std::string s(sb.begin(), sb.end());
+      auto ev = s.find("\"events\":[");
+      auto t1 = (ev != std::string::npos) ? s.find("\"tick\":", ev) : std::string::npos;
+      if (t1 != std::string::npos) {
+        auto v1s = t1 + 7; auto v1e = s.find_first_of(",}", v1s);
+        s.replace(v1s, v1e - v1s, "999999");
+      }
+      std::ofstream(md/"source-skeletal-animations.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
+      auto ml = m; refresh(ml, md, "source-skeletal-animations.json"); finalize(ml, md);
+      auto v = verify_living_visual_package(md);
+      check(reached_semantic(v), "src: event range reached semantic layer");
+      check(!v.ok() && has_diag(v, "LV_SOURCE_EVENT_RANGE"), "src: LV_SOURCE_EVENT_RANGE");
+      fs::remove_all(md);
+    }
+    // unresolved bone reference → LV_SOURCE_BONE_REF
+    {
+      auto md = pkg_dir; md += "_src_boneref"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto sb = src_bytes(md);
+      std::string s(sb.begin(), sb.end());
+      auto tr = s.find("\"tracks\":[");
+      auto bo = (tr != std::string::npos) ? s.find("\"bone_id\":", tr) : std::string::npos;
+      if (bo != std::string::npos) {
+        auto bs = bo + 11; auto be = s.find('"', bs);
+        if (be != std::string::npos) s.replace(bs, be - bs, "ZZZ");
+      }
+      std::ofstream(md/"source-skeletal-animations.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
+      auto ml = m; refresh(ml, md, "source-skeletal-animations.json"); finalize(ml, md);
+      auto v = verify_living_visual_package(md);
+      check(reached_semantic(v), "src: bone ref reached semantic layer");
+      check(!v.ok() && has_diag(v, "LV_SOURCE_BONE_REF"), "src: LV_SOURCE_BONE_REF");
+      fs::remove_all(md);
+    }
+    // missing required clip field (events removed) → LV_SOURCE_SCHEMA
+    {
+      auto md = pkg_dir; md += "_src_missing"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto sb = src_bytes(md);
+      std::string s(sb.begin(), sb.end());
+      auto ev = s.find("\"events\":[");
+      if (ev != std::string::npos) {
+        auto ao = s.find('[', ev);
+        auto ae = match_closer(s, ao);
+        if (ae != std::string::npos) {
+          auto cs = s.rfind(',', ev);
+          if (cs != std::string::npos) s.erase(cs, ae - cs + 1);
+        }
+      }
+      std::ofstream(md/"source-skeletal-animations.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
+      auto ml = m; refresh(ml, md, "source-skeletal-animations.json"); finalize(ml, md);
+      auto v = verify_living_visual_package(md);
+      check(reached_semantic(v), "src: missing field reached semantic layer");
+      check(!v.ok() && has_diag(v, "LV_SOURCE_SCHEMA"), "src: missing field LV_SOURCE_SCHEMA");
+      fs::remove_all(md);
+    }
+  }
+
+  // ── Hostile PNG decoder inputs ──
+  {
+    using namespace gspl::sprites;
+    std::cout << "\n--- Hostile PNG Decoder Tests ---\n";
+    ImageLimits plim{};
+    auto expect_throw = [&](std::vector<std::byte> const& bytes, const char* msg) {
+      try { (void)decode_png(bytes, plim); check(false, msg); }
+      catch (std::exception const&) { check(true, msg); }
+    };
+    expect_throw({}, "png: empty input rejected");
+    {
+      std::string junk = "definitely not a png file at all";
+      std::vector<std::byte> jb(junk.size());
+      for (std::size_t i = 0; i < junk.size(); ++i) jb[i] = static_cast<std::byte>(junk[i]);
+      expect_throw(jb, "png: bad signature rejected");
+    }
+    {
+      auto valid = encode_png(ImageRgba8{8, 8, ColorSpace::srgb, AlphaMode::straight, std::vector<std::uint8_t>(8*8*4, 128)});
+      auto cut = std::vector<std::byte>(valid.begin(), valid.begin() + valid.size()/2);
+      expect_throw(cut, "png: truncated payload rejected");
+    }
+    {
+      auto valid = encode_png(ImageRgba8{8, 8, ColorSpace::srgb, AlphaMode::straight, std::vector<std::uint8_t>(8*8*4, 128)});
+      // Remove the trailing IEND chunk
+      std::vector<std::byte> no_iend(valid.begin(), valid.end() - 12);
+      expect_throw(no_iend, "png: missing IEND rejected");
+    }
+    {
+      // Crafted IHDR with oversized dimensions must be rejected by decode limits
+      std::vector<std::byte> b;
+      auto push32 = [&](std::uint32_t v) {
+        b.push_back(std::byte((v >> 24) & 0xFF)); b.push_back(std::byte((v >> 16) & 0xFF));
+        b.push_back(std::byte((v >> 8) & 0xFF)); b.push_back(std::byte(v & 0xFF));
+      };
+      static const std::array<std::byte, 8> sig{std::byte{0x89}, std::byte{'P'}, std::byte{'N'}, std::byte{'G'},
+                                                std::byte{'\r'}, std::byte{'\n'}, std::byte{0x1a}, std::byte{'\n'}};
+      b.insert(b.end(), sig.begin(), sig.end());
+      push32(13);
+      b.push_back(std::byte{'I'}); b.push_back(std::byte{'H'}); b.push_back(std::byte{'D'}); b.push_back(std::byte{'R'});
+      push32(0x400000); push32(0x400000);
+      b.push_back(std::byte{8}); b.push_back(std::byte{6});
+      b.push_back(std::byte{0}); b.push_back(std::byte{0}); b.push_back(std::byte{0});
+      push32(0);
+      push32(0);
+      b.push_back(std::byte{'I'}); b.push_back(std::byte{'E'}); b.push_back(std::byte{'N'}); b.push_back(std::byte{'D'});
+      push32(0);
+      expect_throw(b, "png: oversized dimensions rejected");
+    }
+    {
+      // Corrupt a real frame PNG inside a package copy: verify must fail safely
+      auto md = pkg_dir; md += "_png_hostile"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      bool found = false;
+      for (auto const& e : fs::directory_iterator(md/"frames")) {
+        if (!e.is_regular_file() || e.path().extension() != ".png") continue;
+        auto fb = read_file_bytes(e.path(), 512ULL*1024*1024);
+        if (fb.size() < 8) continue;
+        std::ofstream(e.path(), std::ios::trunc | std::ios::binary).write(
+            reinterpret_cast<const char*>(fb.data()), static_cast<std::streamsize>(fb.size()/2));
+        found = true;
+        break;
+      }
+      if (found) {
+        auto v = verify_living_visual_package(md);
+        check(!v.ok(), "png: truncated frame png fails package verify safely");
+      }
+      fs::remove_all(md);
+    }
+  }
+
+  // ── Positive relational assertions on reconstructed package ──
+  {
+    using namespace gspl::sprites;
+    std::cout << "\n--- Positive Relational Assertions ---\n";
+    auto rd = read_living_visual_package(pkg_dir);
+    check(rd.value.has_value(), "read: full package reconstructs");
+    if (rd.value.has_value()) {
+      auto& p = *rd.value;
+      check(p.channels.size() == 192, "read: 192 channels (48 frames x 4 kinds)");
+      check(p.sheet.atlas.placements.size() == 48, "read: 48 atlas placements");
+      check(p.transformation_morphologies.size() == 10, "read: 10 transformation morphologies");
+      check(!p.base_morphology.empty() && !p.storm_morphology.empty(), "read: base and storm morphology present");
+      check(p.collision_shapes.size() > 0, "read: collision shapes present");
+      // Transformation endpoints semantically equal to base/storm — proven by the
+      // production verifier's endpoint equality diagnostics being absent on the
+      // valid package (complete semantics incl. emissive and electrical markings)
+      {
+        auto vend = verify_living_visual_package(pkg_dir);
+        bool no_base = true, no_storm = true;
+        for (auto const& d : vend.validation.diagnostics) {
+          if (d.code == "LV_MORPH_TRANSFORM_BASE") no_base = false;
+          if (d.code == "LV_MORPH_TRANSFORM_STORM") no_storm = false;
+        }
+        check(no_base, "morph: transformation[0] == base semantics (no endpoint diag)");
+        check(no_storm, "morph: transformation[9] == storm semantics (no endpoint diag)");
+      }
+      // Sample source ticks are nondecreasing by frame index per clip
+      {
+        std::map<std::string, std::map<std::uint32_t, std::uint32_t>> ticks_by_clip;
+        for (auto const& s : p.samples) ticks_by_clip[s.clip_id][s.frame_index] = s.source_tick;
+        bool ordered = true;
+        for (auto const& [clip, tmap] : ticks_by_clip) {
+          std::uint32_t prev = 0; bool first = true;
+          for (auto const& [fi, tick] : tmap) {
+            if (!first && tick < prev) ordered = false;
+            prev = tick; first = false;
+          }
+        }
+        check(ordered, "samples: source ticks nondecreasing by frame index");
+      }
+      // Every generated event is bound to a reconstructed source event with equal authored tick
+      {
+        std::map<std::string, std::map<std::string, std::uint32_t>> source_ev;
+        for (auto const& sc : p.source_skeletal_animations)
+          for (auto const& [en, et] : sc.events) source_ev[sc.id][en] = et;
+        auto resolve_source_clip = [](std::string_view gcid) -> std::string {
+          if (gcid.ends_with(".base.attack")) return "base_attack";
+          if (gcid.ends_with(".storm.attack")) return "storm_attack";
+          if (gcid.ends_with(".transform")) return "transform_ascend";
+          return "";
+        };
+        bool bound = true;
+        for (auto const& e : p.events) {
+          auto scid = resolve_source_clip(e.clip_id);
+          auto it = source_ev.find(scid);
+          if (it == source_ev.end()) { bound = false; continue; }
+          auto eit = it->second.find(e.event_id);
+          if (eit == it->second.end() || eit->second != e.authored_tick) bound = false;
+        }
+        check(bound, "events: every generated authored_tick equals reconstructed source event tick");
+      }
+      // All channels have a known target frame and consistent decoded dimensions
+      {
+        std::map<std::string, const FrameSource*, std::less<>> frame_by_id;
+        for (auto const& f : p.frames) frame_by_id[f.id] = &f;
+        bool ok_targets = true, ok_dims = true;
+        for (auto const& ch : p.channels) {
+          auto fit = frame_by_id.find(ch.target_frame_id);
+          if (fit == frame_by_id.end()) { ok_targets = false; continue; }
+          if (ch.image.width != fit->second->image.width || ch.image.height != fit->second->image.height)
+            ok_dims = false;
+        }
+        check(ok_targets, "channels: every target frame known");
+        check(ok_dims, "channels: decoded dims equal target frame dims");
+      }
+      // Atlas placement set equals the 48-frame set
+      {
+        std::set<std::string> frame_ids;
+        for (auto const& f : p.frames) frame_ids.insert(f.id);
+        std::set<std::string> placement_ids;
+        for (auto const& pl : p.sheet.atlas.placements) placement_ids.insert(pl.frame_id);
+        check(placement_ids == frame_ids, "atlas: placement set equals frame set");
+      }
+    }
+  }
+
+  // ── Separate-process CLI package verification ──
+  {
+    std::cout << "\n--- Separate-Process CLI Verification ---\n";
+#ifndef GSPL_SPRITES_GSPLC_PATH
+#define GSPL_SPRITES_GSPLC_PATH "gsplc"
+#endif
+    std::string gsplc = GSPL_SPRITES_GSPLC_PATH;
+    if (!fs::exists(gsplc)) {
+      check(false, "cli: gsplc binary not found at configured path");
+    } else {
+      auto out_file = (fs::temp_directory_path()/"lv_cli_out.txt").string();
+      auto quote = [](std::string const& s) { return std::string("\"") + s + "\""; };
+      // Valid package → exit 0 (cmd /c quoting: wrap the whole command so
+      // Windows strips only the outer quotes)
+      std::string cmd1 = "\"" + quote(gsplc) + " --verify-package " + quote(pkg_dir.string()) + " 2>" + quote(out_file) + "\"";
+      int rc1 = std::system(cmd1.c_str());
+      check(rc1 == 0, "cli: valid package exit code 0");
+      // Self-consistent hostile package → nonzero + exact diagnostic on stderr
+      auto hdir = pkg_dir; hdir += "_cli_hostile"; fs::remove_all(hdir); fs::copy(pkg_dir, hdir, fs::copy_options::recursive);
+      {
+        using namespace gspl::sprites;
+        PackageReadLimits rlim{};
+        auto mf_bytes = read_file_bytes(hdir/"manifest.json", 4ULL*1024*1024);
+        auto mf_parse = parse_living_package_manifest({mf_bytes.begin(), mf_bytes.end()}, rlim);
+        auto m = *mf_parse.value;
+        auto refresh = [&](auto& manifest, auto d, auto path) {
+          auto b = read_file_bytes(d/path, 512ULL*1024*1024);
+          auto h = sha256({b.begin(), b.end()});
+          for (auto& a : manifest.artifacts) if (a.path == path) {
+            a.byte_size = static_cast<std::uint32_t>(b.size()); a.sha256 = std::move(h); return;
+          }
+        };
+        auto finalize = [&](auto& manifest, auto d) {
+          auto cn = canonicalize_manifest(manifest, false);
+          manifest.package_identity = sha256(std::string(kIdentityPreimageVersion) + "\n" + cn);
+          auto cw = canonicalize_manifest(manifest, true);
+          std::ofstream(d/"manifest.json", std::ios::trunc | std::ios::binary).write(cw.data(), cw.size());
+        };
+        auto fhb = read_file_bytes(hdir/"frame-hashes.json", 4ULL*1024*1024);
+        std::string s(fhb.begin(), fhb.end());
+        auto pos = s.rfind("{\"frame_id\"");
+        if (pos != std::string::npos) {
+          auto end = s.find("}", pos) + 1;
+          s.insert(end, ",{\"frame_id\":\"EXTRA\",\"frame_hash\":\"" + std::string(64, '0') + "\"}");
+        }
+        std::ofstream(hdir/"frame-hashes.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
+        auto ml = m; refresh(ml, hdir, "frame-hashes.json"); finalize(ml, hdir);
+      }
+      std::string cmd2 = "\"" + quote(gsplc) + " --verify-package " + quote(hdir.string()) + " 2>" + quote(out_file) + "\"";
+      int rc2 = std::system(cmd2.c_str());
+      check(rc2 != 0, "cli: hostile self-consistent package nonzero exit");
+      auto ob = read_file_bytes(out_file, 1ULL*1024*1024);
+      std::string o(ob.begin(), ob.end());
+      check(o.find("LV_FH_EXTRA") != std::string::npos, "cli: hostile diagnostic emitted on stderr");
+      fs::remove_all(hdir);
+      std::error_code ec;
+      fs::remove(out_file, ec);
     }
   }
 
@@ -932,6 +1733,7 @@ int main() try {
       // Rebuild with typed manifest and check reader populates pkg.manifest
       auto test_pkg_dir = fs::temp_directory_path() / "lv_pkg_manifest_test";
       fs::remove_all(test_pkg_dir);
+      fs::remove_all(test_pkg_dir.string() + ".staging");
       std::string src2 = load_source();
       {
         gspl::GsplContext ctx2;
@@ -976,6 +1778,7 @@ int main() try {
     {
       auto test_pkg_dir = fs::temp_directory_path() / "lv_pkg_verify_manifest";
       fs::remove_all(test_pkg_dir);
+      fs::remove_all(test_pkg_dir.string() + ".staging");
       std::string src2 = load_source();
       {
         gspl::GsplContext ctx2;
