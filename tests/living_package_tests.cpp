@@ -1369,6 +1369,47 @@ int main() try {
       check(!v.ok() && has_diag(v, "LV_SOURCE_SCHEMA"), "src: missing field LV_SOURCE_SCHEMA");
       fs::remove_all(md);
     }
+    // token budget exhaustion → LV_READ_JSON_TOKENS
+    {
+      auto md = pkg_dir; md += "_src_tokenlimit"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      PackageReadLimits tight{};
+      tight.max_frames = 256;
+      tight.max_channels = 512;
+      tight.max_morphology_parts = 128;
+      tight.max_json_tokens = 100;  // Far below actual requirement
+      tight.max_json_nesting = 32;
+      tight.max_image_width = 4096;
+      tight.max_image_height = 4096;
+      tight.max_manifest_bytes = 16ULL * 1024 * 1024;
+      tight.max_artifact_bytes = 64ULL * 1024 * 1024;
+      tight.max_artifacts = 4096;
+      tight.max_path_bytes = 1024;
+      auto rd = read_living_visual_package(md, tight);
+      check(!rd.value.has_value(), "src: token limit blocks load");
+      if (!rd.value.has_value()) {
+        bool has_token_diag = false;
+        for (auto const& d : rd.diagnostics) {
+          if (d.code == "LV_READ_JSON_TOKENS") has_token_diag = true;
+        }
+        check(has_token_diag, "src: LV_READ_JSON_TOKENS diagnostic present");
+      }
+      // Verify the same package succeeds with sufficient budget
+      PackageReadLimits sufficient{};
+      sufficient.max_frames = 256;
+      sufficient.max_channels = 512;
+      sufficient.max_morphology_parts = 128;
+      sufficient.max_json_tokens = 262144;  // Standard budget
+      sufficient.max_json_nesting = 32;
+      sufficient.max_image_width = 4096;
+      sufficient.max_image_height = 4096;
+      sufficient.max_manifest_bytes = 16ULL * 1024 * 1024;
+      sufficient.max_artifact_bytes = 64ULL * 1024 * 1024;
+      sufficient.max_artifacts = 4096;
+      sufficient.max_path_bytes = 1024;
+      auto rd2 = read_living_visual_package(md, sufficient);
+      check(rd2.value.has_value(), "src: sufficient budget allows load");
+      fs::remove_all(md);
+    }
   }
 
   // ── Hostile PNG decoder inputs ──
