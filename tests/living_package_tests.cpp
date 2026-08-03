@@ -716,9 +716,19 @@ int main() try {
       if (r.first != std::string::npos) s.replace(r.first, r.second - r.first, "ZZZ_UNKNOWN");
       std::ofstream(md/"channels.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
       auto ml = m; refresh(ml, md, "channels.json"); finalize(ml, md);
+      // Reconstruct the mutated package and recompute channel-set provenance with
+      // the production canonicalizer so the relational diagnostic is the only hit.
+      auto rd13 = read_living_visual_package(md, rlim);
+      check(rd13.value.has_value(), "SC13: mutated package reads");
+      if (rd13.value.has_value()) {
+        auto prov13 = compute_domain_id(kDomainChannelSet, canonicalize_channel_set_preimage(rd13.value->channels));
+        for (auto& a : ml.artifacts) if (a.path == "channels.json") a.provenance_identity = prov13;
+        refresh(ml, md, "channels.json"); finalize(ml, md);
+      }
       auto v = verify_living_visual_package(md);
       check(reached_semantic(v), "SC13: reached semantic layer");
       check(!v.ok() && has_diag(v, "LV_CHANNEL_UNKNOWN_FRAME"), "SC13: LV_CHANNEL_UNKNOWN_FRAME");
+      check(!has_diag(v, "LV_PROV_CHANNEL_SET"), "SC13: channel-set provenance recomputed");
       fs::remove_all(md);
     }
     // SC14: channel PNG pixels changed → LV_PROV_CHANNEL_IMAGE
@@ -772,9 +782,17 @@ int main() try {
       }
       std::ofstream(md/"resolved-base-morphology.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
       auto ml = m; refresh(ml, md, "resolved-base-morphology.json"); finalize(ml, md);
+      auto rd16 = read_living_visual_package(md, rlim);
+      check(rd16.value.has_value(), "SC16: mutated package reads");
+      if (rd16.value.has_value()) {
+        auto prov16 = compute_domain_id(kDomainMorphologySet, canonicalize_morphology_preimage(rd16.value->base_morphology));
+        for (auto& a : ml.artifacts) if (a.path == "resolved-base-morphology.json") a.provenance_identity = prov16;
+        refresh(ml, md, "resolved-base-morphology.json"); finalize(ml, md);
+      }
       auto v = verify_living_visual_package(md);
       check(reached_semantic(v), "SC16: reached semantic layer");
       check(!v.ok() && has_diag(v, "LV_MORPH_PARENT_REF"), "SC16: LV_MORPH_PARENT_REF");
+      check(!has_diag(v, "LV_PROV_BASE_MORPHOLOGY"), "SC16: base morphology provenance recomputed");
       fs::remove_all(md);
     }
     // SC17: transformation endpoint changed → LV_MORPH_TRANSFORM_BASE
@@ -791,9 +809,18 @@ int main() try {
       }
       std::ofstream(md/"transformation-morphologies.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
       auto ml = m; refresh(ml, md, "transformation-morphologies.json"); finalize(ml, md);
+      auto rd17 = read_living_visual_package(md, rlim);
+      check(rd17.value.has_value(), "SC17: mutated package reads");
+      if (rd17.value.has_value()) {
+        auto prov17 = compute_domain_id(kDomainMorphologySet,
+            canonicalize_transformation_preimage(rd17.value->transformation_morphologies));
+        for (auto& a : ml.artifacts) if (a.path == "transformation-morphologies.json") a.provenance_identity = prov17;
+        refresh(ml, md, "transformation-morphologies.json"); finalize(ml, md);
+      }
       auto v = verify_living_visual_package(md);
       check(reached_semantic(v), "SC17: reached semantic layer");
       check(!v.ok() && has_diag(v, "LV_MORPH_TRANSFORM_BASE"), "SC17: LV_MORPH_TRANSFORM_BASE");
+      check(!has_diag(v, "LV_PROV_TRANSFORMATION_MORPHOLOGIES"), "SC17: transformation provenance recomputed");
       fs::remove_all(md);
     }
     // SC18: atlas placement frame changed → LV_ATLAS_UNKNOWN_FRAME
@@ -805,9 +832,19 @@ int main() try {
       if (r.first != std::string::npos) s.replace(r.first, r.second - r.first, "ZZZ_FRAME");
       std::ofstream(md/"sheet/atlas.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
       auto ml = m; refresh(ml, md, "sheet/atlas.json"); finalize(ml, md);
+      auto rd18 = read_living_visual_package(md, rlim);
+      check(rd18.value.has_value(), "SC18: mutated package reads");
+      if (rd18.value.has_value()) {
+        auto prov18 = compute_domain_id(kDomainSpriteAtlas,
+            canonicalize_atlas_preimage(rd18.value->sheet.atlas.placements, rd18.value->sheet.atlas.image));
+        for (auto& a : ml.artifacts)
+          if (a.path == "sheet/atlas.json" || a.path == "sheet/atlas.png") a.provenance_identity = prov18;
+        refresh(ml, md, "sheet/atlas.json"); refresh(ml, md, "sheet/atlas.png"); finalize(ml, md);
+      }
       auto v = verify_living_visual_package(md);
       check(reached_semantic(v), "SC18: reached semantic layer");
       check(!v.ok() && has_diag(v, "LV_ATLAS_UNKNOWN_FRAME"), "SC18: LV_ATLAS_UNKNOWN_FRAME");
+      check(!has_diag(v, "LV_PROV_ATLAS"), "SC18: atlas provenance recomputed");
       fs::remove_all(md);
     }
     // SC19: atlas PNG pixels changed → LV_PROV_ATLAS
@@ -821,6 +858,63 @@ int main() try {
       check(reached_semantic(v), "SC19: reached semantic layer");
       check(!v.ok() && has_diag(v, "LV_PROV_ATLAS"), "SC19: LV_PROV_ATLAS");
       fs::remove_all(md);
+    }
+  }
+
+  // ── Image-semantic identity (color space + alpha mode bound into authority) ──
+  {
+    using namespace gspl::sprites;
+    std::cout << "\n--- Image-Semantic Identity Tests ---\n";
+    auto mk_img = [](std::uint32_t w, std::uint32_t h, ColorSpace cs, AlphaMode am, std::uint8_t v) {
+      return ImageRgba8{w, h, cs, am, std::vector<std::uint8_t>(static_cast<std::size_t>(w) * h * 4, v)};
+    };
+    auto base = mk_img(4, 4, ColorSpace::srgb, AlphaMode::straight, 128);
+    auto id_base = canonicalize_image_semantics_preimage(base);
+    check(id_base == canonicalize_image_semantics_preimage(base), "img-identity: deterministic");
+    {
+      auto other = base; other.color_space = ColorSpace::data;
+      check(id_base != canonicalize_image_semantics_preimage(other), "img-identity: color space bound");
+    }
+    {
+      auto other = base; other.alpha_mode = AlphaMode::opaque;
+      check(id_base != canonicalize_image_semantics_preimage(other), "img-identity: alpha mode bound");
+    }
+    {
+      auto other = base; other.pixels[0] = 0;
+      check(id_base != canonicalize_image_semantics_preimage(other), "img-identity: pixel change bound");
+    }
+    {
+      auto other = base; other.width = 8; other.pixels.resize(8 * 4 * 4, 128);
+      check(id_base != canonicalize_image_semantics_preimage(other), "img-identity: dimensions bound");
+    }
+    // Channel-set / channel-image identity distinguishes color/alpha interpretation
+    {
+      ChannelMap ca; ca.id = "c1"; ca.target_frame_id = "f1"; ca.kind = ChannelMapKind::effects; ca.image = base;
+      auto cb = ca; cb.image.color_space = ColorSpace::data;
+      auto cc = ca; cc.image.alpha_mode = AlphaMode::premultiplied;
+      std::vector<ChannelMap> vca{ca}, vcb{cb}, vcc{cc};
+      check(canonicalize_channel_set_preimage(vca) != canonicalize_channel_set_preimage(vcb), "channel-set identity: color space bound");
+      check(canonicalize_channel_set_preimage(vca) != canonicalize_channel_set_preimage(vcc), "channel-set identity: alpha mode bound");
+      check(canonicalize_channel_set_preimage(vca) == canonicalize_channel_set_preimage(vca), "channel-set identity: deterministic");
+      check(canonicalize_channel_image_preimage(ca) != canonicalize_channel_image_preimage(cb), "channel-image identity: color space bound");
+      check(canonicalize_channel_image_preimage(ca) != canonicalize_channel_image_preimage(cc), "channel-image identity: alpha mode bound");
+    }
+    // Atlas identity distinguishes color/alpha interpretation
+    {
+      auto at = mk_img(16, 8, ColorSpace::srgb, AlphaMode::straight, 64);
+      AtlasPlacement pl; pl.frame_id = "f1"; pl.x = 0; pl.y = 0; pl.width = 4; pl.height = 4;
+      pl.pivot_x = 0; pl.pivot_y = 0; pl.duration_ticks = 1;
+      std::vector<AtlasPlacement> pls{pl};
+      auto id_atlas = canonicalize_atlas_preimage(pls, at);
+      {
+        auto other = at; other.color_space = ColorSpace::data;
+        check(id_atlas != canonicalize_atlas_preimage(pls, other), "atlas identity: color space bound");
+      }
+      {
+        auto other = at; other.alpha_mode = AlphaMode::opaque;
+        check(id_atlas != canonicalize_atlas_preimage(pls, other), "atlas identity: alpha mode bound");
+      }
+      check(id_atlas == canonicalize_atlas_preimage(pls, at), "atlas identity: deterministic");
     }
   }
 
@@ -1115,6 +1209,59 @@ int main() try {
       auto v = verify_living_visual_package(md);
       check(reached_semantic(v), "src: dup event reached semantic layer");
       check(!v.ok() && has_diag(v, "LV_SOURCE_DUP_EVENT"), "src: LV_SOURCE_DUP_EVENT");
+      fs::remove_all(md);
+    }
+    // duplicate root schema (same value) → LV_SOURCE_PARSE, no loaded package
+    {
+      auto md = pkg_dir; md += "_src_dupschema"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto sb = src_bytes(md);
+      std::string s(sb.begin(), sb.end());
+      auto s0 = s.find("\"schema\":\"");
+      auto s1 = (s0 != std::string::npos) ? s.find('"', s0 + 10) : std::string::npos;
+      if (s1 != std::string::npos) {
+        auto val = s.substr(s0 + 10, s1 - (s0 + 10));
+        s.insert(s1 + 1, ",\"schema\":\"" + val + "\"");
+      }
+      std::ofstream(md/"source-skeletal-animations.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
+      auto ml = m; refresh(ml, md, "source-skeletal-animations.json"); finalize(ml, md);
+      auto v = verify_living_visual_package(md);
+      check(reached_semantic(v), "src: dup schema reached semantic layer");
+      check(!v.ok() && has_diag(v, "LV_SOURCE_PARSE"), "src: duplicate root schema LV_SOURCE_PARSE");
+      auto rd = read_living_visual_package(md);
+      check(!rd.value.has_value(), "src: duplicate root schema yields no loaded package");
+      fs::remove_all(md);
+    }
+    // duplicate root schema (conflicting value) → LV_SOURCE_PARSE, no loaded package
+    {
+      auto md = pkg_dir; md += "_src_dupschemaconf"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto sb = src_bytes(md);
+      std::string s(sb.begin(), sb.end());
+      auto s0 = s.find("\"schema\":\"");
+      auto s1 = (s0 != std::string::npos) ? s.find('"', s0 + 10) : std::string::npos;
+      if (s1 != std::string::npos) s.insert(s1 + 1, ",\"schema\":\"gspl.bogus-schema/9.9\"");
+      std::ofstream(md/"source-skeletal-animations.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
+      auto ml = m; refresh(ml, md, "source-skeletal-animations.json"); finalize(ml, md);
+      auto v = verify_living_visual_package(md);
+      check(reached_semantic(v), "src: conflicting schema reached semantic layer");
+      check(!v.ok() && has_diag(v, "LV_SOURCE_PARSE"), "src: conflicting duplicate schema LV_SOURCE_PARSE");
+      auto rd = read_living_visual_package(md);
+      check(!rd.value.has_value(), "src: conflicting schema yields no loaded package");
+      fs::remove_all(md);
+    }
+    // duplicate clips array → LV_SOURCE_PARSE, no loaded package
+    {
+      auto md = pkg_dir; md += "_src_dupclipsarr"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto sb = src_bytes(md);
+      std::string s(sb.begin(), sb.end());
+      auto last = s.find_last_of('}');
+      if (last != std::string::npos) s.insert(last, ",\"clips\":[]");
+      std::ofstream(md/"source-skeletal-animations.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
+      auto ml = m; refresh(ml, md, "source-skeletal-animations.json"); finalize(ml, md);
+      auto v = verify_living_visual_package(md);
+      check(reached_semantic(v), "src: dup clips array reached semantic layer");
+      check(!v.ok() && has_diag(v, "LV_SOURCE_PARSE"), "src: duplicate clips array LV_SOURCE_PARSE");
+      auto rd = read_living_visual_package(md);
+      check(!rd.value.has_value(), "src: duplicate clips array yields no loaded package");
       fs::remove_all(md);
     }
     // keyframe tick order broken → LV_SOURCE_KEY_ORDER

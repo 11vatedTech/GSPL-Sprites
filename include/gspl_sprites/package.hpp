@@ -274,6 +274,17 @@ struct LivingVisualPackageVerificationResult {
 [[nodiscard]] std::string canonicalize_source_animation_set_preimage(
     std::span<const SkeletalClip> clips);
 
+/* ── Shared canonical semantic preimages (builder, verifier, mutation repair) ── */
+[[nodiscard]] std::string canonicalize_image_semantics_preimage(const ImageRgba8& image);
+[[nodiscard]] std::string canonicalize_channel_set_preimage(std::span<const ChannelMap> channels);
+[[nodiscard]] std::string canonicalize_channel_image_preimage(const ChannelMap& ch);
+[[nodiscard]] std::string canonicalize_morphology_preimage(const EffectiveMorphology& morph);
+[[nodiscard]] std::string canonicalize_transformation_preimage(
+    std::span<const EffectiveMorphology> transformation);
+[[nodiscard]] std::string canonicalize_atlas_preimage(std::span<const AtlasPlacement> placements,
+                                                      const ImageRgba8& atlas_image);
+[[nodiscard]] std::string compute_domain_id(std::string_view domain, std::string_view preimage);
+
 /* ── Safe path encoding for artifact IDs ── */
 [[nodiscard]] std::string encode_package_component(std::string_view semantic_id);
 [[nodiscard]] std::string decode_package_component(std::string_view encoded);
