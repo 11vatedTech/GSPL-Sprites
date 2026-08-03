@@ -1287,6 +1287,85 @@ static SpriteSeed lv_parse_seed_json(std::string_view json, const PackageReadLim
 
 } // anonymous namespace
 
+/* ── Shared canonical semantic preimages (builder, verifier, mutation repair) ── */
+std::string canonicalize_image_semantics_preimage(const ImageRgba8& image) {
+  std::string preimage = "gspl.image-rgba8.identity/0.1\n";
+  preimage += std::to_string(image.width) + "x" + std::to_string(image.height) + "\n";
+  preimage += std::to_string(static_cast<int>(image.color_space)) + "\n";
+  preimage += std::to_string(static_cast<int>(image.alpha_mode)) + "\n";
+  if (!image.pixels.empty())
+    preimage.append(reinterpret_cast<const char*>(image.pixels.data()), image.pixels.size());
+  return preimage;
+}
+
+std::string canonicalize_channel_set_preimage(std::span<const ChannelMap> channels) {
+  std::string preimage;
+  for (auto const& ch : channels) {
+    preimage += canonicalize_channel_image_preimage(ch);
+    preimage += "\n";
+  }
+  return preimage;
+}
+
+std::string canonicalize_channel_image_preimage(const ChannelMap& ch) {
+  std::string preimage;
+  preimage += ch.id + "\n";
+  preimage += ch.target_frame_id + "\n";
+  preimage += std::to_string(static_cast<int>(ch.kind)) + "\n";
+  preimage += canonicalize_image_semantics_preimage(ch.image);
+  return preimage;
+}
+
+std::string canonicalize_morphology_preimage(const EffectiveMorphology& morph) {
+  std::string preimage;
+  for (auto const& [part_id, mp] : morph) {
+    preimage += part_id + "\n";
+    preimage += mp.bone_id + "\n";
+    preimage += mp.primitive + "\n";
+    preimage += mp.semantic_role + "\n";
+    preimage += mp.color + "\n";
+    preimage += mp.parent + "\n";
+    preimage += canonical_double(mp.x) + "," + canonical_double(mp.y) + "," + canonical_double(mp.z) + "\n";
+    preimage += canonical_double(mp.size_x) + "," + canonical_double(mp.size_y) + "," + canonical_double(mp.size_z) + "\n";
+    preimage += canonical_double(mp.rotation_degrees) + "\n";
+    preimage += std::to_string(mp.z_order) + "\n";
+    preimage += std::string(mp.emissive ? "1" : "0") + "\n";
+    preimage += std::string(mp.electrical_marking ? "1" : "0") + "\n";
+  }
+  return preimage;
+}
+
+std::string canonicalize_transformation_preimage(std::span<const EffectiveMorphology> transformation) {
+  std::string preimage;
+  preimage += std::to_string(transformation.size()) + "\n";
+  for (std::size_t i = 0; i < transformation.size(); ++i) {
+    preimage += std::to_string(i) + "\n";
+    preimage += canonicalize_morphology_preimage(transformation[i]);
+  }
+  return preimage;
+}
+
+std::string canonicalize_atlas_preimage(std::span<const AtlasPlacement> placements,
+                                         const ImageRgba8& atlas_image) {
+  auto sorted = std::vector<AtlasPlacement>(placements.begin(), placements.end());
+  std::ranges::sort(sorted, {}, &AtlasPlacement::frame_id);
+  std::string preimage;
+  preimage += std::to_string(atlas_image.width) + "x" + std::to_string(atlas_image.height) + "\n";
+  preimage += canonicalize_image_semantics_preimage(atlas_image) + "\n";
+  for (auto const& p : sorted) {
+    preimage += p.frame_id + "\n";
+    preimage += std::to_string(p.x) + "," + std::to_string(p.y) + "\n";
+    preimage += std::to_string(p.width) + "x" + std::to_string(p.height) + "\n";
+    preimage += std::to_string(p.pivot_x) + "," + std::to_string(p.pivot_y) + "\n";
+    preimage += std::to_string(p.duration_ticks) + "\n";
+  }
+  return preimage;
+}
+
+std::string compute_domain_id(std::string_view domain, std::string_view preimage) {
+  return sha256(std::string(domain) + "\n" + std::string(preimage));
+}
+
 /* === Public API === */
 
 std::string encode_package_component(std::string_view id) { return encode_pc(id); }
@@ -1469,80 +1548,6 @@ std::string canonicalize_source_skeletal_animations_json(std::span<const Skeleta
 std::string canonicalize_source_animation_set_preimage(std::span<const SkeletalClip> clips) {
   return canonicalize_source_skeletal_animations_json(clips);
 }
-
-/* ── Shared canonical semantic preimages (builder, verifier, mutation repair) ── */
-std::string canonicalize_image_semantics_preimage(const ImageRgba8& image) {
-  std::string preimage = "gspl.image-rgba8.identity/0.1\n";
-  preimage += std::to_string(image.width) + "x" + std::to_string(image.height) + "\n";
-  preimage += std::to_string(static_cast<int>(image.color_space)) + "\n";
-  preimage += std::to_string(static_cast<int>(image.alpha_mode)) + "\n";
-  if (!image.pixels.empty())
-    preimage.append(reinterpret_cast<const char*>(image.pixels.data()), image.pixels.size());
-  return preimage;
-}
-
-std::string canonicalize_channel_set_preimage(std::span<const ChannelMap> channels) {
-  std::string preimage;
-  for (auto const& ch : channels) {
-    preimage += canonicalize_channel_image_preimage(ch);
-    preimage += "\n";
-  }
-  return preimage;
-}
-
-std::string canonicalize_channel_image_preimage(const ChannelMap& ch) {
-  std::string preimage;
-  preimage += ch.id + "\n";
-  preimage += ch.target_frame_id + "\n";
-  preimage += std::to_string(static_cast<int>(ch.kind)) + "\n";
-  preimage += canonicalize_image_semantics_preimage(ch.image);
-  return preimage;
-}
-
-std::string canonicalize_morphology_preimage(const EffectiveMorphology& morph) {
-  std::string preimage;
-  preimage += std::to_string(morph.parts.size()) + "\n";
-  for (auto const& [pid, mp] : morph.parts) {
-    preimage += pid + "\n";
-    preimage += (mp.parent ? *mp.parent : "") + "\n";
-    preimage += std::to_string(mp.position.x) + "," + std::to_string(mp.position.y) + "\n";
-    preimage += std::to_string(mp.size.x) + "," + std::to_string(mp.size.y) + "\n";
-    preimage += std::to_string(mp.pivot.x) + "," + std::to_string(mp.pivot.y) + "\n";
-  }
-  return preimage;
-}
-
-std::string canonicalize_transformation_preimage(std::span<const EffectiveMorphology> transformation) {
-  std::string preimage;
-  preimage += std::to_string(transformation.size()) + "\n";
-  for (std::size_t i = 0; i < transformation.size(); ++i) {
-    preimage += std::to_string(i) + "\n";
-    preimage += canonicalize_morphology_preimage(transformation[i]);
-  }
-  return preimage;
-}
-
-std::string canonicalize_atlas_preimage(std::span<const AtlasPlacement> placements,
-                                         const ImageRgba8& atlas_image) {
-  auto sorted = std::vector<AtlasPlacement>(placements.begin(), placements.end());
-  std::ranges::sort(sorted, {}, &AtlasPlacement::frame_id);
-  std::string preimage;
-  preimage += std::to_string(atlas_image.width) + "x" + std::to_string(atlas_image.height) + "\n";
-  preimage += canonicalize_image_semantics_preimage(atlas_image) + "\n";
-  for (auto const& p : sorted) {
-    preimage += p.frame_id + "\n";
-    preimage += std::to_string(p.x) + "," + std::to_string(p.y) + "\n";
-    preimage += std::to_string(p.width) + "x" + std::to_string(p.height) + "\n";
-    preimage += std::to_string(p.pivot_x) + "," + std::to_string(p.pivot_y) + "\n";
-    preimage += std::to_string(p.duration_ticks) + "\n";
-  }
-  return preimage;
-}
-
-std::string compute_domain_id(std::string_view domain, std::string_view preimage) {
-  return sha256(std::string(domain) + "\n" + std::string(preimage));
-}
-
 static std::string compute_domain_id_impl(std::string_view domain, std::string_view preimage) {
   return sha256(std::string(domain) + "\n" + std::string(preimage));
 }
