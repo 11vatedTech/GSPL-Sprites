@@ -47,6 +47,22 @@ struct JsonReadResult {
     }
 };
 
+// ── Bounded JSON error codes ───────────────────────────────
+
+enum class BoundedJsonErrorCode {
+    none,
+    malformed,
+    token_limit,
+    nesting_limit,
+    object_member_limit,
+    array_length_limit,
+    string_length_limit,
+    input_limit,
+    unexpected_eof,
+    trailing_content,
+    type_mismatch
+};
+
 // ── Canonical bounded JSON reader ─────────────────────────
 
 struct BoundedJsonConfig {
@@ -114,6 +130,7 @@ public:
     // Error state
     bool has_error() const { return has_error_; }
     std::string const& error_message() const { return error_; }
+    BoundedJsonErrorCode error_code() const { return error_code_; }
 
     // Token budget accounting
     std::size_t token_count() const { return token_count_; }
@@ -150,10 +167,11 @@ private:
     BoundedJsonConfig cfg_;
     bool has_error_{false};
     std::string error_;
+    BoundedJsonErrorCode error_code_{BoundedJsonErrorCode::none};
     std::size_t token_count_{};
 
     ContainerFrame* current_frame() noexcept;
-    void set_error(std::string msg);
+    void set_error(std::string msg, BoundedJsonErrorCode code = BoundedJsonErrorCode::malformed);
     void count_token();   // increments token_count_, checks cfg_.max_tokens
     std::string read_raw_string();
     void advance_pos();  // increments pos_, updates line_/col_

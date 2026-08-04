@@ -89,7 +89,8 @@ BoundedJsonReader::BoundedJsonReader(std::string_view src, BoundedJsonConfig cfg
     : src_(src), cfg_(cfg) {
     if (src_.size() > cfg_.max_input_bytes) {
         set_error("input exceeds max_input_bytes (" +
-                  std::to_string(cfg_.max_input_bytes) + ")");
+                  std::to_string(cfg_.max_input_bytes) + ")",
+                  BoundedJsonErrorCode::input_limit);
     }
 }
 
@@ -97,10 +98,11 @@ JsonSourcePosition BoundedJsonReader::source_position() const {
     return {pos_, line_, col_};
 }
 
-void BoundedJsonReader::set_error(std::string msg) {
+void BoundedJsonReader::set_error(std::string msg, BoundedJsonErrorCode code) {
     if (!has_error_) {
         has_error_ = true;
         error_ = std::move(msg);
+        error_code_ = code;
     }
 }
 
@@ -109,7 +111,8 @@ void BoundedJsonReader::count_token() {
     if (cfg_.max_tokens > 0 && token_count_ > cfg_.max_tokens) {
         set_error("JSON token budget exhausted (" +
                   std::to_string(cfg_.max_tokens) + " max, " +
-                  std::to_string(token_count_) + " consumed)");
+                  std::to_string(token_count_) + " consumed)",
+                  BoundedJsonErrorCode::token_limit);
     }
 }
 
@@ -130,7 +133,8 @@ void BoundedJsonReader::enter_object() {
     ++depth_;
     if (depth_ > cfg_.max_nesting_depth) {
         set_error("nesting depth exceeds max_nesting_depth (" +
-                  std::to_string(cfg_.max_nesting_depth) + ")");
+                  std::to_string(cfg_.max_nesting_depth) + ")",
+                  BoundedJsonErrorCode::nesting_limit);
     }
 }
 
@@ -142,7 +146,8 @@ void BoundedJsonReader::enter_array() {
     ++depth_;
     if (depth_ > cfg_.max_nesting_depth) {
         set_error("nesting depth exceeds max_nesting_depth (" +
-                  std::to_string(cfg_.max_nesting_depth) + ")");
+                  std::to_string(cfg_.max_nesting_depth) + ")",
+                  BoundedJsonErrorCode::nesting_limit);
     }
 }
 
@@ -220,7 +225,8 @@ bool BoundedJsonReader::record_object_member(std::string_view path) {
     if (frame->item_count > cfg_.max_object_members) {
         set_error(std::string(path) + ": object member count (" +
                   std::to_string(frame->item_count) + ") exceeds max_object_members (" +
-                  std::to_string(cfg_.max_object_members) + ")");
+                  std::to_string(cfg_.max_object_members) + ")",
+                  BoundedJsonErrorCode::object_member_limit);
         return false;
     }
     return true;
@@ -236,7 +242,8 @@ bool BoundedJsonReader::record_array_element(std::string_view path) {
     if (frame->item_count > cfg_.max_array_length) {
         set_error(std::string(path) + ": array element count (" +
                   std::to_string(frame->item_count) + ") exceeds max_array_length (" +
-                  std::to_string(cfg_.max_array_length) + ")");
+                  std::to_string(cfg_.max_array_length) + ")",
+                  BoundedJsonErrorCode::array_length_limit);
         return false;
     }
     return true;
@@ -480,7 +487,8 @@ std::string BoundedJsonReader::read_raw_string() {
         }
         if (out.size() >= cfg_.max_string_length) {
             set_error("string exceeds max_string_length (" +
-                      std::to_string(cfg_.max_string_length) + ")");
+                      std::to_string(cfg_.max_string_length) + ")",
+                      BoundedJsonErrorCode::string_length_limit);
             return {};
         }
         if (c == '\\' && pos_ + 1 < src_.size()) {

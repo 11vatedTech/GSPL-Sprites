@@ -272,13 +272,16 @@ ValidationResult validate_manifest_model(const LivingPackageManifest& m, const P
 }
 
 /* ── Embedded schema extraction from JSON artifact ── */
-std::string extract_embedded_schema(std::string_view json_bytes, const PackageReadLimits& limits) {
+std::string extract_embedded_schema(std::string_view json_bytes, const PackageReadLimits& limits, auto add_diag) {
   gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_tokens = limits.max_json_tokens;
   cfg.max_object_members = 64;
   cfg.max_input_bytes = json_bytes.size() + 1;
   cfg.max_nesting_depth = limits.max_json_nesting;
   gspl::BoundedJsonReader r(json_bytes, cfg);
-  if (!r.begin_object("schema-extract")) return "";
+  if (!r.begin_object("schema-extract")) {
+    if (r.has_error()) add_diag("LV_READ_JSON_MALFORMED", "schema extraction: " + r.error_message());
+    return "";
+  }
   std::string schema;
   while (r.has_more() && !r.has_error()) {
     auto key = r.read_string_result();
@@ -286,13 +289,14 @@ std::string extract_embedded_schema(std::string_view json_bytes, const PackageRe
     if (!r.require(':', "schema-extract")) break;
     if (*key.value == "schema") {
       auto schema_result = r.read_string_result();
-      if (schema_result.ok()) schema = std::move(*schema_result.value);
+      if (schema_result.ok() && schema.empty()) schema = std::move(*schema_result.value);
       else r.skip_value();
     } else r.skip_value();
     r.record_object_member("schema-extract");
     if (!r.next_object_member("schema-extract")) break;
   }
   r.end_object("schema-extract");
+  if (r.has_error()) add_diag("LV_READ_JSON_MALFORMED", "schema extraction: " + r.error_message());
   return schema;
 }
 
@@ -628,44 +632,114 @@ struct PackageDiagnostic { std::string code; std::string message; };
 }
 static std::string lv_rd_str(gspl::BoundedJsonReader& r, std::string_view path) {
   auto res = r.read_string_result();
-  if (!res.ok()) lv_fail("LV_TYPE_STR", std::string(path) + ": expected string");
+  if (!res.ok()) {
+    if (r.has_error()) return {};  // bounded reader error — let caller detect r.has_error()
+    lv_fail("LV_TYPE_STR", std::string(path) + ": expected string");
+  }
   return std::move(*res.value);
 }
 static std::uint32_t lv_rd_u32(gspl::BoundedJsonReader& r, std::string_view path) {
   auto res = r.read_uint32_result();
-  if (!res.ok()) lv_fail("LV_TYPE_U32", std::string(path) + ": expected uint32");
+  if (!res.ok()) {
+    if (r.has_error()) return 0;  // bounded reader error — let caller detect r.has_error()
+    lv_fail("LV_TYPE_U32", std::string(path) + ": expected uint32");
+  }
   return *res.value;
 }
 static std::int32_t lv_rd_i32(gspl::BoundedJsonReader& r, std::string_view path) {
   auto res = r.read_int32_result();
-  if (!res.ok()) lv_fail("LV_TYPE_I32", std::string(path) + ": expected int32");
+  if (!res.ok()) {
+    if (r.has_error()) return 0;  // bounded reader error — let caller detect r.has_error()
+    lv_fail("LV_TYPE_I32", std::string(path) + ": expected int32");
+  }
   return *res.value;
 }
 static std::uint64_t lv_rd_u64(gspl::BoundedJsonReader& r, std::string_view path) {
   auto res = r.read_uint64_result();
-  if (!res.ok()) lv_fail("LV_TYPE_U64", std::string(path) + ": expected uint64");
+  if (!res.ok()) {
+    if (r.has_error()) return 0;  // bounded reader error — let caller detect r.has_error()
+    lv_fail("LV_TYPE_U64", std::string(path) + ": expected uint64");
+  }
   return *res.value;
 }
 static double lv_rd_dbl(gspl::BoundedJsonReader& r, std::string_view path) {
   auto res = r.read_double_result();
-  if (!res.ok()) lv_fail("LV_TYPE_F64", std::string(path) + ": expected finite double");
+  if (!res.ok()) {
+    if (r.has_error()) return 0.0;  // bounded reader error — let caller detect r.has_error()
+    lv_fail("LV_TYPE_F64", std::string(path) + ": expected finite double");
+  }
   double v = *res.value;
   if (!std::isfinite(v)) lv_fail("LV_NONFINITE", std::string(path) + ": non-finite double");
   return v;
 }
 static bool lv_rd_bool(gspl::BoundedJsonReader& r, std::string_view path) {
   auto res = r.read_bool_result();
-  if (!res.ok()) lv_fail("LV_TYPE_BOOL", std::string(path) + ": expected bool");
+  if (!res.ok()) {
+    if (r.has_error()) return false;  // bounded reader error — let caller detect r.has_error()
+    lv_fail("LV_TYPE_BOOL", std::string(path) + ": expected bool");
+  }
   return *res.value;
+}
+
+// ── Centralized bounded JSON error translation ──
+// Maps BoundedJsonReader typed errors to stable Living Package diagnostics
+static void append_bounded_json_diagnostic(
+    gspl::BoundedJsonReader const& r,
+    auto add_diag,
+    std::string_view context) {
+  if (!r.has_error()) return;
+  auto code = r.error_code();
+  std::string pkg_code;
+  switch (code) {
+    case gspl::BoundedJsonErrorCode::token_limit:
+      pkg_code = "LV_READ_JSON_TOKENS";
+      break;
+    case gspl::BoundedJsonErrorCode::nesting_limit:
+      pkg_code = "LV_READ_JSON_NESTING";
+      break;
+    case gspl::BoundedJsonErrorCode::object_member_limit:
+      pkg_code = "LV_READ_JSON_MEMBERS";
+      break;
+    case gspl::BoundedJsonErrorCode::array_length_limit:
+      pkg_code = "LV_READ_JSON_ARRAY";
+      break;
+    case gspl::BoundedJsonErrorCode::string_length_limit:
+      pkg_code = "LV_READ_JSON_STRING";
+      break;
+    case gspl::BoundedJsonErrorCode::input_limit:
+      pkg_code = "LV_READ_JSON_INPUT";
+      break;
+    case gspl::BoundedJsonErrorCode::unexpected_eof:
+      pkg_code = "LV_READ_JSON_EOF";
+      break;
+    case gspl::BoundedJsonErrorCode::trailing_content:
+      pkg_code = "LV_READ_JSON_TRAILING";
+      break;
+    case gspl::BoundedJsonErrorCode::type_mismatch:
+      pkg_code = "LV_READ_JSON_TYPE";
+      break;
+    case gspl::BoundedJsonErrorCode::malformed:
+    default:
+      pkg_code = "LV_READ_JSON_MALFORMED";
+      break;
+  }
+  add_diag(pkg_code, std::string(context) + ": " + r.error_message());
 }
 
 
 // Full SpriteSeed deserialization from canonical JSON using BoundedJsonReader
-static SpriteSeed lv_parse_seed_json(std::string_view json, const PackageReadLimits& limits) {
+static std::optional<SpriteSeed> lv_parse_seed_json(std::string_view json, const PackageReadLimits& limits, auto add_diag) {
   SpriteSeed s;
   gspl::BoundedJsonConfig cfg{}; cfg.max_object_members = 8192; cfg.max_array_length = 8192; cfg.max_tokens = limits.max_json_tokens;
   gspl::BoundedJsonReader r(json, cfg);
-  if (!r.begin_object("seed")) return s;
+  if (!r.begin_object("seed")) {
+    if (r.has_error()) { append_bounded_json_diagnostic(r, add_diag, "seed"); }
+    return std::nullopt;
+  }
+  if (r.has_error()) {
+    append_bounded_json_diagnostic(r, add_diag, "seed");
+    return std::nullopt;
+  }
   while (r.has_more() && !r.has_error()) {
     auto key = r.read_string_result();
     if (!key.ok()) break;
@@ -1282,10 +1356,48 @@ static SpriteSeed lv_parse_seed_json(std::string_view json, const PackageReadLim
     if (!r.next_object_member("seed")) break;
   }
   r.end_object("seed");
+  if (r.has_error()) {
+    append_bounded_json_diagnostic(r, add_diag, "seed");
+    return std::nullopt;
+  }
   return s;
 }
 
 } // anonymous namespace
+
+/* ── ColorSpace / AlphaMode canonical string conversion ── */
+std::string color_space_to_string(ColorSpace cs) {
+  switch (cs) {
+    case ColorSpace::srgb:        return "srgb";
+    case ColorSpace::linear_srgb: return "linear_srgb";
+    case ColorSpace::acescg:     return "acescg";
+    case ColorSpace::data:       return "data";
+    case ColorSpace::unknown:    return "unknown";
+  }
+  return "unknown";
+}
+std::optional<ColorSpace> color_space_from_string(std::string_view s) {
+  if (s == "srgb")        return ColorSpace::srgb;
+  if (s == "linear_srgb") return ColorSpace::linear_srgb;
+  if (s == "acescg")     return ColorSpace::acescg;
+  if (s == "data")       return ColorSpace::data;
+  if (s == "unknown")    return ColorSpace::unknown;
+  return std::nullopt;
+}
+std::string alpha_mode_to_string(AlphaMode am) {
+  switch (am) {
+    case AlphaMode::straight:     return "straight";
+    case AlphaMode::premultiplied: return "premultiplied";
+    case AlphaMode::opaque:       return "opaque";
+  }
+  return "straight";
+}
+std::optional<AlphaMode> alpha_mode_from_string(std::string_view s) {
+  if (s == "straight")      return AlphaMode::straight;
+  if (s == "premultiplied") return AlphaMode::premultiplied;
+  if (s == "opaque")        return AlphaMode::opaque;
+  return std::nullopt;
+}
 
 /* ── Shared canonical semantic preimages (builder, verifier, mutation repair) ── */
 std::string canonicalize_image_semantics_preimage(const ImageRgba8& image) {
@@ -1299,9 +1411,21 @@ std::string canonicalize_image_semantics_preimage(const ImageRgba8& image) {
 }
 
 std::string canonicalize_channel_set_preimage(std::span<const ChannelMap> channels) {
+  // Sort into canonical order for ordering-independent identity.
+  // Order by (id, target_frame_id, kind) — all three are governed.
+  std::vector<const ChannelMap*> sorted;
+  sorted.reserve(channels.size());
+  for (auto const& ch : channels) sorted.push_back(&ch);
+  std::sort(sorted.begin(), sorted.end(), [](const ChannelMap* a, const ChannelMap* b) {
+    auto t = a->id.compare(b->id);
+    if (t != 0) return t < 0;
+    t = a->target_frame_id.compare(b->target_frame_id);
+    if (t != 0) return t < 0;
+    return static_cast<int>(a->kind) < static_cast<int>(b->kind);
+  });
   std::string preimage;
-  for (auto const& ch : channels) {
-    preimage += canonicalize_channel_image_preimage(ch);
+  for (auto* ch : sorted) {
+    preimage += canonicalize_channel_image_preimage(*ch);
     preimage += "\n";
   }
   return preimage;
@@ -1575,7 +1699,7 @@ void build_living_visual_package(const LivingVisualPackageInput& input, const st
     }
     auto atlas_png = encode_png(input.sheet.atlas.image);
     lv_write(staging/"sheet"/"atlas.png", std::string_view(reinterpret_cast<const char*>(atlas_png.data()), atlas_png.size()));
-    lv_write(staging/"sheet"/"atlas.json", std::string("{\"schema\":\"") + std::string(kSchemaSpriteSheet) + "\",\"data\":" + input.sheet.metadata + "}");
+    lv_write(staging/"sheet"/"atlas.json", std::string("{\"schema\":\"") + std::string(kSchemaSpriteSheet) + "\",\"color_space\":\"" + color_space_to_string(input.sheet.atlas.image.color_space) + "\",\"alpha_mode\":\"" + alpha_mode_to_string(input.sheet.atlas.image.alpha_mode) + "\",\"data\":" + input.sheet.metadata + "}");
 
     // Source skeletal animations (canonical JSON using canonical_double)
     {
@@ -1640,8 +1764,8 @@ void build_living_visual_package(const LivingVisualPackageInput& input, const st
         o << "{\"id\":\"" << lv_escape(f.id)
           << "\",\"path\":\"frames/" << lv_escape(encode_pc(f.id)) << ".png\""
           << ",\"width\":" << f.image.width << ",\"height\":" << f.image.height
-          << ",\"color_space\":\"" << (f.image.color_space == ColorSpace::srgb ? "srgb" : "data") << "\""
-          << ",\"alpha_mode\":\"" << (f.image.alpha_mode == AlphaMode::opaque ? "opaque" : "straight") << "\""
+          << ",\"color_space\":\"" << color_space_to_string(f.image.color_space) << "\""
+          << ",\"alpha_mode\":\"" << alpha_mode_to_string(f.image.alpha_mode) << "\""
           << ",\"pivot_x\":" << f.pivot_x << ",\"pivot_y\":" << f.pivot_y
           << ",\"duration_ticks\":" << f.duration_ticks
           << ",\"frame_hash\":\"" << lv_escape(f.frame_hash) << "\"}";
@@ -1700,7 +1824,9 @@ void build_living_visual_package(const LivingVisualPackageInput& input, const st
       for (std::size_t i=0; i<input.channels.size(); ++i) {
         if (i) o << ","; auto const& ch = input.channels[i];
         o << "{\"id\":\"" << lv_escape(ch.id) << "\",\"target_frame_id\":\"" << lv_escape(ch.target_frame_id)
-          << "\",\"kind\":" << static_cast<int>(ch.kind) << ",\"width\":" << ch.image.width << ",\"height\":" << ch.image.height << "}";
+          << "\",\"kind\":" << static_cast<int>(ch.kind) << ",\"width\":" << ch.image.width << ",\"height\":" << ch.image.height
+          << ",\"color_space\":\"" << color_space_to_string(ch.image.color_space)
+          << "\",\"alpha_mode\":\"" << alpha_mode_to_string(ch.image.alpha_mode) << "\"}";
         auto ch_png = encode_png(ch.image);
         lv_write(staging/"channels"/(encode_pc(ch.id)+".png"), std::string_view(reinterpret_cast<const char*>(ch_png.data()), ch_png.size()));
       }
@@ -1793,12 +1919,8 @@ void build_living_visual_package(const LivingVisualPackageInput& input, const st
         kDomainMorphologySet, canonicalize_morphology_preimage(input.storm_morphology));
     std::string trans_morph_id;
     {
-      std::string trans_preimage;
-      for (std::size_t i = 0; i < input.transformation_morphologies.size(); ++i) {
-        trans_preimage += std::to_string(i) + "\n";
-        trans_preimage += canonicalize_morphology_preimage(input.transformation_morphologies[i]);
-      }
-      trans_morph_id = compute_domain_id_impl(kDomainMorphologySet, trans_preimage);
+      trans_morph_id = compute_domain_id_impl(kDomainMorphologySet,
+          canonicalize_transformation_preimage(input.transformation_morphologies));
     }
     std::string atlas_id = compute_domain_id_impl(
         kDomainSpriteAtlas, canonicalize_atlas_preimage(
@@ -1977,7 +2099,7 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
       for (auto const& art : pkg.manifest.artifacts) {
         if (art.path == rel_path) {
           auto expected_schema = artifact_schema_for_kind(art.kind);
-          auto embedded = extract_embedded_schema(bytes, limits);
+          auto embedded = extract_embedded_schema(bytes, limits, add);
           // Fail closed: stop before semantic parsing on schema mismatch
           if (embedded != expected_schema) {
             add("LV_READ_EMBEDDED_SCHEMA", std::string("embedded schema mismatch for ") + std::string(rel_path) + ": expected '" + std::string(expected_schema) + "' got '" + embedded + "'");
@@ -1996,7 +2118,12 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     {
       gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_tokens = limits.max_json_tokens; cfg.max_object_members = 512;
       gspl::BoundedJsonReader wr(seed_wrapper, cfg);
-      if (wr.begin_object("seed-wrapper")) {
+      if (!wr.begin_object("seed-wrapper")) {
+        if (wr.has_error()) {
+          append_bounded_json_diagnostic(wr, add, "seed.json wrapper");
+          return result;
+        }
+      } else {
         while (wr.has_more() && !wr.has_error()) {
           auto wk = wr.read_string_result(); if (!wk.ok()) break;
           if (!wr.require(':', "seed-wrapper")) break;
@@ -2007,10 +2134,18 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
           if (!wr.next_object_member("seed-wrapper")) break;
         }
         wr.end_object("seed-wrapper");
+        if (wr.has_error()) {
+          append_bounded_json_diagnostic(wr, add, "seed.json wrapper");
+          return result;
+        }
       }
     }
     if (seed_json.empty()) { add("LV_READ_NO_DATA", "seed wrapper missing data field"); return result; }
-    pkg.seed = lv_parse_seed_json(seed_json, limits);
+    {
+      auto seed_parse = lv_parse_seed_json(seed_json, limits, add);
+      if (!seed_parse.has_value()) return result;
+      pkg.seed = std::move(*seed_parse);
+    }
     if (pkg.seed.stable_id.empty()) pkg.seed.stable_id = pkg.entity_id;
     pkg.seed_identity = sha256(seed_json);
     if (pkg.manifest.seed_identity != pkg.seed_identity)
@@ -2019,13 +2154,19 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     // Reconstructed source skeletal animations from independent artifact parser
     {
       auto sa_bytes = inv_read("source-skeletal-animations.json", limits.max_artifact_bytes);
-      auto sa_schema = extract_embedded_schema(sa_bytes, limits);
+      auto sa_schema = extract_embedded_schema(sa_bytes, limits, add);
       if (sa_schema != kSchemaSourceSkeletalAnimations)
         { add("LV_SOURCE_SCHEMA", "source animations schema mismatch: " + sa_schema); return result; }
       gspl::BoundedJsonConfig sacfg{}; sacfg.max_object_members = 4096; sacfg.max_array_length = 4096;
       sacfg.max_nesting_depth = limits.max_json_nesting; sacfg.max_tokens = limits.max_json_tokens;
       gspl::BoundedJsonReader r(sa_bytes, sacfg);
-      if (!r.begin_object("sa")) { add("LV_SOURCE_PARSE", "not a JSON object"); return result; }
+      if (!r.begin_object("sa")) {
+        if (r.has_error()) {
+          append_bounded_json_diagnostic(r, add, "source-skeletal-animations");
+          return result;
+        }
+        { add("LV_SOURCE_PARSE", "not a JSON object"); return result; }
+      }
       std::set<std::string, std::less<>> sa_seen;
       while (r.has_more() && !r.has_error()) {
         auto sk = r.read_string_result(); if (!sk.ok()) break;
@@ -2145,6 +2286,10 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
         r.record_object_member("sa");
         if (!r.next_object_member("sa")) break;
       }
+      if (r.has_error()) {
+        append_bounded_json_diagnostic(r, add, "source-skeletal-animations");
+        return result;
+      }
       r.end_object("sa");
       if (!sa_seen.count("schema") || !sa_seen.count("clips"))
         add("LV_SOURCE_SCHEMA", "source animations root missing required field");
@@ -2197,10 +2342,15 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
     {
       auto fm_bytes = inv_read("frames.json", limits.max_artifact_bytes);
       if (!check_embedded_schema("frames.json", fm_bytes)) return result;
-      gspl::BoundedJsonConfig fcfg{}; fcfg.max_object_members = 512;
+      gspl::BoundedJsonConfig fcfg{}; fcfg.max_object_members = 512; fcfg.max_tokens = limits.max_json_tokens; fcfg.max_nesting_depth = limits.max_json_nesting;
       gspl::BoundedJsonReader fmr(fm_bytes, fcfg);
       bool frames_schema_ok = false;
-      if (fmr.begin_object("frames-json")) {
+      if (!fmr.begin_object("frames-json")) {
+        if (fmr.has_error()) {
+          append_bounded_json_diagnostic(fmr, add, "frames.json");
+          return result;
+        }
+      } else {
         while (fmr.has_more() && !fmr.has_error()) {
           auto fk = fmr.read_string_result(); if (!fk.ok()) break;
           if (!fmr.require(':', "frames-json")) break;
@@ -2216,6 +2366,8 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
               if (!fmr.begin_object("frame")) break;
               FrameSource fs;
               std::uint32_t declared_w = 0, declared_h = 0;
+              std::optional<ColorSpace> declared_cs;
+              std::optional<AlphaMode> declared_am;
               while (fmr.has_more() && !fmr.has_error()) {
                 auto fsk = fmr.read_string_result(); if (!fsk.ok()) break;
                 if (!fmr.require(':', "frame")) break;
@@ -2227,7 +2379,19 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
                 else if (*fsk.value == "pivot_y") fs.pivot_y = lv_rd_i32(fmr, "frame.pivot_y");
                 else if (*fsk.value == "duration_ticks") fs.duration_ticks = lv_rd_u32(fmr, "frame.duration");
                 else if (*fsk.value == "frame_hash") fs.frame_hash = lv_rd_str(fmr, "frame.hash");
-                else if (*fsk.value == "color_space" || *fsk.value == "alpha_mode" || *fsk.value == "schema") { fmr.skip_value(); }
+                else if (*fsk.value == "color_space") {
+                  auto cs_str = lv_rd_str(fmr, "frame.color_space");
+                  if (declared_cs.has_value()) add("LV_READ_DUP_CS", "duplicate color_space in frame: " + fs.id);
+                  declared_cs = color_space_from_string(cs_str);
+                  if (!declared_cs.has_value()) add("LV_READ_INVALID_CS", "invalid frame color_space: " + cs_str);
+                }
+                else if (*fsk.value == "alpha_mode") {
+                  auto am_str = lv_rd_str(fmr, "frame.alpha_mode");
+                  if (declared_am.has_value()) add("LV_READ_DUP_AM", "duplicate alpha_mode in frame: " + fs.id);
+                  declared_am = alpha_mode_from_string(am_str);
+                  if (!declared_am.has_value()) add("LV_READ_INVALID_AM", "invalid frame alpha_mode: " + am_str);
+                }
+                else if (*fsk.value == "schema") { fmr.skip_value(); }
                 else fmr.skip_value();
                 fmr.record_object_member("frame");
                 if (!fmr.next_object_member("frame")) break;
@@ -2246,6 +2410,11 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
                     reinterpret_cast<const std::byte*>(png_bytes.data()), png_bytes.size()), img_lim);
                 if (fs.image.width != declared_w || fs.image.height != declared_h)
                   add("LV_READ_FRAME_DIMS", "frame dimensions mismatch: " + fs.id);
+                // Apply declared semantics over decoder defaults
+                if (declared_cs.has_value()) fs.image.color_space = *declared_cs;
+                else add("LV_READ_MISSING_CS", "frame missing color_space: " + fs.id);
+                if (declared_am.has_value()) fs.image.alpha_mode = *declared_am;
+                else add("LV_READ_MISSING_AM", "frame missing alpha_mode: " + fs.id);
                 auto computed_hash = compute_frame_hash(fs.image);
                 if (!fs.frame_hash.empty() && computed_hash != fs.frame_hash)
                   add("LV_READ_FRAME_HASH", "frame hash mismatch: " + fs.id);
@@ -2268,6 +2437,10 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
           if (!fmr.next_object_member("frames-json")) break;
         }
         fmr.end_object("frames-json");
+        if (fmr.has_error()) {
+          append_bounded_json_diagnostic(fmr, add, "frames.json");
+          return result;
+        }
       }
       if (!frames_schema_ok) add("LV_READ_FRAMES_SCHEMA", "frames.json missing or invalid schema");
       if (pkg.frames.size() != 48)
@@ -2280,7 +2453,12 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
       if (!check_embedded_schema("animations-2d.json", anim_bytes)) return result;
       gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_tokens = limits.max_json_tokens; cfg.max_object_members = 2048; cfg.max_array_length = 2048;
       gspl::BoundedJsonReader ar(anim_bytes, cfg);
-      if (ar.begin_object("animations-2d")) {
+      if (!ar.begin_object("animations-2d")) {
+        if (ar.has_error()) {
+          append_bounded_json_diagnostic(ar, add, "animations-2d.json");
+          return result;
+        }
+      } else {
         while (ar.has_more() && !ar.has_error()) {
           auto ak = ar.read_string_result(); if (!ak.ok()) break;
           if (!ar.require(':', "animations-2d")) break;
@@ -2348,6 +2526,10 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
           if (!ar.next_object_member("animations-2d")) break;
         }
         ar.end_object("animations-2d");
+        if (ar.has_error()) {
+          append_bounded_json_diagnostic(ar, add, "animations-2d.json");
+          return result;
+        }
       }
 
       // Parse frame-samples.json
@@ -2356,7 +2538,12 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
         if (!check_embedded_schema("frame-samples.json", fs_bytes)) return result;
         gspl::BoundedJsonConfig cfg2{}; cfg2.max_nesting_depth = limits.max_json_nesting; cfg2.max_object_members = 512; cfg2.max_tokens = limits.max_json_tokens;
         gspl::BoundedJsonReader fsr(fs_bytes, cfg2);
-        if (fsr.begin_object("frame-samples")) {
+        if (!fsr.begin_object("frame-samples")) {
+          if (fsr.has_error()) {
+            append_bounded_json_diagnostic(fsr, add, "frame-samples.json");
+            return result;
+          }
+        } else {
           while (fsr.has_more() && !fsr.has_error()) {
             auto fsk = fsr.read_string_result(); if (!fsk.ok()) break;
             if (!fsr.require(':', "frame-samples")) break;
@@ -2389,6 +2576,10 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
             if (!fsr.next_object_member("frame-samples")) break;
           }
           fsr.end_object("frame-samples");
+          if (fsr.has_error()) {
+            append_bounded_json_diagnostic(fsr, add, "frame-samples.json");
+            return result;
+          }
         }
       }
 
@@ -2398,7 +2589,12 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
         if (!check_embedded_schema("animation-events.json", ev_bytes)) return result;
         gspl::BoundedJsonConfig cfg3{}; cfg3.max_nesting_depth = limits.max_json_nesting; cfg3.max_object_members = 512; cfg3.max_tokens = limits.max_json_tokens;
         gspl::BoundedJsonReader evr(ev_bytes, cfg3);
-        if (evr.begin_object("anim-events")) {
+        if (!evr.begin_object("anim-events")) {
+          if (evr.has_error()) {
+            append_bounded_json_diagnostic(evr, add, "animation-events.json");
+            return result;
+          }
+        } else {
           while (evr.has_more() && !evr.has_error()) {
             auto evk = evr.read_string_result(); if (!evk.ok()) break;
             if (!evr.require(':', "anim-events")) break;
@@ -2431,6 +2627,10 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
             if (!evr.next_object_member("anim-events")) break;
           }
           evr.end_object("anim-events");
+          if (evr.has_error()) {
+            append_bounded_json_diagnostic(evr, add, "animation-events.json");
+            return result;
+          }
         }
       }
     }
@@ -2441,7 +2641,12 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
       if (!check_embedded_schema("channels.json", ch_bytes)) return result;
       gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_tokens = limits.max_json_tokens; cfg.max_object_members = 512; cfg.max_array_length = 512;
       gspl::BoundedJsonReader chr(ch_bytes, cfg);
-      if (chr.begin_object("channels")) {
+      if (!chr.begin_object("channels")) {
+        if (chr.has_error()) {
+          append_bounded_json_diagnostic(chr, add, "channels.json");
+          return result;
+        }
+      } else {
         while (chr.has_more() && !chr.has_error()) {
           auto chk = chr.read_string_result(); if (!chk.ok()) break;
           if (!chr.require(':', "channels")) break;
@@ -2450,19 +2655,37 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
             while (chr.has_more() && !chr.has_error()) {
               if (!chr.begin_object("chMap")) break;
               ChannelMap cm;
+              std::optional<std::uint32_t> declared_width, declared_height;
+              std::optional<ColorSpace> declared_cs;
+              std::optional<AlphaMode> declared_am;
               while (chr.has_more() && !chr.has_error()) {
                 auto mk = chr.read_string_result(); if (!mk.ok()) break;
                 if (!chr.require(':', "chMap")) break;
                 if (*mk.value == "id") cm.id = lv_rd_str(chr, "cm.id");
                 else if (*mk.value == "target_frame_id") cm.target_frame_id = lv_rd_str(chr, "cm.tid");
                 else if (*mk.value == "kind") cm.kind = static_cast<ChannelMapKind>(lv_rd_u32(chr, "cm.kind"));
-                else if (*mk.value == "width") { /* skip, loaded from PNG */ chr.skip_value(); }
-                else if (*mk.value == "height") { chr.skip_value(); }
+                else if (*mk.value == "width") { declared_width = lv_rd_u32(chr, "cm.width"); }
+                else if (*mk.value == "height") { declared_height = lv_rd_u32(chr, "cm.height"); }
+                else if (*mk.value == "color_space") {
+                  auto cs_str = lv_rd_str(chr, "cm.color_space");
+                  if (declared_cs.has_value()) add("LV_READ_DUP_CS", "duplicate color_space in channel: " + cm.id);
+                  declared_cs = color_space_from_string(cs_str);
+                  if (!declared_cs.has_value()) add("LV_READ_INVALID_CS", "invalid channel color_space: " + cs_str);
+                }
+                else if (*mk.value == "alpha_mode") {
+                  auto am_str = lv_rd_str(chr, "cm.alpha_mode");
+                  if (declared_am.has_value()) add("LV_READ_DUP_AM", "duplicate alpha_mode in channel: " + cm.id);
+                  declared_am = alpha_mode_from_string(am_str);
+                  if (!declared_am.has_value()) add("LV_READ_INVALID_AM", "invalid channel alpha_mode: " + am_str);
+                }
                 else chr.skip_value();
                 chr.record_object_member("chMap");
                 if (!chr.next_object_member("chMap")) break;
               }
               chr.end_object("chMap");
+              // Require semantic metadata
+              if (!declared_cs.has_value()) add("LV_READ_MISSING_CS", "channel missing color_space: " + cm.id);
+              if (!declared_am.has_value()) add("LV_READ_MISSING_AM", "channel missing alpha_mode: " + cm.id);
               // Load channel PNG through inventory
               {
                 auto ch_png_path = std::string("channels/") + encode_pc(cm.id) + ".png";
@@ -2475,6 +2698,13 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
                 cm.image = decode_png(std::span<const std::byte>(
                     reinterpret_cast<const std::byte*>(ch_png.data()), ch_png.size()), ch_lim);
               }
+              // Apply declared semantics over decoder defaults
+              if (declared_width.has_value() && cm.image.width != *declared_width)
+                add("LV_READ_CH_DIM", "channel width mismatch: " + cm.id + " png=" + std::to_string(cm.image.width) + " declared=" + std::to_string(*declared_width));
+              if (declared_height.has_value() && cm.image.height != *declared_height)
+                add("LV_READ_CH_DIM", "channel height mismatch: " + cm.id + " png=" + std::to_string(cm.image.height) + " declared=" + std::to_string(*declared_height));
+              if (declared_cs.has_value()) cm.image.color_space = *declared_cs;
+              if (declared_am.has_value()) cm.image.alpha_mode = *declared_am;
               if (!cm.id.empty()) {
                 if (pkg.channels.size() >= limits.max_channels)
                   add("LV_READ_CHANNEL_LIMIT", "channel count exceeds configured limit " + std::to_string(limits.max_channels));
@@ -2490,6 +2720,10 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
           if (!chr.next_object_member("channels")) break;
         }
         chr.end_object("channels");
+        if (chr.has_error()) {
+          append_bounded_json_diagnostic(chr, add, "channels.json");
+          return result;
+        }
       }
     }
 
@@ -2499,7 +2733,12 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
       if (!check_embedded_schema("collisions-2d.json", col_bytes)) return result;
       gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_tokens = limits.max_json_tokens; cfg.max_object_members = 512; cfg.max_array_length = 512;
       gspl::BoundedJsonReader cr(col_bytes, cfg);
-      if (cr.begin_object("collisions")) {
+      if (!cr.begin_object("collisions")) {
+        if (cr.has_error()) {
+          append_bounded_json_diagnostic(cr, add, "collisions-2d.json");
+          return result;
+        }
+      } else {
         while (cr.has_more() && !cr.has_error()) {
           auto ck = cr.read_string_result(); if (!ck.ok()) break;
           if (!cr.require(':', "collisions")) break;
@@ -2556,84 +2795,101 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
           if (!cr.next_object_member("collisions")) break;
         }
         cr.end_object("collisions");
+        if (cr.has_error()) {
+          append_bounded_json_diagnostic(cr, add, "collisions-2d.json");
+          return result;
+        }
       }
     }
 
     // ── Reconstruct morphologies ──
-    auto lv_parse_morph_json = [&](std::string_view bytes) -> EffectiveMorphology {
+    auto lv_parse_morph_json = [&](std::string_view bytes, auto add_diag) -> std::optional<EffectiveMorphology> {
       EffectiveMorphology m;
       if (bytes.empty()) return m;
       gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_tokens = limits.max_json_tokens; cfg.max_object_members = 512; cfg.max_array_length = 512;
       gspl::BoundedJsonReader mr(bytes, cfg);
-      if (mr.begin_object("morph")) {
-        while (mr.has_more() && !mr.has_error()) {
-          auto mk = mr.read_string_result(); if (!mk.ok()) break;
-          if (!mr.require(':', "morph")) break;
-          if (*mk.value == "parts") {
-            if (!mr.begin_object("morph.parts")) break;
-            while (mr.has_more() && !mr.has_error()) {
-              auto pid = mr.read_string_result(); if (!pid.ok()) break;
-              if (!mr.require(':', "morph.parts")) break;
-              if (!mr.begin_object("morphPart3")) break;
-              MorphologyPart mp;
-              while (mr.has_more() && !mr.has_error()) {
-                auto pk = mr.read_string_result(); if (!pk.ok()) break;
-                if (!mr.require(':', "morphPart3")) break;
-                if (*pk.value == "bone_id") mp.bone_id = lv_rd_str(mr, "mp3.bone_id");
-                else if (*pk.value == "color") mp.color = lv_rd_str(mr, "mp3.color");
-                else if (*pk.value == "parent") mp.parent = lv_rd_str(mr, "mp3.parent");
-                else if (*pk.value == "primitive") mp.primitive = lv_rd_str(mr, "mp3.primitive");
-                else if (*pk.value == "semantic_role") mp.semantic_role = lv_rd_str(mr, "mp3.semantic_role");
-                else if (*pk.value == "x") mp.x = lv_rd_dbl(mr, "mp3.x");
-                else if (*pk.value == "y") mp.y = lv_rd_dbl(mr, "mp3.y");
-                else if (*pk.value == "z") mp.z = lv_rd_dbl(mr, "mp3.z");
-                else if (*pk.value == "size_x") mp.size_x = lv_rd_dbl(mr, "mp3.size_x");
-                else if (*pk.value == "size_y") mp.size_y = lv_rd_dbl(mr, "mp3.size_y");
-                else if (*pk.value == "size_z") mp.size_z = lv_rd_dbl(mr, "mp3.size_z");
-                else if (*pk.value == "rotation_degrees") mp.rotation_degrees = lv_rd_dbl(mr, "mp3.rot");
-                else if (*pk.value == "z_order") mp.z_order = lv_rd_i32(mr, "mp3.z_order");
-                else if (*pk.value == "emissive") mp.emissive = lv_rd_bool(mr, "mp3.emissive");
-                else if (*pk.value == "electrical_marking") mp.electrical_marking = lv_rd_bool(mr, "mp3.elec");
-                else mr.skip_value();
-                mr.record_object_member("morphPart3");
-                if (!mr.next_object_member("morphPart3")) break;
-              }
-              mr.end_object("morphPart3");
-              if (pid.ok() && !pid.value->empty()) {
-                if (m.size() >= limits.max_morphology_parts) {
-                  add("LV_READ_MORPH_PARTS_LIMIT", "morphology part count exceeds configured limit " + std::to_string(limits.max_morphology_parts));
-                  break;
-                }
-                m[std::move(*pid.value)] = mp;
-              }
-              mr.record_object_member("morph.parts");
-              if (!mr.next_object_member("morph.parts")) break;
-            }
-            mr.end_object("morph.parts");
-          } else mr.skip_value();
-          mr.record_object_member("morph");
-          if (!mr.next_object_member("morph")) break;
-        }
-        mr.end_object("morph");
+      if (!mr.begin_object("morph")) {
+        if (mr.has_error()) { append_bounded_json_diagnostic(mr, add_diag, "morphology"); }
+        return std::nullopt;
       }
+      if (mr.has_error()) { append_bounded_json_diagnostic(mr, add_diag, "morphology"); return std::nullopt; }
+      while (mr.has_more() && !mr.has_error()) {
+        auto mk = mr.read_string_result(); if (!mk.ok()) break;
+        if (!mr.require(':', "morph")) break;
+        if (*mk.value == "parts") {
+          if (!mr.begin_object("morph.parts")) break;
+          while (mr.has_more() && !mr.has_error()) {
+            auto pid = mr.read_string_result(); if (!pid.ok()) break;
+            if (!mr.require(':', "morph.parts")) break;
+            if (!mr.begin_object("morphPart3")) break;
+            MorphologyPart mp;
+            while (mr.has_more() && !mr.has_error()) {
+              auto pk = mr.read_string_result(); if (!pk.ok()) break;
+              if (!mr.require(':', "morphPart3")) break;
+              if (*pk.value == "bone_id") mp.bone_id = lv_rd_str(mr, "mp3.bone_id");
+              else if (*pk.value == "color") mp.color = lv_rd_str(mr, "mp3.color");
+              else if (*pk.value == "parent") mp.parent = lv_rd_str(mr, "mp3.parent");
+              else if (*pk.value == "primitive") mp.primitive = lv_rd_str(mr, "mp3.primitive");
+              else if (*pk.value == "semantic_role") mp.semantic_role = lv_rd_str(mr, "mp3.semantic_role");
+              else if (*pk.value == "x") mp.x = lv_rd_dbl(mr, "mp3.x");
+              else if (*pk.value == "y") mp.y = lv_rd_dbl(mr, "mp3.y");
+              else if (*pk.value == "z") mp.z = lv_rd_dbl(mr, "mp3.z");
+              else if (*pk.value == "size_x") mp.size_x = lv_rd_dbl(mr, "mp3.size_x");
+              else if (*pk.value == "size_y") mp.size_y = lv_rd_dbl(mr, "mp3.size_y");
+              else if (*pk.value == "size_z") mp.size_z = lv_rd_dbl(mr, "mp3.size_z");
+              else if (*pk.value == "rotation_degrees") mp.rotation_degrees = lv_rd_dbl(mr, "mp3.rot");
+              else if (*pk.value == "z_order") mp.z_order = lv_rd_i32(mr, "mp3.z_order");
+              else if (*pk.value == "emissive") mp.emissive = lv_rd_bool(mr, "mp3.emissive");
+              else if (*pk.value == "electrical_marking") mp.electrical_marking = lv_rd_bool(mr, "mp3.elec");
+              else mr.skip_value();
+              mr.record_object_member("morphPart3");
+              if (!mr.next_object_member("morphPart3")) break;
+            }
+            mr.end_object("morphPart3");
+            if (pid.ok() && !pid.value->empty()) {
+              if (m.size() >= limits.max_morphology_parts) {
+                add_diag("LV_READ_MORPH_PARTS_LIMIT", "morphology part count exceeds configured limit " + std::to_string(limits.max_morphology_parts));
+                break;
+              }
+              m[std::move(*pid.value)] = mp;
+            }
+            mr.record_object_member("morph.parts");
+            if (!mr.next_object_member("morph.parts")) break;
+          }
+          mr.end_object("morph.parts");
+        } else mr.skip_value();
+        mr.record_object_member("morph");
+        if (!mr.next_object_member("morph")) break;
+      }
+      mr.end_object("morph");
+      if (mr.has_error()) { append_bounded_json_diagnostic(mr, add_diag, "morphology"); return std::nullopt; }
       return m;
     };
     {
       auto base_bytes = inv_read("resolved-base-morphology.json", limits.max_artifact_bytes);
       if (!check_embedded_schema("resolved-base-morphology.json", base_bytes)) return result;
-      pkg.base_morphology = lv_parse_morph_json(base_bytes);
+      auto base_morph_parse = lv_parse_morph_json(base_bytes, add);
+      if (!base_morph_parse.has_value()) return result;
+      pkg.base_morphology = std::move(*base_morph_parse);
     }
     {
       auto storm_bytes = inv_read("resolved-storm-morphology.json", limits.max_artifact_bytes);
       if (!check_embedded_schema("resolved-storm-morphology.json", storm_bytes)) return result;
-      pkg.storm_morphology = lv_parse_morph_json(storm_bytes);
+      auto storm_morph_parse = lv_parse_morph_json(storm_bytes, add);
+      if (!storm_morph_parse.has_value()) return result;
+      pkg.storm_morphology = std::move(*storm_morph_parse);
     }
     {
       auto tm_bytes = inv_read("transformation-morphologies.json", limits.max_artifact_bytes);
       if (!check_embedded_schema("transformation-morphologies.json", tm_bytes)) return result;
       gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_tokens = limits.max_json_tokens; cfg.max_object_members = 2048;
       gspl::BoundedJsonReader tmr(tm_bytes, cfg);
-      if (tmr.begin_object("trans-morphs")) {
+      if (!tmr.begin_object("trans-morphs")) {
+        if (tmr.has_error()) {
+          append_bounded_json_diagnostic(tmr, add, "transformation-morphologies.json");
+          return result;
+        }
+      } else {
         while (tmr.has_more() && !tmr.has_error()) {
           auto tmk = tmr.read_string_result(); if (!tmk.ok()) break;
           if (!tmr.require(':', "trans-morphs")) break;
@@ -2642,9 +2898,15 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
             while (tmr.has_more() && !tmr.has_error()) {
               auto raw = tmr.read_typed_value();
               // Parse as inline morphology object
-              gspl::BoundedJsonReader imr(raw, {});
+              gspl::BoundedJsonConfig icfg{}; icfg.max_nesting_depth = limits.max_json_nesting; icfg.max_tokens = limits.max_json_tokens; icfg.max_object_members = 512; icfg.max_array_length = 512;
+              gspl::BoundedJsonReader imr(raw, icfg);
               EffectiveMorphology em;
-              if (imr.begin_object("transMorph")) {
+              if (!imr.begin_object("transMorph")) {
+                if (imr.has_error()) {
+                  append_bounded_json_diagnostic(imr, add, "transformation-morphologies.json inline");
+                  return result;
+                }
+              } else {
                 while (imr.has_more() && !imr.has_error()) {
                   auto pid = imr.read_string_result(); if (!pid.ok()) break;
                   if (!imr.require(':', "transMorph")) break;
@@ -2678,6 +2940,10 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
                   if (!imr.next_object_member("transMorph")) break;
                 }
                 imr.end_object("transMorph");
+                if (imr.has_error()) {
+                  append_bounded_json_diagnostic(imr, add, "transformation-morphologies.json inline");
+                  return result;
+                }
               }
               pkg.transformation_morphologies.push_back(std::move(em));
               tmr.record_array_element("tm.morphologies");
@@ -2689,6 +2955,10 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
           if (!tmr.next_object_member("trans-morphs")) break;
         }
         tmr.end_object("trans-morphs");
+        if (tmr.has_error()) {
+          append_bounded_json_diagnostic(tmr, add, "transformation-morphologies.json");
+          return result;
+        }
       }
     }
 
@@ -2709,22 +2979,53 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
       // Extract data field from wrapper
       gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_tokens = limits.max_json_tokens; cfg.max_object_members = 512;
       gspl::BoundedJsonReader ajr(aj_bytes, cfg);
-      if (ajr.begin_object("atlas-wrapper")) {
+      std::optional<ColorSpace> atlas_cs;
+      std::optional<AlphaMode> atlas_am;
+      if (!ajr.begin_object("atlas-wrapper")) {
+        if (ajr.has_error()) {
+          append_bounded_json_diagnostic(ajr, add, "sheet/atlas.json wrapper");
+          return result;
+        }
+      } else {
         while (ajr.has_more() && !ajr.has_error()) {
           auto ak = ajr.read_string_result(); if (!ak.ok()) break;
           if (!ajr.require(':', "atlas-wrapper")) break;
           if (*ak.value == "data") pkg.sheet.metadata = ajr.read_typed_value();
+          else if (*ak.value == "color_space") {
+            auto cs_str = lv_rd_str(ajr, "atlas.color_space");
+            if (atlas_cs.has_value()) add("LV_READ_DUP_CS", "duplicate color_space in atlas wrapper");
+            atlas_cs = color_space_from_string(cs_str);
+            if (!atlas_cs.has_value()) add("LV_READ_INVALID_CS", "invalid atlas color_space: " + cs_str);
+          }
+          else if (*ak.value == "alpha_mode") {
+            auto am_str = lv_rd_str(ajr, "atlas.alpha_mode");
+            if (atlas_am.has_value()) add("LV_READ_DUP_AM", "duplicate alpha_mode in atlas wrapper");
+            atlas_am = alpha_mode_from_string(am_str);
+            if (!atlas_am.has_value()) add("LV_READ_INVALID_AM", "invalid atlas alpha_mode: " + am_str);
+          }
           else ajr.skip_value();
           ajr.record_object_member("atlas-wrapper");
           if (!ajr.next_object_member("atlas-wrapper")) break;
         }
         ajr.end_object("atlas-wrapper");
+        if (ajr.has_error()) {
+          append_bounded_json_diagnostic(ajr, add, "sheet/atlas.json wrapper");
+          return result;
+        }
       }
+      // Apply declared semantics to the decoded atlas image
+      if (atlas_cs.has_value()) pkg.sheet.atlas.image.color_space = *atlas_cs;
+      if (atlas_am.has_value()) pkg.sheet.atlas.image.alpha_mode = *atlas_am;
       // Reconstruct typed atlas placements from the canonical metadata
       if (!pkg.sheet.metadata.empty()) {
         gspl::BoundedJsonConfig mcfg{}; mcfg.max_nesting_depth = limits.max_json_nesting; mcfg.max_tokens = limits.max_json_tokens; mcfg.max_object_members = 512; mcfg.max_array_length = 512;
         gspl::BoundedJsonReader amr(pkg.sheet.metadata, mcfg);
-        if (amr.begin_object("atlas-meta")) {
+        if (!amr.begin_object("atlas-meta")) {
+          if (amr.has_error()) {
+            append_bounded_json_diagnostic(amr, add, "sheet/atlas.json metadata");
+            return result;
+          }
+        } else {
           std::uint32_t meta_w = 0, meta_h = 0;
           while (amr.has_more() && !amr.has_error()) {
             auto mk = amr.read_string_result(); if (!mk.ok()) break;
@@ -2762,6 +3063,10 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
             if (!amr.next_object_member("atlas-meta")) break;
           }
           amr.end_object("atlas-meta");
+          if (amr.has_error()) {
+            append_bounded_json_diagnostic(amr, add, "sheet/atlas.json metadata");
+            return result;
+          }
           if (meta_w != 0 && meta_h != 0 &&
               (meta_w != pkg.sheet.atlas.image.width || meta_h != pkg.sheet.atlas.image.height))
             add("LV_READ_ATLAS_DIMS", "atlas metadata dimensions mismatch decoded image");
@@ -2775,7 +3080,12 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
       if (!check_embedded_schema("frame-hashes.json", fh_bytes)) return result;
       gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_tokens = limits.max_json_tokens; cfg.max_object_members = 2048; cfg.max_array_length = 4096;
       gspl::BoundedJsonReader fhr(fh_bytes, cfg);
-      if (fhr.begin_object("frame-hashes")) {
+      if (!fhr.begin_object("frame-hashes")) {
+        if (fhr.has_error()) {
+          append_bounded_json_diagnostic(fhr, add, "frame-hashes.json");
+          return result;
+        }
+      } else {
         std::map<std::string, std::string> fh_map;
         while (fhr.has_more() && !fhr.has_error()) {
           auto fhk = fhr.read_string_result(); if (!fhk.ok()) break;
@@ -2808,6 +3118,10 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
           if (!fhr.next_object_member("frame-hashes")) break;
         }
         fhr.end_object("frame-hashes");
+        if (fhr.has_error()) {
+          append_bounded_json_diagnostic(fhr, add, "frame-hashes.json");
+          return result;
+        }
         // Cross-check frame hashes against samples
         for (auto const& s : pkg.samples) {
           auto it = fh_map.find(s.frame_id);
@@ -2822,7 +3136,12 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
       if (!check_embedded_schema("pose-hashes.json", ph_bytes)) return result;
       gspl::BoundedJsonConfig cfg{}; cfg.max_nesting_depth = limits.max_json_nesting; cfg.max_tokens = limits.max_json_tokens; cfg.max_object_members = 512; cfg.max_array_length = 512;
       gspl::BoundedJsonReader phr(ph_bytes, cfg);
-      if (phr.begin_object("pose-hashes")) {
+      if (!phr.begin_object("pose-hashes")) {
+        if (phr.has_error()) {
+          append_bounded_json_diagnostic(phr, add, "pose-hashes.json");
+          return result;
+        }
+      } else {
         // Key: "clip_id|frame_index" → pose_hash
         std::map<std::string, std::string> ph_map;
         while (phr.has_more() && !phr.has_error()) {
@@ -2859,6 +3178,10 @@ LivingVisualPackageReadResult read_living_visual_package(const std::filesystem::
           if (!phr.next_object_member("pose-hashes")) break;
         }
         phr.end_object("pose-hashes");
+        if (phr.has_error()) {
+          append_bounded_json_diagnostic(phr, add, "pose-hashes.json");
+          return result;
+        }
         // Cross-check pose hashes against samples
         for (auto const& s : pkg.samples) {
           auto key = s.clip_id + "|" + std::to_string(s.frame_index);
@@ -3498,12 +3821,8 @@ LivingVisualPackageVerificationResult verify_living_visual_package(const std::fi
 
     // Transformation morphology sequence identity
     if (!pkg.transformation_morphologies.empty()) {
-      std::string trans_preimage;
-      for (std::size_t i = 0; i < pkg.transformation_morphologies.size(); ++i) {
-        trans_preimage += std::to_string(i) + "\n";
-        trans_preimage += canonicalize_morphology_preimage(pkg.transformation_morphologies[i]);
-      }
-      auto computed = compute_domain_id_impl(kDomainMorphologySet, trans_preimage);
+      auto computed = compute_domain_id_impl(kDomainMorphologySet,
+          canonicalize_transformation_preimage(pkg.transformation_morphologies));
       auto stored = prov("transformation-morphologies.json");
       if (!stored.empty() && computed != stored)
         add("LV_PROV_TRANSFORMATION_MORPHOLOGIES", "transformation morphologies provenance mismatch");
@@ -3726,7 +4045,13 @@ LivingPackageManifestParseResult parse_living_package_manifest(std::string_view 
     std::set<std::string> seen_fields;
 
     if (!r.begin_object("manifest-parse"))
-      { add("LV_PARSE_NOT_OBJECT", "manifest is not a JSON object"); return result; }
+      {
+        if (r.has_error()) {
+          append_bounded_json_diagnostic(r, add, "manifest.json");
+          return result;
+        }
+        { add("LV_PARSE_NOT_OBJECT", "manifest is not a JSON object"); return result; }
+      }
 
     while (r.has_more() && !r.has_error()) {
       auto key = r.read_string_result();
@@ -3801,10 +4126,11 @@ LivingPackageManifestParseResult parse_living_package_manifest(std::string_view 
       r.record_object_member("manifest-parse");
       if (!r.next_object_member("manifest-parse")) break;
     }
+    if (r.has_error()) {
+      append_bounded_json_diagnostic(r, add, "manifest.json");
+      return result;
+    }
     r.end_object("manifest-parse");
-
-    if (r.has_error())
-      { add("LV_PARSE_ERROR", "manifest JSON parse error"); return result; }
 
     // Require all top-level fields exactly once
     for (auto const& req : {"format","identityVersion","packageIdentity","entityId","canonicalEntityIdentity","seedIdentity","frameCount","clipCount","sampleCount","eventCount","channelCount","collisionShapeCount","collisionWindowCount","transformationMorphologyCount","artifactCount","artifacts"}) {

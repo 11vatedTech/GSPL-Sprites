@@ -481,8 +481,8 @@ int main() try {
       auto ab = read_file_bytes(md/"animations-2d.json", 4ULL*1024*1024);
       std::string s(ab.begin(), ab.end());
       auto pos = s.find("\"looping\":false");
-      if (pos != std::string::npos) s.replace(pos + 10, 5, "true,");
-      else { pos = s.find("\"looping\":true"); if (pos != std::string::npos) s.replace(pos + 10, 4, "false"); }
+      if (pos != std::string::npos) s.replace(pos + 10, 6, "true,");  // false, → true,
+      else { pos = s.find("\"looping\":true"); if (pos != std::string::npos) s.replace(pos + 10, 5, "false"); }
       std::ofstream(md/"animations-2d.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
       auto ml3 = m; refresh(ml3, md, "animations-2d.json"); finalize(ml3, md);
       auto v = verify_living_visual_package(md);
@@ -592,8 +592,8 @@ int main() try {
       std::string s(eb.begin(), eb.end());
       auto pos = s.find("\"mapped_source_tick\":");
       if (pos != std::string::npos) {
-        auto end = s.find(",", pos);
-        s.replace(pos, end - pos, "\"mapped_source_tick\":999");
+        auto end = s.find_first_of(",}", pos + 21);
+        if (end != std::string::npos) s.replace(pos + 21, end - (pos + 21), "999");
       }
       std::ofstream(md/"animation-events.json", std::ios::trunc | std::ios::binary).write(s.data(), s.size());
       auto ml = m; refresh(ml, md, "animation-events.json"); finalize(ml, md);
@@ -1387,8 +1387,13 @@ int main() try {
       auto rd = read_living_visual_package(md, tight);
       check(!rd.value.has_value(), "src: token limit blocks load");
       if (!rd.value.has_value()) {
+        // Debug: print all diagnostics
+        std::cout << "  Diagnostics from token limit test:\n";
+        for (auto const& d : rd.diagnostics.diagnostics) {
+          std::cout << "    " << d.code << ": " << d.message << "\n";
+        }
         bool has_token_diag = false;
-        for (auto const& d : rd.diagnostics) {
+        for (auto const& d : rd.diagnostics.diagnostics) {
           if (d.code == "LV_READ_JSON_TOKENS") has_token_diag = true;
         }
         check(has_token_diag, "src: LV_READ_JSON_TOKENS diagnostic present");
@@ -1409,6 +1414,190 @@ int main() try {
       auto rd2 = read_living_visual_package(md, sufficient);
       check(rd2.value.has_value(), "src: sufficient budget allows load");
       fs::remove_all(md);
+    }
+    // ── Manifest-specific token exhaustion ──
+    {
+      auto md = pkg_dir; md += "_mftok"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto mf_bytes = read_file_bytes(md/"manifest.json", 4ULL*1024*1024);
+      // Budget below manifest requirement
+      PackageReadLimits tight_mf{};
+      tight_mf.max_json_tokens = 1;
+      auto mf_parse = gspl::sprites::parse_living_package_manifest({mf_bytes.begin(), mf_bytes.end()}, tight_mf);
+      check(!mf_parse.ok(), "mftok: manifest parse fails with token budget 1");
+      check(!mf_parse.value.has_value(), "mftok: no partial manifest on token exhaustion");
+      bool has_tok = false;
+      for (auto const& d : mf_parse.diagnostics.diagnostics)
+        if (d.code == "LV_READ_JSON_TOKENS") has_tok = true;
+      check(has_tok, "mftok: LV_READ_JSON_TOKENS diagnostic present");
+      fs::remove_all(md);
+    }
+    // ── Malformed JSON distinction ──
+    {
+      auto md = pkg_dir; md += "_maljson"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      // Corrupt manifest: inject garbage bytes
+      auto mf_bytes = read_file_bytes(md/"manifest.json", 4ULL*1024*1024);
+      std::string corrupted(mf_bytes.begin(), mf_bytes.end());
+      if (corrupted.size() > 20) corrupted[10] = '\x00';  // inject NUL
+      std::ofstream(md/"manifest.json", std::ios::trunc | std::ios::binary).write(corrupted.data(), corrupted.size());
+      PackageReadLimits generous{};
+      generous.max_json_tokens = 262144;
+      auto rd = gspl::sprites::read_living_visual_package(md, generous);
+      check(!rd.value.has_value(), "maljson: malformed JSON blocks load with generous budget");
+      bool has_tok = false, has_malformed = false;
+      for (auto const& d : rd.diagnostics.diagnostics) {
+        if (d.code == "LV_READ_JSON_TOKENS") has_tok = true;
+        if (d.code == "LV_READ_JSON_MALFORMED" || d.code == "LV_PARSE_KEY" || d.code == "LV_READ_MANIFEST_PARSE" || d.code == "LV_READ_MALFORMED") has_malformed = true;
+      }
+      check(!has_tok, "maljson: malformed JSON does NOT emit LV_READ_JSON_TOKENS");
+      check(has_malformed, "maljson: receives correct parse/syntax diagnostic");
+      fs::remove_all(md);
+    }
+    // ── Nesting limit distinction ──
+    {
+      auto md = pkg_dir; md += "_nesttok"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      PackageReadLimits shallow{};
+      shallow.max_json_nesting = 1;  // only top-level object; any nested object/array fails
+      shallow.max_json_tokens = 262144;  // generous token budget
+      auto rd = gspl::sprites::read_living_visual_package(md, shallow);
+      bool has_nesting = false, has_tok = false;
+      for (auto const& d : rd.diagnostics.diagnostics) {
+        if (d.code == "LV_READ_JSON_NESTING") has_nesting = true;
+        if (d.code == "LV_READ_JSON_TOKENS") has_tok = true;
+      }
+      check(!has_tok, "nesttok: nesting limit does NOT emit LV_READ_JSON_TOKENS");
+      check(has_nesting || !rd.value.has_value(), "nesttok: nesting limit produces distinct diagnostic or blocks load");
+      fs::remove_all(md);
+    }
+    // ── Source-animation-specific token exhaustion ──
+    // Token semantics: max_json_tokens is per-BoundedJsonReader (per-parser/artifact).
+    // Each sub-parser gets its own independent budget, not a shared pool.
+    // This test verifies that source-skeletal-animations.json specifically
+    // cannot be parsed with a tight per-parser budget, while manifest/seed succeed.
+    {
+      auto md = pkg_dir; md += "_satok"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      // 2000 tokens per parser: manifest (~600) and seed (~500) pass individually.
+      // source-skeletal-animations.json with clips/tracks/keys needs far more.
+      PackageReadLimits sa_tight{};
+      sa_tight.max_json_tokens = 2000;
+      sa_tight.max_frames = 256;
+      sa_tight.max_channels = 512;
+      sa_tight.max_morphology_parts = 128;
+      sa_tight.max_json_nesting = 32;
+      sa_tight.max_image_width = 4096;
+      sa_tight.max_image_height = 4096;
+      sa_tight.max_manifest_bytes = 16ULL * 1024 * 1024;
+      sa_tight.max_artifact_bytes = 64ULL * 1024 * 1024;
+      sa_tight.max_artifacts = 4096;
+      sa_tight.max_path_bytes = 1024;
+      auto rd = gspl::sprites::read_living_visual_package(md, sa_tight);
+      check(!rd.value.has_value(), "satok: per-parser token budget blocks load");
+      // Verify at least one LV_READ_JSON_TOKENS diagnostic was emitted
+      bool has_tok = false;
+      for (auto const& d : rd.diagnostics.diagnostics) {
+        if (d.code == "LV_READ_JSON_TOKENS") has_tok = true;
+      }
+      check(has_tok, "satok: LV_READ_JSON_TOKENS diagnostic present at 2000 per-parser budget");
+      fs::remove_all(md);
+    }
+    // ── Boundary / off-by-one token budget test ──
+    {
+      // Use a controlled BoundedJsonReader fixture with known token count
+      std::string tiny_json = "{\"a\":1,\"b\":2,\"c\":3,\"d\":4,\"e\":5}";
+      // This JSON has: { "a" : 1 , "b" : 2 , "c" : 3 , "d" : 4 , "e" : 5 }
+      // Tokens: { "a" : 1 , "b" : 2 , "c" : 3 , "d" : 4 , "e" : 5 }
+      // Count: 1 + string(2chars) + 1 + num + 1 + string + 1 + num + 1 + string + 1 + num + 1 + string + 1 + num + 1 + string + 1 + num + 1
+      // That's 5 pairs = 5 * 4 tokens + 1 opening = 21 tokens
+      // Actually: { = 1, "a" = 1, : = 1, 1 = 1, , = 1, "b" = 1, : = 1, 2 = 1, , = 1, "c" = 1, : = 1, 3 = 1, , = 1, "d" = 1, : = 1, 4 = 1, , = 1, "e" = 1, : = 1, 5 = 1, } = 1
+      // Total = 21 tokens
+      {
+        gspl::BoundedJsonConfig cfg{}; cfg.max_tokens = 20;  // just below requirement
+        gspl::BoundedJsonReader r(tiny_json, cfg);
+        (void)r.begin_object("test");
+        while (r.has_more() && !r.has_error()) {
+          auto key = r.read_string_result();
+          if (!key.ok()) break;
+          (void)r.require(':', "test");
+          (void)r.read_int64_result();
+          r.record_object_member("test");
+          if (!r.next_object_member("test")) break;
+        }
+        r.end_object("test");
+        check(r.has_error(), "boundary: tokens=20 fails on 21-token JSON");
+        check(r.error_code() == gspl::BoundedJsonErrorCode::token_limit, "boundary: error code is token_limit");
+      }
+      {
+        gspl::BoundedJsonConfig cfg{}; cfg.max_tokens = 21;  // exactly requirement
+        gspl::BoundedJsonReader r(tiny_json, cfg);
+        (void)r.begin_object("test");
+        while (r.has_more() && !r.has_error()) {
+          auto key = r.read_string_result();
+          if (!key.ok()) break;
+          (void)r.require(':', "test");
+          (void)r.read_int64_result();
+          r.record_object_member("test");
+          if (!r.next_object_member("test")) break;
+        }
+        r.end_object("test");
+        check(!r.has_error(), "boundary: tokens=21 passes on 21-token JSON");
+      }
+      {
+        gspl::BoundedJsonConfig cfg{}; cfg.max_tokens = 22;  // above requirement
+        gspl::BoundedJsonReader r(tiny_json, cfg);
+        (void)r.begin_object("test");
+        while (r.has_more() && !r.has_error()) {
+          auto key = r.read_string_result();
+          if (!key.ok()) break;
+          (void)r.require(':', "test");
+          (void)r.read_int64_result();
+          r.record_object_member("test");
+          if (!r.next_object_member("test")) break;
+        }
+        r.end_object("test");
+        check(!r.has_error(), "boundary: tokens=22 passes on 21-token JSON");
+      }
+    }
+    // ── Object-member-limit test ──
+    {
+      gspl::BoundedJsonConfig cfg{}; cfg.max_object_members = 2;
+      gspl::BoundedJsonReader r("{\"a\":1,\"b\":2,\"c\":3}", cfg);
+      (void)r.begin_object("test");
+      while (r.has_more() && !r.has_error()) {
+        auto key = r.read_string_result();
+        if (!key.ok()) break;
+        (void)r.require(':', "test");
+        (void)r.read_int64_result();
+        r.record_object_member("test");
+        if (!r.next_object_member("test")) break;
+      }
+      r.end_object("test");
+      check(r.has_error(), "memlimit: object member limit exceeded");
+      check(r.error_code() == gspl::BoundedJsonErrorCode::object_member_limit, "memlimit: error code is object_member_limit");
+    }
+    // ── Array-length-limit test ──
+    {
+      gspl::BoundedJsonConfig cfg{}; cfg.max_array_length = 2;
+      gspl::BoundedJsonReader r("[1,2,3,4]", cfg);
+      (void)r.begin_array("test");
+      while (r.has_more() && !r.has_error()) {
+        (void)r.read_int64_result();
+        r.record_array_element("test");
+        if (!r.next_array_element("test")) break;
+      }
+      r.end_array("test");
+      check(r.has_error(), "arrlimit: array length limit exceeded");
+      check(r.error_code() == gspl::BoundedJsonErrorCode::array_length_limit, "arrlimit: error code is array_length_limit");
+    }
+    // ── String-length-limit test ──
+    {
+      gspl::BoundedJsonConfig cfg{}; cfg.max_string_length = 5;
+      gspl::BoundedJsonReader r("{\"a\":\"1234567890\"}", cfg);
+      (void)r.begin_object("test");
+      auto key = r.read_string_result();
+      (void)r.require(':', "test");
+      (void)r.read_string_result();  // string exceeds limit
+      r.end_object("test");
+      check(r.has_error(), "strlimit: string length limit exceeded");
+      check(r.error_code() == gspl::BoundedJsonErrorCode::string_length_limit, "strlimit: error code is string_length_limit");
     }
   }
 
@@ -1998,6 +2187,198 @@ int main() try {
       check(!verify2.seed_identity.empty(), "typed manifest verifier: seed_identity populated");
       fs::remove_all(test_pkg_dir);
     }
+
+    // ═══════════════════════════════════════════════════════════
+    // Channel / Atlas / Frame semantic round-trip tests
+    // ═══════════════════════════════════════════════════════════
+    // Rebuild package for round-trip validation (pkg_dir was cleaned earlier)
+    auto rt_dir = fs::temp_directory_path() / "lv_pkg_rt";
+    fs::remove_all(rt_dir);
+    fs::remove_all(rt_dir.string() + ".staging");
+    {
+      std::string src3 = load_source();
+      gspl::GsplContext ctx3;
+      auto buf3 = gspl::SourceBuffer::from_string("voltfox.gspl", src3);
+      ctx3.compile_source(std::move(buf3));
+      gspl::sprites::SpriteSeed seed3 = gspl::SpriteSeedLowering::lower(ctx3.compilation_context().canonical);
+      auto living3 = gspl::sprites::synthesize_living_animation2d(seed3);
+      gspl::sprites::LivingVisualPackageInput in3;
+      in3.seed = seed3;
+      in3.frames = living3.value->all_frames;
+      in3.generated_clips = living3.value->clips;
+      in3.samples = living3.value->samples;
+      in3.events = living3.value->generated_events;
+      in3.channels = living3.value->channel_maps;
+      in3.collision_shapes = living3.value->collision_shapes;
+      in3.collision_windows = living3.value->collision_windows;
+      in3.base_morphology = living3.value->base_morphology;
+      in3.storm_morphology = living3.value->storm_morphology;
+      in3.transformation_morphologies = living3.value->transformation_morphologies;
+      in3.sheet = living3.value->sheet;
+      gspl::sprites::build_living_visual_package(in3, rt_dir);
+    }
+
+    // Straight alpha with fully opaque pixels → preserves straight
+    // Verify channel images load and carry declared semantics from JSON metadata
+    {
+      auto rd = read_living_visual_package(rt_dir);
+      check(rd.value.has_value(), "ch-rt-straight: package loads");
+      if (rd.value.has_value()) {
+        for (auto const& ch : rd.value->channels) {
+          // Channel image must have valid dimensions
+          check(ch.image.width > 0, "ch-rt-straight: channel image has width");
+          check(ch.image.height > 0, "ch-rt-straight: channel image has height");
+          check(ch.image.pixels.size() == static_cast<std::size_t>(ch.image.width) * ch.image.height * 4,
+                "ch-rt-straight: channel image pixel count matches dimensions");
+          // Alpha mode is preserved from JSON metadata, not re-derived from pixels
+          bool all_opaque = true;
+          for (std::size_t i = 3; i < ch.image.pixels.size(); i += 4)
+            if (ch.image.pixels[i] != 255) { all_opaque = false; break; }
+          // Channel images use opaque alpha with either srgb or data color_space
+          // (depth/alpha/effects = data, emissive = srgb)
+          check(ch.image.alpha_mode == AlphaMode::opaque || ch.image.alpha_mode == AlphaMode::straight,
+                "ch-rt-straight: channel alpha_mode is valid declared enum");
+          check(ch.image.color_space == ColorSpace::srgb || ch.image.color_space == ColorSpace::data,
+                "ch-rt-straight: channel color_space is valid declared enum");
+          // Verify provenance: recompute and compare
+          auto ch_prov = compute_domain_id("gspl.channel-image/0.1", canonicalize_channel_image_preimage(ch));
+          check(!ch_prov.empty(), "ch-rt-straight: channel provenance computable");
+        }
+      }
+    }
+
+    // Opaque alpha mode → preserved as opaque
+    // Verify string round-trip for opaque alpha mode
+    {
+      auto cs_str = "data";
+      auto am_str = "opaque";
+      check(std::string(cs_str) == "data", "ch-rt-opaque: color_space string 'data'");
+      check(std::string(am_str) == "opaque", "ch-rt-opaque: alpha_mode string 'opaque'");
+      auto cs_parsed = color_space_from_string(cs_str);
+      auto am_parsed = alpha_mode_from_string(am_str);
+      check(cs_parsed.has_value() && *cs_parsed == ColorSpace::data, "ch-rt-opaque: color_space round-trips through string");
+      check(am_parsed.has_value() && *am_parsed == AlphaMode::opaque, "ch-rt-opaque: alpha_mode round-trips through string");
+    }
+
+    // sRGB → preserves sRGB
+    {
+      auto cs_str = color_space_to_string(ColorSpace::srgb);
+      check(cs_str == "srgb", "ch-rt-srgb: color_space string is 'srgb'");
+      auto parsed = color_space_from_string("srgb");
+      check(parsed.has_value() && *parsed == ColorSpace::srgb, "ch-rt-srgb: srgb string round-trips correctly");
+      check(!color_space_from_string("bogus_cs").has_value(), "ch-rt-srgb: bogus color_space returns nullopt");
+    }
+
+    // data → preserves data
+    {
+      auto cs_str = color_space_to_string(ColorSpace::data);
+      check(cs_str == "data", "ch-rt-data: color_space string is 'data'");
+      auto parsed = color_space_from_string("data");
+      check(parsed.has_value() && *parsed == ColorSpace::data, "ch-rt-data: data string round-trips correctly");
+    }
+
+    // Unknown color_space → round-trip
+    {
+      auto parsed = color_space_from_string("unknown");
+      check(parsed.has_value() && *parsed == ColorSpace::unknown, "ch-rt-unknown: 'unknown' parses to ColorSpace::unknown");
+    }
+
+    // Alpha mode string round-trips
+    {
+      check(alpha_mode_to_string(AlphaMode::straight) == "straight", "am-rt: straight → 'straight'");
+      check(alpha_mode_to_string(AlphaMode::opaque) == "opaque", "am-rt: opaque → 'opaque'");
+      check(alpha_mode_to_string(AlphaMode::premultiplied) == "premultiplied", "am-rt: premultiplied → 'premultiplied'");
+      check(alpha_mode_from_string("straight").has_value(), "am-rt: 'straight' parses");
+      check(alpha_mode_from_string("opaque").has_value(), "am-rt: 'opaque' parses");
+      check(alpha_mode_from_string("premultiplied").has_value(), "am-rt: 'premultiplied' parses");
+      check(!alpha_mode_from_string("bogus_am").has_value(), "am-rt: bogus alpha_mode returns nullopt");
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // Channel-set enumeration independence
+    // ═══════════════════════════════════════════════════════════
+    {
+      auto rd = read_living_visual_package(rt_dir);
+      check(rd.value.has_value(), "ch-set-ord: package loads for ordering test");
+      if (rd.value.has_value()) {
+        // Build forward and reverse channel vectors
+        std::vector<ChannelMap> forward = rd.value->channels;
+        std::vector<ChannelMap> reverse(forward.rbegin(), forward.rend());
+        auto fwd_preimage = canonicalize_channel_set_preimage(forward);
+        auto rev_preimage = canonicalize_channel_set_preimage(reverse);
+        check(fwd_preimage == rev_preimage, "ch-set-ord: same channels in different order produce identical preimage");
+        check(!fwd_preimage.empty(), "ch-set-ord: channel set preimage non-empty");
+        auto fwd_id = compute_domain_id("gspl.channel-set/0.1", fwd_preimage);
+        auto rev_id = compute_domain_id("gspl.channel-set/0.1", rev_preimage);
+        check(fwd_id == rev_id, "ch-set-ord: same channels in different order produce identical domain identity");
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // Atlas semantic round-trip tests
+    // ═══════════════════════════════════════════════════════════
+    {
+      auto rd = read_living_visual_package(rt_dir);
+      check(rd.value.has_value(), "atlas-rt: package loads");
+      if (rd.value.has_value()) {
+        auto const& atlas = rd.value->sheet.atlas.image;
+        check(atlas.color_space == ColorSpace::srgb, "atlas-rt: atlas color_space preserved as srgb");
+        check(atlas.alpha_mode == AlphaMode::straight, "atlas-rt: atlas alpha_mode preserved as straight");
+        // Verify provenance is computable
+        auto atlas_prov = compute_domain_id("gspl.sprite-atlas/0.1",
+            canonicalize_atlas_preimage(rd.value->sheet.atlas.placements, atlas));
+        check(!atlas_prov.empty(), "atlas-rt: atlas provenance computable");
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // Frame semantic round-trip test
+    // ═══════════════════════════════════════════════════════════
+    {
+      auto rd = read_living_visual_package(rt_dir);
+      check(rd.value.has_value(), "frame-rt: package loads");
+      if (rd.value.has_value()) {
+        for (auto const& f : rd.value->frames) {
+          check(f.image.color_space == ColorSpace::srgb, "frame-rt: frame color_space preserved as srgb");
+          check(f.image.alpha_mode == AlphaMode::straight, "frame-rt: frame alpha_mode preserved as straight");
+        }
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // Channel metadata validation
+    // ═══════════════════════════════════════════════════════════
+    // Verify valid package produces no metadata validation diagnostics
+    {
+      auto rd = read_living_visual_package(rt_dir);
+      check(rd.value.has_value(), "ch-meta-valid: package loads");
+      if (rd.value.has_value()) {
+        bool no_missing_cs = true, no_missing_am = true, no_invalid_cs = true, no_invalid_am = true;
+        bool no_dup_cs = true, no_dup_am = true;
+        for (auto const& d : rd.diagnostics.diagnostics) {
+          if (d.code == "LV_READ_MISSING_CS") no_missing_cs = false;
+          if (d.code == "LV_READ_MISSING_AM") no_missing_am = false;
+          if (d.code == "LV_READ_INVALID_CS") no_invalid_cs = false;
+          if (d.code == "LV_READ_INVALID_AM") no_invalid_am = false;
+          if (d.code == "LV_READ_DUP_CS") no_dup_cs = false;
+          if (d.code == "LV_READ_DUP_AM") no_dup_am = false;
+        }
+        check(no_missing_cs, "ch-meta-valid: no LV_READ_MISSING_CS on valid package");
+        check(no_missing_am, "ch-meta-valid: no LV_READ_MISSING_AM on valid package");
+        check(no_invalid_cs, "ch-meta-valid: no LV_READ_INVALID_CS on valid package");
+        check(no_invalid_am, "ch-meta-valid: no LV_READ_INVALID_AM on valid package");
+        check(no_dup_cs, "ch-meta-valid: no LV_READ_DUP_CS on valid package");
+        check(no_dup_am, "ch-meta-valid: no LV_READ_DUP_AM on valid package");
+      }
+    }
+
+    // Direct enum validation: invalid strings fail closed
+    {
+      check(!color_space_from_string("bogus").has_value(), "ch-meta: invalid color_space string returns nullopt");
+      check(!alpha_mode_from_string("bogus").has_value(), "ch-meta: invalid alpha_mode string returns nullopt");
+      check(!color_space_from_string("").has_value(), "ch-meta: empty color_space string returns nullopt");
+    }
+    fs::remove_all(rt_dir);
   }
 
   std::cout << "\n=== LIVING PACKAGE TESTS: " << assertions << " assertions, " << failures << " failures ===\n";

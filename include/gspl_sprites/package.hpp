@@ -284,6 +284,12 @@ struct LivingVisualPackageVerificationResult {
                                                       const ImageRgba8& atlas_image);
 [[nodiscard]] std::string compute_domain_id(std::string_view domain, std::string_view preimage);
 
+/* ── Canonical enum string conversion (shared between builder and reader) ── */
+[[nodiscard]] std::string color_space_to_string(ColorSpace cs);
+[[nodiscard]] std::optional<ColorSpace> color_space_from_string(std::string_view s);
+[[nodiscard]] std::string alpha_mode_to_string(AlphaMode am);
+[[nodiscard]] std::optional<AlphaMode> alpha_mode_from_string(std::string_view s);
+
 /* ── Safe path encoding for artifact IDs ── */
 [[nodiscard]] std::string encode_package_component(std::string_view semantic_id);
 [[nodiscard]] std::string decode_package_component(std::string_view encoded);
