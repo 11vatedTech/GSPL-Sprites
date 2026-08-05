@@ -6,6 +6,8 @@
 #include "gspl/semantics.hpp"
 #include "gspl/lowering.hpp"
 
+#include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -14,6 +16,13 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <thread>
+
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace fs = std::filesystem;
 
@@ -24,6 +33,87 @@ static void check(bool v, const char* msg) {
   if (!v) { std::cerr << "FAIL: " << msg << "\n"; ++failures; }
   else { std::cout << "PASS: " << msg << "\n"; }
 }
+
+// Bounded, best-effort directory removal. Windows may briefly retain a
+// handle on recently-closed files, so retry a bounded number of times with a
+// short sleep. On persistent failure, report the exact path and the error
+// instead of swallowing it (and never loop forever).
+static void remove_all_retry(fs::path const& p) {
+  if (p.empty()) return;
+  if (!fs::exists(p)) return;
+  std::error_code ec;
+  for (int attempt = 0; attempt < 10; ++attempt) {
+    ec.clear();
+    fs::remove_all(p, ec);
+    if (!ec && !fs::exists(p)) return;
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+  std::cerr << "WARN: remove_all_retry: could not remove '" << p.string() << "'";
+  if (ec) std::cerr << ": " << ec.message();
+  std::cerr << "\n";
+}
+
+// Unique per-process/per-invocation test workspace.
+//
+// Layout: <temp>/gspl-sprites/living-package/<tag>-<pid>-<invocation>-<clock>
+//
+// The run id combines the OS process id with a monotonic invocation counter
+// and a steady-clock fingerprint, so concurrent test processes and sequential
+// re-runs can never share mutable state, inherit stale artifacts, or collide
+// on staging paths. The workspace is removed on destruction via the bounded
+// retry helper; any cleanup failure is reported with the exact path.
+// Test-only: the production library never depends on this.
+class ScopedTestWorkspace {
+public:
+  explicit ScopedTestWorkspace(std::string tag, bool create_root = false)
+      : root_(make_root(std::move(tag))), create_root_(create_root) {
+    // By default only the shared container parent is created here. The
+    // run-specific root is intentionally left absent: production package
+    // builders reject a pre-existing output directory, so every build creates
+    // its own fresh dir. Set create_root=true when the workspace itself must
+    // exist upfront (e.g. a scratch workspace that holds a CLI output file
+    // outside every package directory).
+    std::error_code ec;
+    fs::create_directories(create_root ? root_ : root_.parent_path(), ec);
+    if (ec) {
+      throw std::runtime_error("ScopedTestWorkspace: cannot create " +
+                               (create_root ? root_ : root_.parent_path()).string() +
+                               ": " + ec.message());
+    }
+    std::cout << "workspace: " << root_.string() << "\n";
+  }
+
+  ~ScopedTestWorkspace() { remove_all_retry(root_); }
+
+  ScopedTestWorkspace(ScopedTestWorkspace const&) = delete;
+  ScopedTestWorkspace& operator=(ScopedTestWorkspace const&) = delete;
+
+  fs::path const& path() const { return root_; }
+  fs::path sub(std::string const& name) const { return root_ / name; }
+
+private:
+  static unsigned long process_id() {
+#ifdef _WIN32
+    return static_cast<unsigned long>(::_getpid());
+#else
+    return static_cast<unsigned long>(::getpid());
+#endif
+  }
+
+  static fs::path make_root(std::string tag) {
+    static std::atomic<unsigned long> invocation{0};
+    auto const n = invocation.fetch_add(1);
+    auto const now = static_cast<unsigned long>(
+        std::chrono::steady_clock::now().time_since_epoch().count());
+    auto const pid = process_id();
+    return fs::temp_directory_path() / "gspl-sprites" / "living-package" /
+           (tag + "-" + std::to_string(pid) + "-" + std::to_string(n) + "-" +
+            std::to_string(now));
+  }
+
+  fs::path root_;
+  bool create_root_;
+};
 static std::string read_file_bytes(std::filesystem::path const& p, std::uint64_t max_bytes) {
   std::ifstream in(p, std::ios::binary | std::ios::ate);
   if (!in) throw std::runtime_error("cannot open: " + p.string());
@@ -51,12 +141,14 @@ int main() try {
   check(src.size() > 1000, "source loaded");
 
   // ── Scope 1: compile, synthesize, build, record identities ──
-  auto pkg_dir = fs::temp_directory_path() / "lv_pkg_test";
-  // Self-heal against leftover state from an interrupted run so repeated
-  // executions (20-run stability proof) never collide with stale temp data.
-  fs::remove_all(pkg_dir);
-  fs::remove_all(pkg_dir.string() + ".staging");
-  fs::remove_all(pkg_dir);
+  // Isolated per-run workspace: a unique directory per process and per
+  // invocation (see ScopedTestWorkspace), so concurrent test processes and
+  // sequential re-runs can never share mutable state or inherit stale data.
+  ScopedTestWorkspace ws("pkg");
+  auto pkg_dir = ws.path();
+  // Secondary defense: Windows may hold transient handles even on isolated
+  // directories; bounded retry cleanup is idempotent on a brand-new path.
+  remove_all_retry(pkg_dir.string() + ".staging");
 
   std::string expected_seed_id;
   std::string expected_seed_json;
@@ -119,10 +211,10 @@ int main() try {
 
     // Deterministic two-build proof
     {
-      auto dA = fs::temp_directory_path() / "lv_pkg_det_A";
-      auto dB = fs::temp_directory_path() / "lv_pkg_det_B";
-      fs::remove_all(dA); fs::remove_all(dB);
-      fs::remove_all(dA.string() + ".staging"); fs::remove_all(dB.string() + ".staging");
+      auto dA = ws.sub("det_A");
+      auto dB = ws.sub("det_B");
+      remove_all_retry(dA); remove_all_retry(dB);
+      remove_all_retry(dA.string() + ".staging"); remove_all_retry(dB.string() + ".staging");
       gspl::sprites::build_living_visual_package(pkg_input, dA);
       gspl::sprites::build_living_visual_package(pkg_input, dB);
       auto vA = gspl::sprites::verify_living_visual_package(dA);
@@ -154,7 +246,7 @@ int main() try {
         auto rel = fs::relative(entry.path(), dB);
         check(fs::exists(dA / rel), ("det: file exists in A: " + rel.string()).c_str());
       }
-      fs::remove_all(dA); fs::remove_all(dB);
+      remove_all_retry(dA); remove_all_retry(dB);
     }
   }
   // ── End Scope 1: all source objects destroyed ──
@@ -255,7 +347,7 @@ int main() try {
   {
     // M1: corrupt a frame PNG byte
     {
-      auto mut_dir = pkg_dir; mut_dir += "_m1"; fs::remove_all(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
+      auto mut_dir = pkg_dir; mut_dir += "_m1"; remove_all_retry(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
       for (auto const& e : fs::directory_iterator(mut_dir/"frames")) {
         if (e.is_regular_file() && e.path().extension() == ".png") {
           std::fstream f(e.path(), std::ios::binary | std::ios::in | std::ios::out);
@@ -263,56 +355,56 @@ int main() try {
         }
       }
       check(!gspl::sprites::verify_living_visual_package(mut_dir).ok(), "M1: corrupted frame PNG fails");
-      fs::remove_all(mut_dir);
+      remove_all_retry(mut_dir);
     }
     // M2: corrupt seed-identity.txt
     {
-      auto mut_dir = pkg_dir; mut_dir += "_m2"; fs::remove_all(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
+      auto mut_dir = pkg_dir; mut_dir += "_m2"; remove_all_retry(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
       std::ofstream(mut_dir/"seed-identity.txt", std::ios::trunc) << "0000000000000000000000000000000000000000000000000000000000000000";
       check(!gspl::sprites::verify_living_visual_package(mut_dir).ok(), "M2: wrong seed identity fails");
-      fs::remove_all(mut_dir);
+      remove_all_retry(mut_dir);
     }
     // M3: missing required artifact
     {
-      auto mut_dir = pkg_dir; mut_dir += "_m3"; fs::remove_all(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
+      auto mut_dir = pkg_dir; mut_dir += "_m3"; remove_all_retry(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
       fs::remove(mut_dir/"animations-2d.json");
       check(!gspl::sprites::verify_living_visual_package(mut_dir).ok(), "M3: missing animations-2d fails");
-      fs::remove_all(mut_dir);
+      remove_all_retry(mut_dir);
     }
     // M4: change frames.json schema to wrong value
     {
-      auto mut_dir = pkg_dir; mut_dir += "_m4"; fs::remove_all(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
+      auto mut_dir = pkg_dir; mut_dir += "_m4"; remove_all_retry(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
       auto fm_bytes = read_file_bytes(mut_dir/"frames.json", 512ULL*1024*1024);
       std::string fm(fm_bytes.begin(), fm_bytes.end());
       auto pos = fm.find("gspl.frames-2d/0.1");
       if (pos != std::string::npos) fm.replace(pos, 17, "bad-schema/0.0");
       std::ofstream(mut_dir/"frames.json", std::ios::trunc | std::ios::binary).write(fm.data(), fm.size());
       check(!gspl::sprites::verify_living_visual_package(mut_dir).ok(), "M4: wrong frames schema fails");
-      fs::remove_all(mut_dir);
+      remove_all_retry(mut_dir);
     }
     // M5: delete a frame PNG
     {
-      auto mut_dir = pkg_dir; mut_dir += "_m5"; fs::remove_all(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
+      auto mut_dir = pkg_dir; mut_dir += "_m5"; remove_all_retry(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
       for (auto const& e : fs::directory_iterator(mut_dir/"frames")) {
         if (e.is_regular_file() && e.path().extension() == ".png") { fs::remove(e.path()); break; }
       }
       check(!gspl::sprites::verify_living_visual_package(mut_dir).ok(), "M5: missing frame PNG fails");
-      fs::remove_all(mut_dir);
+      remove_all_retry(mut_dir);
     }
     // M6: change a frame hash in frames.json
     {
-      auto mut_dir = pkg_dir; mut_dir += "_m6"; fs::remove_all(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
+      auto mut_dir = pkg_dir; mut_dir += "_m6"; remove_all_retry(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
       auto fm_bytes = read_file_bytes(mut_dir/"frames.json", 512ULL*1024*1024);
       std::string fm(fm_bytes.begin(), fm_bytes.end());
       auto pos = fm.find("\"frame_hash\":\"");
       if (pos != std::string::npos) fm.replace(pos+14, 64, std::string(64, '0'));
       std::ofstream(mut_dir/"frames.json", std::ios::trunc | std::ios::binary).write(fm.data(), fm.size());
       check(!gspl::sprites::verify_living_visual_package(mut_dir).ok(), "M6: wrong frame hash fails");
-      fs::remove_all(mut_dir);
+      remove_all_retry(mut_dir);
     }
     // M7: delete a sample from frame-samples.json
     {
-      auto mut_dir = pkg_dir; mut_dir += "_m7"; fs::remove_all(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
+      auto mut_dir = pkg_dir; mut_dir += "_m7"; remove_all_retry(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
       auto fs_bytes = read_file_bytes(mut_dir/"frame-samples.json", 512ULL*1024*1024);
       std::string fs_s(fs_bytes.begin(), fs_bytes.end());
       auto start = fs_s.find("{\"clip_id\"");
@@ -323,36 +415,36 @@ int main() try {
       }
       std::ofstream(mut_dir/"frame-samples.json", std::ios::trunc | std::ios::binary).write(fs_s.data(), fs_s.size());
       check(!gspl::sprites::verify_living_visual_package(mut_dir).ok(), "M7: deleted sample fails");
-      fs::remove_all(mut_dir);
+      remove_all_retry(mut_dir);
     }
     // M8: change an event frame_id
     {
-      auto mut_dir = pkg_dir; mut_dir += "_m8"; fs::remove_all(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
+      auto mut_dir = pkg_dir; mut_dir += "_m8"; remove_all_retry(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
       auto ev_bytes = read_file_bytes(mut_dir/"animation-events.json", 512ULL*1024*1024);
       std::string ev(ev_bytes.begin(), ev_bytes.end());
       auto pos = ev.find("\"frame_id\":\"");
       if (pos != std::string::npos) ev.replace(pos+12, 4, "XXXX");
       std::ofstream(mut_dir/"animation-events.json", std::ios::trunc | std::ios::binary).write(ev.data(), ev.size());
       check(!gspl::sprites::verify_living_visual_package(mut_dir).ok(), "M8: wrong event frame_id fails");
-      fs::remove_all(mut_dir);
+      remove_all_retry(mut_dir);
     }
     // M9: add undeclared file
     {
-      auto mut_dir = pkg_dir; mut_dir += "_m9"; fs::remove_all(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
+      auto mut_dir = pkg_dir; mut_dir += "_m9"; remove_all_retry(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
       std::ofstream(mut_dir/"extra.dat") << "undeclared";
       check(!gspl::sprites::verify_living_visual_package(mut_dir).ok(), "M9: undeclared file fails");
-      fs::remove_all(mut_dir);
+      remove_all_retry(mut_dir);
     }
     // M10: corrupt manifest artifact hash
     {
-      auto mut_dir = pkg_dir; mut_dir += "_m10"; fs::remove_all(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
+      auto mut_dir = pkg_dir; mut_dir += "_m10"; remove_all_retry(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
       auto mf_bytes = read_file_bytes(mut_dir/"manifest.json", 4ULL*1024*1024);
       std::string mf(mf_bytes.begin(), mf_bytes.end());
       auto pos = mf.find("\"sha256\":\"");
       if (pos != std::string::npos) mf.replace(pos+10, 64, std::string(64, '0'));
       std::ofstream(mut_dir/"manifest.json", std::ios::trunc | std::ios::binary).write(mf.data(), mf.size());
       check(!gspl::sprites::verify_living_visual_package(mut_dir).ok(), "M10: corrupt manifest hash fails");
-      fs::remove_all(mut_dir);
+      remove_all_retry(mut_dir);
     }
   }
 
@@ -378,19 +470,19 @@ int main() try {
 
   // ── M11: corrupt collision bone (self-consistent mutation test) ──
   {
-    auto mut_dir = pkg_dir; mut_dir += "_m11"; fs::remove_all(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
+    auto mut_dir = pkg_dir; mut_dir += "_m11"; remove_all_retry(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
     auto col_bytes = read_file_bytes(mut_dir/"collisions-2d.json", 4ULL*1024*1024);
     std::string col(col_bytes.begin(), col_bytes.end());
     auto pos = col.find("\"bone_id\":\"");
     if (pos != std::string::npos) col.replace(pos + 11, 4, "XXXX");
     std::ofstream(mut_dir/"collisions-2d.json", std::ios::trunc | std::ios::binary).write(col.data(), col.size());
     check(!gspl::sprites::verify_living_visual_package(mut_dir).ok(), "M11: corrupt collision bone fails");
-    fs::remove_all(mut_dir);
+    remove_all_retry(mut_dir);
   }
 
   // ── M12: extra frame-hash record ──
   {
-    auto mut_dir = pkg_dir; mut_dir += "_m12"; fs::remove_all(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
+    auto mut_dir = pkg_dir; mut_dir += "_m12"; remove_all_retry(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
     auto fh_bytes = read_file_bytes(mut_dir/"frame-hashes.json", 4ULL*1024*1024);
     std::string fh(fh_bytes.begin(), fh_bytes.end());
     auto pos = fh.rfind("{\"frame_id\"");
@@ -400,19 +492,19 @@ int main() try {
     }
     std::ofstream(mut_dir/"frame-hashes.json", std::ios::trunc | std::ios::binary).write(fh.data(), fh.size());
     check(!gspl::sprites::verify_living_visual_package(mut_dir).ok(), "M12: extra frame-hash record fails");
-    fs::remove_all(mut_dir);
+    remove_all_retry(mut_dir);
   }
 
   // ── M13: change pose record frame_id ──
   {
-    auto mut_dir = pkg_dir; mut_dir += "_m13"; fs::remove_all(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
+    auto mut_dir = pkg_dir; mut_dir += "_m13"; remove_all_retry(mut_dir); fs::copy(pkg_dir, mut_dir, fs::copy_options::recursive);
     auto ph_bytes = read_file_bytes(mut_dir/"pose-hashes.json", 4ULL*1024*1024);
     std::string ph(ph_bytes.begin(), ph_bytes.end());
     auto pos = ph.find("\"frame_id\":\"");
     if (pos != std::string::npos) ph.replace(pos + 12, 4, "YYYY");
     std::ofstream(mut_dir/"pose-hashes.json", std::ios::trunc | std::ios::binary).write(ph.data(), ph.size());
     check(!gspl::sprites::verify_living_visual_package(mut_dir).ok(), "M13: wrong pose frame_id fails");
-    fs::remove_all(mut_dir);
+    remove_all_retry(mut_dir);
   }
 
   // ── Self-Consistent Mutations (refresh artifact hash/size + package identity) ──
@@ -447,7 +539,7 @@ int main() try {
 
     // SC3: pose record frame_id changed (cross-artifact structural)
     {
-      auto md = pkg_dir; md += "_sc3"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_sc3"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto ph = read_file_bytes(md/"pose-hashes.json", 4ULL*1024*1024);
       std::string s(ph.begin(), ph.end());
       auto pos = s.find("\"frame_id\":\"");
@@ -456,11 +548,11 @@ int main() try {
       auto ml = m; refresh(ml, md, "pose-hashes.json"); finalize(ml, md);
       auto v = verify_living_visual_package(md);
       check(!v.ok() && has_diag(v, "LV_POSE_FRAME_ID"), "SC3: LV_POSE_FRAME_ID");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // SC6: remove sample position (structural)
     {
-      auto md = pkg_dir; md += "_sc6"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_sc6"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto fsb = read_file_bytes(md/"frame-samples.json", 512ULL*1024*1024);
       std::string s(fsb.begin(), fsb.end());
       auto st = s.find("{\"clip_id\"");
@@ -473,11 +565,11 @@ int main() try {
       auto ml2 = m; refresh(ml2, md, "frame-samples.json"); finalize(ml2, md);
       auto v = verify_living_visual_package(md);
       check(!v.ok() && has_diag(v, "LV_SAMPLE_MISSING"), "SC6: LV_SAMPLE_MISSING");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // SC8: flip clip looping flag (semantic)
     {
-      auto md = pkg_dir; md += "_sc8"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_sc8"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto ab = read_file_bytes(md/"animations-2d.json", 4ULL*1024*1024);
       std::string s(ab.begin(), ab.end());
       auto pos = s.find("\"looping\":false");
@@ -487,11 +579,11 @@ int main() try {
       auto ml3 = m; refresh(ml3, md, "animations-2d.json"); finalize(ml3, md);
       auto v = verify_living_visual_package(md);
       check(!v.ok() && has_diag(v, "LV_CLIP_LOOP"), "SC8: LV_CLIP_LOOP");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // SC10: event frame_id changed (cross-reference)
     {
-      auto md = pkg_dir; md += "_sc10"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_sc10"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto eb = read_file_bytes(md/"animation-events.json", 4ULL*1024*1024);
       std::string s(eb.begin(), eb.end());
       auto pos = s.find("\"frame_id\":\"");
@@ -500,11 +592,11 @@ int main() try {
       auto ml4 = m; refresh(ml4, md, "animation-events.json"); finalize(ml4, md);
       auto v = verify_living_visual_package(md);
       check(!v.ok() && has_diag(v, "LV_EVENT_FRAME_ID"), "SC10: LV_EVENT_FRAME_ID");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // SC1: extra frame-hash record → LV_FH_EXTRA
     {
-      auto md = pkg_dir; md += "_sc1"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_sc1"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto fhb = read_file_bytes(md/"frame-hashes.json", 4ULL*1024*1024);
       std::string s(fhb.begin(), fhb.end());
       auto pos = s.rfind("{\"frame_id\"");
@@ -516,11 +608,11 @@ int main() try {
       auto ml = m; refresh(ml, md, "frame-hashes.json"); finalize(ml, md);
       auto v = verify_living_visual_package(md);
       check(!v.ok() && has_diag(v, "LV_FH_EXTRA"), "SC1: LV_FH_EXTRA");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // SC2: missing frame-hash record → LV_FH_MISSING
     {
-      auto md = pkg_dir; md += "_sc2"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_sc2"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto fhb = read_file_bytes(md/"frame-hashes.json", 4ULL*1024*1024);
       std::string s(fhb.begin(), fhb.end());
       auto pos = s.find("{\"frame_id\"");
@@ -533,11 +625,11 @@ int main() try {
       auto ml = m; refresh(ml, md, "frame-hashes.json"); finalize(ml, md);
       auto v = verify_living_visual_package(md);
       check(!v.ok() && has_diag(v, "LV_FH_MISSING"), "SC2: LV_FH_MISSING");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // SC4: extra pose record → LV_POSE_EXTRA
     {
-      auto md = pkg_dir; md += "_sc4"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_sc4"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto phb = read_file_bytes(md/"pose-hashes.json", 4ULL*1024*1024);
       std::string s(phb.begin(), phb.end());
       auto pos = s.rfind("{\"clip_id\"");
@@ -549,11 +641,11 @@ int main() try {
       auto ml = m; refresh(ml, md, "pose-hashes.json"); finalize(ml, md);
       auto v = verify_living_visual_package(md);
       check(!v.ok() && has_diag(v, "LV_POSE_EXTRA"), "SC4: LV_POSE_EXTRA");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // SC5: missing pose record → LV_POSE_MISSING
     {
-      auto md = pkg_dir; md += "_sc5"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_sc5"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto phb = read_file_bytes(md/"pose-hashes.json", 4ULL*1024*1024);
       std::string s(phb.begin(), phb.end());
       auto pos = s.find("{\"clip_id\"");
@@ -566,11 +658,11 @@ int main() try {
       auto ml = m; refresh(ml, md, "pose-hashes.json"); finalize(ml, md);
       auto v = verify_living_visual_package(md);
       check(!v.ok() && has_diag(v, "LV_POSE_MISSING"), "SC5: LV_POSE_MISSING");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // SC7: duplicate sample position → LV_SAMPLE_DUP
     {
-      auto md = pkg_dir; md += "_sc7"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_sc7"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto fsb = read_file_bytes(md/"frame-samples.json", 512ULL*1024*1024);
       std::string s(fsb.begin(), fsb.end());
       auto pos = s.find("{\"clip_id\"");
@@ -583,11 +675,11 @@ int main() try {
       auto ml = m; refresh(ml, md, "frame-samples.json"); finalize(ml, md);
       auto v = verify_living_visual_package(md);
       check(!v.ok() && has_diag(v, "LV_SAMPLE_DUP"), "SC7: LV_SAMPLE_DUP");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // SC9: event mapped_source_tick changed → LV_EVENT_NOT_FIRST_AT_OR_AFTER
     {
-      auto md = pkg_dir; md += "_sc9"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_sc9"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto eb = read_file_bytes(md/"animation-events.json", 4ULL*1024*1024);
       std::string s(eb.begin(), eb.end());
       auto pos = s.find("\"mapped_source_tick\":");
@@ -599,11 +691,11 @@ int main() try {
       auto ml = m; refresh(ml, md, "animation-events.json"); finalize(ml, md);
       auto v = verify_living_visual_package(md);
       check(!v.ok() && has_diag(v, "LV_EVENT_NOT_FIRST_AT_OR_AFTER"), "SC9: LV_EVENT_NOT_FIRST_AT_OR_AFTER");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // SC11: generated authored_tick changed → LV_EVENT_AUTHORED_TICK
     {
-      auto md = pkg_dir; md += "_sc11"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_sc11"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto eb = read_file_bytes(md/"animation-events.json", 4ULL*1024*1024);
       std::string s(eb.begin(), eb.end());
       auto pos = s.find("\"authored_tick\":");
@@ -615,11 +707,11 @@ int main() try {
       auto ml = m; refresh(ml, md, "animation-events.json"); finalize(ml, md);
       auto v = verify_living_visual_package(md);
       check(!v.ok() && has_diag(v, "LV_EVENT_AUTHORED_TICK"), "SC11: LV_EVENT_AUTHORED_TICK");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // SC12: source authored event tick changed → LV_EVENT_AUTHORED_TICK
     {
-      auto md = pkg_dir; md += "_sc12"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_sc12"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto sb = read_file_bytes(md/"source-skeletal-animations.json", 4ULL*1024*1024);
       std::string s(sb.begin(), sb.end());
       // Find a tick inside an events block (not a keyframe tick inside tracks)
@@ -636,17 +728,17 @@ int main() try {
       auto ml = m; refresh(ml, md, "source-skeletal-animations.json"); finalize(ml, md);
       auto v = verify_living_visual_package(md);
       check(!v.ok() && has_diag(v, "LV_EVENT_AUTHORED_TICK"), "SC12: LV_EVENT_AUTHORED_TICK");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // SC-positive: valid package passes after manifest refresh
     {
-      auto md = pkg_dir; md += "_sc_valid"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_sc_valid"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto ml5 = m;
       for (auto const& a : ml5.artifacts) refresh(ml5, md, a.path);
       finalize(ml5, md);
       auto v = verify_living_visual_package(md);
       check(v.ok(), "SC: valid package passes after manifest regeneration");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
   }
 
@@ -709,7 +801,7 @@ int main() try {
 
     // SC13: channel target_frame_id changed → LV_CHANNEL_UNKNOWN_FRAME
     {
-      auto md = pkg_dir; md += "_sc13"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_sc13"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto cb = read_file_bytes(md/"channels.json", 4ULL*1024*1024);
       std::string s(cb.begin(), cb.end());
       auto r = find_quoted(s, "\"target_frame_id\":", 0);
@@ -729,11 +821,11 @@ int main() try {
       check(reached_semantic(v), "SC13: reached semantic layer");
       check(!v.ok() && has_diag(v, "LV_CHANNEL_UNKNOWN_FRAME"), "SC13: LV_CHANNEL_UNKNOWN_FRAME");
       check(!has_diag(v, "LV_PROV_CHANNEL_SET"), "SC13: channel-set provenance recomputed");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // SC14: channel PNG pixels changed → LV_PROV_CHANNEL_IMAGE
     {
-      auto md = pkg_dir; md += "_sc14"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_sc14"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       fs::path ch_png;
       for (auto const& e : fs::directory_iterator(md/"channels"))
         if (e.is_regular_file() && e.path().extension() == ".png") { ch_png = e.path(); break; }
@@ -747,11 +839,11 @@ int main() try {
         check(reached_semantic(v), "SC14: reached semantic layer");
         check(!v.ok() && has_diag(v, "LV_PROV_CHANNEL_IMAGE"), "SC14: LV_PROV_CHANNEL_IMAGE");
       }
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // SC15: morphology emissive changed, provenance stale → LV_PROV_BASE_MORPHOLOGY
     {
-      auto md = pkg_dir; md += "_sc15"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_sc15"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto mb = read_file_bytes(md/"resolved-base-morphology.json", 8ULL*1024*1024);
       std::string s(mb.begin(), mb.end());
       // Compact canonical JSON has no whitespace after the colon; locate the
@@ -766,11 +858,11 @@ int main() try {
       auto v = verify_living_visual_package(md);
       check(reached_semantic(v), "SC15: reached semantic layer");
       check(!v.ok() && has_diag(v, "LV_PROV_BASE_MORPHOLOGY"), "SC15: LV_PROV_BASE_MORPHOLOGY");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // SC16: morphology parent changed, structural → LV_MORPH_PARENT_REF
     {
-      auto md = pkg_dir; md += "_sc16"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_sc16"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto mb = read_file_bytes(md/"resolved-base-morphology.json", 8ULL*1024*1024);
       std::string s(mb.begin(), mb.end());
       // Compact canonical JSON: no space after colon; resolve the parent value
@@ -793,11 +885,11 @@ int main() try {
       check(reached_semantic(v), "SC16: reached semantic layer");
       check(!v.ok() && has_diag(v, "LV_MORPH_PARENT_REF"), "SC16: LV_MORPH_PARENT_REF");
       check(!has_diag(v, "LV_PROV_BASE_MORPHOLOGY"), "SC16: base morphology provenance recomputed");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // SC17: transformation endpoint changed → LV_MORPH_TRANSFORM_BASE
     {
-      auto md = pkg_dir; md += "_sc17"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_sc17"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto tb = read_file_bytes(md/"transformation-morphologies.json", 16ULL*1024*1024);
       std::string s(tb.begin(), tb.end());
       // Compact canonical JSON has no whitespace after the colon; locate the
@@ -821,11 +913,11 @@ int main() try {
       check(reached_semantic(v), "SC17: reached semantic layer");
       check(!v.ok() && has_diag(v, "LV_MORPH_TRANSFORM_BASE"), "SC17: LV_MORPH_TRANSFORM_BASE");
       check(!has_diag(v, "LV_PROV_TRANSFORMATION_MORPHOLOGIES"), "SC17: transformation provenance recomputed");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // SC18: atlas placement frame changed → LV_ATLAS_UNKNOWN_FRAME
     {
-      auto md = pkg_dir; md += "_sc18"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_sc18"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto ab = read_file_bytes(md/"sheet/atlas.json", 4ULL*1024*1024);
       std::string s(ab.begin(), ab.end());
       auto r = find_quoted(s, "\"id\":", 0);
@@ -845,11 +937,11 @@ int main() try {
       check(reached_semantic(v), "SC18: reached semantic layer");
       check(!v.ok() && has_diag(v, "LV_ATLAS_UNKNOWN_FRAME"), "SC18: LV_ATLAS_UNKNOWN_FRAME");
       check(!has_diag(v, "LV_PROV_ATLAS"), "SC18: atlas provenance recomputed");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // SC19: atlas PNG pixels changed → LV_PROV_ATLAS
     {
-      auto md = pkg_dir; md += "_sc19"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_sc19"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto enc = tiny_png();
       std::ofstream(md/"sheet/atlas.png", std::ios::trunc | std::ios::binary).write(
           reinterpret_cast<const char*>(enc.data()), static_cast<std::streamsize>(enc.size()));
@@ -857,7 +949,7 @@ int main() try {
       auto v = verify_living_visual_package(md);
       check(reached_semantic(v), "SC19: reached semantic layer");
       check(!v.ok() && has_diag(v, "LV_PROV_ATLAS"), "SC19: LV_PROV_ATLAS");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
   }
 
@@ -968,7 +1060,7 @@ int main() try {
     }
     // verify_pixel_hashes gates atlas-region pixel recomputation only
     {
-      auto md = pkg_dir; md += "_opt_px"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_opt_px"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto ab = read_file_bytes(md/"sheet/atlas.png", 512ULL*1024*1024);
       auto img = decode_png(std::span<const std::byte>(
           reinterpret_cast<const std::byte*>(ab.data()), ab.size()), ImageLimits{});
@@ -990,11 +1082,11 @@ int main() try {
       check(has_diag(von, "LV_ATLAS_REGION_MISMATCH"), "opt: pixel-on detects atlas region mismatch");
       check(!has_diag(voff, "LV_ATLAS_REGION_MISMATCH"), "opt: pixel-off skips region recompute");
       check(has_diag(voff, "LV_PROV_ATLAS"), "opt: atlas provenance mandatory even pixel-off");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // verify_morphologies gates structural morphology checks
     {
-      auto md = pkg_dir; md += "_opt_morph"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_opt_morph"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto mb = read_file_bytes(md/"resolved-base-morphology.json", 8ULL*1024*1024);
       std::string s(mb.begin(), mb.end());
       // Compact canonical JSON: no space after colon; resolve the parent value
@@ -1012,11 +1104,11 @@ int main() try {
       check(has_diag(vdef, "LV_MORPH_PARENT_REF"), "opt: morphology structural check on by default");
       check(!has_diag(vmoff, "LV_MORPH_PARENT_REF"), "opt: verify_morphologies=false suppresses structural check");
       check(has_diag(vmoff, "LV_PROV_BASE_MORPHOLOGY"), "opt: morphology provenance mandatory regardless");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // verify_channel_dimensions gates channel dimension checks
     {
-      auto md = pkg_dir; md += "_opt_chdim"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_opt_chdim"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       fs::path ch_png;
       for (auto const& e : fs::directory_iterator(md/"channels"))
         if (e.is_regular_file() && e.path().extension() == ".png") { ch_png = e.path(); break; }
@@ -1032,11 +1124,11 @@ int main() try {
         check(!has_diag(vcoff, "LV_CHANNEL_DIMENSIONS"), "opt: verify_channel_dimensions=false suppresses dims check");
         check(has_diag(vcoff, "LV_PROV_CHANNEL_IMAGE"), "opt: channel image provenance mandatory regardless");
       }
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // strict_collision_refs gates collision reference policy
     {
-      auto md = pkg_dir; md += "_opt_coll"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_opt_coll"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto cb = read_file_bytes(md/"collisions-2d.json", 4ULL*1024*1024);
       std::string s(cb.begin(), cb.end());
       auto r = find_quoted(s, "\"bone_id\":", 0);
@@ -1048,7 +1140,7 @@ int main() try {
       auto vsoff = verify_living_visual_package(md, soff);
       check(has_diag(vdef, "LV_COLLISION_BONE_REF"), "opt: collision ref check on by default");
       check(!has_diag(vsoff, "LV_COLLISION_BONE_REF"), "opt: strict_collision_refs=false suppresses ref check");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
   }
 
@@ -1142,7 +1234,7 @@ int main() try {
 
     // unknown clip field → LV_SOURCE_PARSE
     {
-      auto md = pkg_dir; md += "_src_unknown"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_src_unknown"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto sb = src_bytes(md);
       std::string s(sb.begin(), sb.end());
       auto pos = s.find("\"looping\":");
@@ -1152,11 +1244,11 @@ int main() try {
       auto v = verify_living_visual_package(md);
       check(reached_semantic(v), "src: unknown field reached semantic layer");
       check(!v.ok() && has_diag(v, "LV_SOURCE_PARSE"), "src: unknown field LV_SOURCE_PARSE");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // duplicate clip ID → LV_SOURCE_DUP_CLIP
     {
-      auto md = pkg_dir; md += "_src_dupclip"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_src_dupclip"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto sb = src_bytes(md);
       std::string s(sb.begin(), sb.end());
       auto st = s.find("\"clips\":[");
@@ -1171,11 +1263,11 @@ int main() try {
       auto v = verify_living_visual_package(md);
       check(reached_semantic(v), "src: dup clip reached semantic layer");
       check(!v.ok() && has_diag(v, "LV_SOURCE_DUP_CLIP"), "src: LV_SOURCE_DUP_CLIP");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // duplicate track bone → LV_SOURCE_DUP_TRACK
     {
-      auto md = pkg_dir; md += "_src_duptrack"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_src_duptrack"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto sb = src_bytes(md);
       std::string s(sb.begin(), sb.end());
       auto tr = s.find("\"tracks\":[");
@@ -1190,11 +1282,11 @@ int main() try {
       auto v = verify_living_visual_package(md);
       check(reached_semantic(v), "src: dup track reached semantic layer");
       check(!v.ok() && has_diag(v, "LV_SOURCE_DUP_TRACK"), "src: LV_SOURCE_DUP_TRACK");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // duplicate source event → LV_SOURCE_DUP_EVENT
     {
-      auto md = pkg_dir; md += "_src_dupevent"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_src_dupevent"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto sb = src_bytes(md);
       std::string s(sb.begin(), sb.end());
       auto ev = s.find("\"events\":[");
@@ -1209,11 +1301,11 @@ int main() try {
       auto v = verify_living_visual_package(md);
       check(reached_semantic(v), "src: dup event reached semantic layer");
       check(!v.ok() && has_diag(v, "LV_SOURCE_DUP_EVENT"), "src: LV_SOURCE_DUP_EVENT");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // duplicate root schema (same value) → LV_SOURCE_PARSE, no loaded package
     {
-      auto md = pkg_dir; md += "_src_dupschema"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_src_dupschema"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto sb = src_bytes(md);
       std::string s(sb.begin(), sb.end());
       auto s0 = s.find("\"schema\":\"");
@@ -1229,11 +1321,11 @@ int main() try {
       check(!v.ok() && has_diag(v, "LV_SOURCE_PARSE"), "src: duplicate root schema LV_SOURCE_PARSE");
       auto rd = read_living_visual_package(md);
       check(!rd.value.has_value(), "src: duplicate root schema yields no loaded package");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // duplicate root schema (conflicting value) → LV_SOURCE_PARSE, no loaded package
     {
-      auto md = pkg_dir; md += "_src_dupschemaconf"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_src_dupschemaconf"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto sb = src_bytes(md);
       std::string s(sb.begin(), sb.end());
       auto s0 = s.find("\"schema\":\"");
@@ -1246,11 +1338,11 @@ int main() try {
       check(!v.ok() && has_diag(v, "LV_SOURCE_PARSE"), "src: conflicting duplicate schema LV_SOURCE_PARSE");
       auto rd = read_living_visual_package(md);
       check(!rd.value.has_value(), "src: conflicting schema yields no loaded package");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // duplicate clips array → LV_SOURCE_PARSE, no loaded package
     {
-      auto md = pkg_dir; md += "_src_dupclipsarr"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_src_dupclipsarr"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto sb = src_bytes(md);
       std::string s(sb.begin(), sb.end());
       auto last = s.find_last_of('}');
@@ -1262,11 +1354,11 @@ int main() try {
       check(!v.ok() && has_diag(v, "LV_SOURCE_PARSE"), "src: duplicate clips array LV_SOURCE_PARSE");
       auto rd = read_living_visual_package(md);
       check(!rd.value.has_value(), "src: duplicate clips array yields no loaded package");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // keyframe tick order broken → LV_SOURCE_KEY_ORDER
     {
-      auto md = pkg_dir; md += "_src_keyorder"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_src_keyorder"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto sb = src_bytes(md);
       std::string s(sb.begin(), sb.end());
       std::size_t from = 0; std::size_t t1 = std::string::npos, t2 = std::string::npos;
@@ -1292,11 +1384,11 @@ int main() try {
       auto v = verify_living_visual_package(md);
       check(reached_semantic(v), "src: key order reached semantic layer");
       check(!v.ok() && has_diag(v, "LV_SOURCE_KEY_ORDER"), "src: LV_SOURCE_KEY_ORDER");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // keyframe tick outside clip duration → LV_SOURCE_KEY_RANGE
     {
-      auto md = pkg_dir; md += "_src_keyrange"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_src_keyrange"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto sb = src_bytes(md);
       std::string s(sb.begin(), sb.end());
       auto ks = s.find("\"keys\":[");
@@ -1310,11 +1402,11 @@ int main() try {
       auto v = verify_living_visual_package(md);
       check(reached_semantic(v), "src: key range reached semantic layer");
       check(!v.ok() && has_diag(v, "LV_SOURCE_KEY_RANGE"), "src: LV_SOURCE_KEY_RANGE");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // authored event tick outside clip duration → LV_SOURCE_EVENT_RANGE
     {
-      auto md = pkg_dir; md += "_src_evrange"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_src_evrange"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto sb = src_bytes(md);
       std::string s(sb.begin(), sb.end());
       auto ev = s.find("\"events\":[");
@@ -1328,11 +1420,11 @@ int main() try {
       auto v = verify_living_visual_package(md);
       check(reached_semantic(v), "src: event range reached semantic layer");
       check(!v.ok() && has_diag(v, "LV_SOURCE_EVENT_RANGE"), "src: LV_SOURCE_EVENT_RANGE");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // unresolved bone reference → LV_SOURCE_BONE_REF
     {
-      auto md = pkg_dir; md += "_src_boneref"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_src_boneref"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto sb = src_bytes(md);
       std::string s(sb.begin(), sb.end());
       auto tr = s.find("\"tracks\":[");
@@ -1346,11 +1438,11 @@ int main() try {
       auto v = verify_living_visual_package(md);
       check(reached_semantic(v), "src: bone ref reached semantic layer");
       check(!v.ok() && has_diag(v, "LV_SOURCE_BONE_REF"), "src: LV_SOURCE_BONE_REF");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // missing required clip field (events removed) → LV_SOURCE_SCHEMA
     {
-      auto md = pkg_dir; md += "_src_missing"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_src_missing"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto sb = src_bytes(md);
       std::string s(sb.begin(), sb.end());
       auto ev = s.find("\"events\":[");
@@ -1367,11 +1459,11 @@ int main() try {
       auto v = verify_living_visual_package(md);
       check(reached_semantic(v), "src: missing field reached semantic layer");
       check(!v.ok() && has_diag(v, "LV_SOURCE_SCHEMA"), "src: missing field LV_SOURCE_SCHEMA");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // token budget exhaustion → LV_READ_JSON_TOKENS
     {
-      auto md = pkg_dir; md += "_src_tokenlimit"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_src_tokenlimit"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       PackageReadLimits tight{};
       tight.max_frames = 256;
       tight.max_channels = 512;
@@ -1413,11 +1505,11 @@ int main() try {
       sufficient.max_path_bytes = 1024;
       auto rd2 = read_living_visual_package(md, sufficient);
       check(rd2.value.has_value(), "src: sufficient budget allows load");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // ── Manifest-specific token exhaustion ──
     {
-      auto md = pkg_dir; md += "_mftok"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_mftok"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       auto mf_bytes = read_file_bytes(md/"manifest.json", 4ULL*1024*1024);
       // Budget below manifest requirement
       PackageReadLimits tight_mf{};
@@ -1429,11 +1521,11 @@ int main() try {
       for (auto const& d : mf_parse.diagnostics.diagnostics)
         if (d.code == "LV_READ_JSON_TOKENS") has_tok = true;
       check(has_tok, "mftok: LV_READ_JSON_TOKENS diagnostic present");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // ── Malformed JSON distinction ──
     {
-      auto md = pkg_dir; md += "_maljson"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_maljson"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       // Corrupt manifest: inject garbage bytes
       auto mf_bytes = read_file_bytes(md/"manifest.json", 4ULL*1024*1024);
       std::string corrupted(mf_bytes.begin(), mf_bytes.end());
@@ -1450,11 +1542,11 @@ int main() try {
       }
       check(!has_tok, "maljson: malformed JSON does NOT emit LV_READ_JSON_TOKENS");
       check(has_malformed, "maljson: receives correct parse/syntax diagnostic");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // ── Nesting limit distinction ──
     {
-      auto md = pkg_dir; md += "_nesttok"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_nesttok"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       PackageReadLimits shallow{};
       shallow.max_json_nesting = 1;  // only top-level object; any nested object/array fails
       shallow.max_json_tokens = 262144;  // generous token budget
@@ -1466,7 +1558,7 @@ int main() try {
       }
       check(!has_tok, "nesttok: nesting limit does NOT emit LV_READ_JSON_TOKENS");
       check(has_nesting || !rd.value.has_value(), "nesttok: nesting limit produces distinct diagnostic or blocks load");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // ── Source-animation-specific token exhaustion ──
     // Token semantics: max_json_tokens is per-BoundedJsonReader (per-parser/artifact).
@@ -1474,7 +1566,7 @@ int main() try {
     // This test verifies that source-skeletal-animations.json specifically
     // cannot be parsed with a tight per-parser budget, while manifest/seed succeed.
     {
-      auto md = pkg_dir; md += "_satok"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_satok"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       // 2000 tokens per parser: manifest (~600) and seed (~500) pass individually.
       // source-skeletal-animations.json with clips/tracks/keys needs far more.
       PackageReadLimits sa_tight{};
@@ -1497,7 +1589,7 @@ int main() try {
         if (d.code == "LV_READ_JSON_TOKENS") has_tok = true;
       }
       check(has_tok, "satok: LV_READ_JSON_TOKENS diagnostic present at 2000 per-parser budget");
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
     // ── Boundary / off-by-one token budget test ──
     {
@@ -1651,7 +1743,7 @@ int main() try {
     }
     {
       // Corrupt a real frame PNG inside a package copy: verify must fail safely
-      auto md = pkg_dir; md += "_png_hostile"; fs::remove_all(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
+      auto md = pkg_dir; md += "_png_hostile"; remove_all_retry(md); fs::copy(pkg_dir, md, fs::copy_options::recursive);
       bool found = false;
       for (auto const& e : fs::directory_iterator(md/"frames")) {
         if (!e.is_regular_file() || e.path().extension() != ".png") continue;
@@ -1666,7 +1758,7 @@ int main() try {
         auto v = verify_living_visual_package(md);
         check(!v.ok(), "png: truncated frame png fails package verify safely");
       }
-      fs::remove_all(md);
+      remove_all_retry(md);
     }
   }
 
@@ -1766,7 +1858,11 @@ int main() try {
     if (!fs::exists(gsplc)) {
       check(false, "cli: gsplc binary not found at configured path");
     } else {
-      auto out_file = (fs::temp_directory_path()/"lv_cli_out.txt").string();
+      // Separate scratch workspace: the stderr redirect target must never live
+      // inside a package directory or the verifier would flag it as an
+      // undeclared file.
+      ScopedTestWorkspace ws_cli("cli", true);
+      auto out_file = ws_cli.sub("cli_out.txt").string();
       auto quote = [](std::string const& s) { return std::string("\"") + s + "\""; };
       // Valid package → exit 0 (cmd /c quoting: wrap the whole command so
       // Windows strips only the outer quotes)
@@ -1774,7 +1870,7 @@ int main() try {
       int rc1 = std::system(cmd1.c_str());
       check(rc1 == 0, "cli: valid package exit code 0");
       // Self-consistent hostile package → nonzero + exact diagnostic on stderr
-      auto hdir = pkg_dir; hdir += "_cli_hostile"; fs::remove_all(hdir); fs::copy(pkg_dir, hdir, fs::copy_options::recursive);
+      auto hdir = pkg_dir; hdir += "_cli_hostile"; remove_all_retry(hdir); fs::copy(pkg_dir, hdir, fs::copy_options::recursive);
       {
         using namespace gspl::sprites;
         PackageReadLimits rlim{};
@@ -1810,13 +1906,13 @@ int main() try {
       auto ob = read_file_bytes(out_file, 1ULL*1024*1024);
       std::string o(ob.begin(), ob.end());
       check(o.find("LV_FH_EXTRA") != std::string::npos, "cli: hostile diagnostic emitted on stderr");
-      fs::remove_all(hdir);
+      remove_all_retry(hdir);
       std::error_code ec;
       fs::remove(out_file, ec);
     }
   }
 
-  fs::remove_all(pkg_dir);
+  remove_all_retry(pkg_dir);
 
   // ── Typed manifest tests ──
   {
@@ -2108,9 +2204,9 @@ int main() try {
     // Positive: reader populates manifest
     {
       // Rebuild with typed manifest and check reader populates pkg.manifest
-      auto test_pkg_dir = fs::temp_directory_path() / "lv_pkg_manifest_test";
-      fs::remove_all(test_pkg_dir);
-      fs::remove_all(test_pkg_dir.string() + ".staging");
+      auto test_pkg_dir = ws.sub("manifest_test");
+      remove_all_retry(test_pkg_dir);
+      remove_all_retry(test_pkg_dir.string() + ".staging");
       std::string src2 = load_source();
       {
         gspl::GsplContext ctx2;
@@ -2148,14 +2244,14 @@ int main() try {
         check(!m2.seed_identity.empty(), "typed manifest: seed_identity populated");
         check(!m2.package_identity.empty(), "typed manifest: package_identity populated");
       }
-      fs::remove_all(test_pkg_dir);
+      remove_all_retry(test_pkg_dir);
     }
 
     // Positive: verifier uses typed manifest counts
     {
-      auto test_pkg_dir = fs::temp_directory_path() / "lv_pkg_verify_manifest";
-      fs::remove_all(test_pkg_dir);
-      fs::remove_all(test_pkg_dir.string() + ".staging");
+      auto test_pkg_dir = ws.sub("verify_manifest");
+      remove_all_retry(test_pkg_dir);
+      remove_all_retry(test_pkg_dir.string() + ".staging");
       std::string src2 = load_source();
       {
         gspl::GsplContext ctx2;
@@ -2185,16 +2281,16 @@ int main() try {
       check(verify2.sample_count == 48, "typed manifest verifier: sample_count = 48");
       check(!verify2.package_identity.empty(), "typed manifest verifier: package_identity populated");
       check(!verify2.seed_identity.empty(), "typed manifest verifier: seed_identity populated");
-      fs::remove_all(test_pkg_dir);
+      remove_all_retry(test_pkg_dir);
     }
 
     // ═══════════════════════════════════════════════════════════
     // Channel / Atlas / Frame semantic round-trip tests
     // ═══════════════════════════════════════════════════════════
     // Rebuild package for round-trip validation (pkg_dir was cleaned earlier)
-    auto rt_dir = fs::temp_directory_path() / "lv_pkg_rt";
-    fs::remove_all(rt_dir);
-    fs::remove_all(rt_dir.string() + ".staging");
+    auto rt_dir = ws.sub("rt");
+    remove_all_retry(rt_dir);
+    remove_all_retry(rt_dir.string() + ".staging");
     {
       std::string src3 = load_source();
       gspl::GsplContext ctx3;
@@ -2378,7 +2474,7 @@ int main() try {
       check(!alpha_mode_from_string("bogus").has_value(), "ch-meta: invalid alpha_mode string returns nullopt");
       check(!color_space_from_string("").has_value(), "ch-meta: empty color_space string returns nullopt");
     }
-    fs::remove_all(rt_dir);
+    remove_all_retry(rt_dir);
   }
 
   std::cout << "\n=== LIVING PACKAGE TESTS: " << assertions << " assertions, " << failures << " failures ===\n";
