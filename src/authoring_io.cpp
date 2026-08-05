@@ -1,4 +1,5 @@
 #include "gspl_sprites/authoring.hpp"
+#include "gspl_sprites/rights.hpp"
 
 #include <algorithm>
 #include <array>
@@ -140,46 +141,16 @@ bool boolean(std::string_view value) {
   throw std::runtime_error("invalid authoring boolean");
 }
 
+// Rights conversion delegates to the single authority (rights.hpp).
 std::string_view rights_name(RightsClass value) {
-  switch (value) {
-  case RightsClass::original_user_creation:
-    return "ORIGINAL_USER_CREATION";
-  case RightsClass::user_owned:
-    return "USER_OWNED_REFERENCE";
-  case RightsClass::licensed:
-    return "LICENSED_REFERENCE";
-  case RightsClass::public_domain:
-    return "PUBLIC_DOMAIN";
-  case RightsClass::permissive:
-    return "PERMISSIVELY_LICENSED";
-  case RightsClass::research_only:
-    return "RESEARCH_ONLY_REFERENCE";
-  case RightsClass::restricted:
-    return "RESTRICTED_REFERENCE";
-  case RightsClass::unknown:
-    return "UNKNOWN_RIGHTS";
-  case RightsClass::prohibited:
-    return "PROHIBITED";
-  }
-  throw std::logic_error("invalid authoring rights class");
+  return rights_class_to_string(value);
 }
 
 RightsClass parse_rights(std::string_view value) {
-  constexpr std::array values{
-      std::pair{"ORIGINAL_USER_CREATION", RightsClass::original_user_creation},
-      std::pair{"USER_OWNED_REFERENCE", RightsClass::user_owned},
-      std::pair{"LICENSED_REFERENCE", RightsClass::licensed},
-      std::pair{"PUBLIC_DOMAIN", RightsClass::public_domain},
-      std::pair{"PERMISSIVELY_LICENSED", RightsClass::permissive},
-      std::pair{"RESEARCH_ONLY_REFERENCE", RightsClass::research_only},
-      std::pair{"RESTRICTED_REFERENCE", RightsClass::restricted},
-      std::pair{"UNKNOWN_RIGHTS", RightsClass::unknown},
-      std::pair{"PROHIBITED", RightsClass::prohibited}};
-  const auto found = std::ranges::find_if(
-      values, [&](const auto &item) { return item.first == value; });
-  if (found == values.end())
+  const auto found = rights_class_from_string(value);
+  if (!found)
     throw std::runtime_error("unknown authoring reference rights class");
-  return found->second;
+  return *found;
 }
 
 std::string_view use_name(AuthoringReferenceUse use) {

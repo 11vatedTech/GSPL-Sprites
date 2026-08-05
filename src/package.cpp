@@ -1,4 +1,5 @@
 #include "gspl_sprites/package.hpp"
+#include "gspl_sprites/morphology.hpp"
 #include "gspl_sprites/animation_sampling.hpp"
 
 #include "gspl/json.hpp"
@@ -616,6 +617,10 @@ void lv_validate_input(const LivingVisualPackageInput& in) {
     if (!encoded_paths.insert(p).second) add(diags, "LV_INPUT_PATH_COLLISION", "encoded path collision: "+p);
     if (!frame_ids.contains(ch.target_frame_id)) add(diags, "LV_INPUT_CH_TARGET", "channel targets unknown frame: "+ch.target_frame_id);
   }
+  if (in.sheet.atlas.image.pixels.empty() || !in.sheet.atlas.image.invariant())
+    add(diags, "LV_INPUT_SHEET", "sprite sheet atlas image missing or invalid");
+  if (in.sheet.atlas.placements.empty())
+    add(diags, "LV_INPUT_SHEET", "sprite sheet atlas has no placements");
   if (!diags.empty()) {
     std::ostringstream msgs;
     for (auto const& d : diags) msgs << d.code << ": " << d.message << "; ";
@@ -1440,33 +1445,16 @@ std::string canonicalize_channel_image_preimage(const ChannelMap& ch) {
   return preimage;
 }
 
+// Morphology preimage serialization delegates to the single semantic
+// serialization authority (morphology.hpp). Byte-stability is required:
+// these preimages feed package provenance identity.
 std::string canonicalize_morphology_preimage(const EffectiveMorphology& morph) {
-  std::string preimage;
-  for (auto const& [part_id, mp] : morph) {
-    preimage += part_id + "\n";
-    preimage += mp.bone_id + "\n";
-    preimage += mp.primitive + "\n";
-    preimage += mp.semantic_role + "\n";
-    preimage += mp.color + "\n";
-    preimage += mp.parent + "\n";
-    preimage += canonical_double(mp.x) + "," + canonical_double(mp.y) + "," + canonical_double(mp.z) + "\n";
-    preimage += canonical_double(mp.size_x) + "," + canonical_double(mp.size_y) + "," + canonical_double(mp.size_z) + "\n";
-    preimage += canonical_double(mp.rotation_degrees) + "\n";
-    preimage += std::to_string(mp.z_order) + "\n";
-    preimage += std::string(mp.emissive ? "1" : "0") + "\n";
-    preimage += std::string(mp.electrical_marking ? "1" : "0") + "\n";
-  }
-  return preimage;
+  return canonicalize_effective_morphology_preimage(morph);
 }
 
 std::string canonicalize_transformation_preimage(std::span<const EffectiveMorphology> transformation) {
-  std::string preimage;
-  preimage += std::to_string(transformation.size()) + "\n";
-  for (std::size_t i = 0; i < transformation.size(); ++i) {
-    preimage += std::to_string(i) + "\n";
-    preimage += canonicalize_morphology_preimage(transformation[i]);
-  }
-  return preimage;
+  return canonicalize_transformations_preimage(
+      std::span<const MorphologyMap>(transformation.data(), transformation.size()));
 }
 
 std::string canonicalize_atlas_preimage(std::span<const AtlasPlacement> placements,

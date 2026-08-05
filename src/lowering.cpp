@@ -1,4 +1,5 @@
 #include "gspl/lowering.hpp"
+#include "gspl_sprites/rights.hpp"
 #include <charconv>
 #include <ranges>
 #include <sstream>
@@ -123,23 +124,10 @@ SpriteIrLowering::Result SpriteIrLowering::lower(CanonicalEntity const& entity) 
 }
 
 gspl::sprites::RightsClass SpriteIrLowering::lower_rights(std::string const& classification) {
-    if (classification.find("ORIGINAL_USER_CREATION") != std::string::npos)
-        return gspl::sprites::RightsClass::original_user_creation;
-    if (classification.find("USER_OWNED") != std::string::npos)
-        return gspl::sprites::RightsClass::user_owned;
-    if (classification.find("LICENSED") != std::string::npos)
-        return gspl::sprites::RightsClass::licensed;
-    if (classification.find("PUBLIC_DOMAIN") != std::string::npos)
-        return gspl::sprites::RightsClass::public_domain;
-    if (classification.find("PERMISSIVE") != std::string::npos)
-        return gspl::sprites::RightsClass::permissive;
-    if (classification.find("RESEARCH_ONLY") != std::string::npos)
-        return gspl::sprites::RightsClass::research_only;
-    if (classification.find("RESTRICTED") != std::string::npos)
-        return gspl::sprites::RightsClass::restricted;
-    if (classification.find("PROHIBITED") != std::string::npos)
-        return gspl::sprites::RightsClass::prohibited;
-    return gspl::sprites::RightsClass::unknown;
+    // Substring classification delegates to the single rights authority
+    // (rights.hpp). "ORIGINAL_USER_CREATION/NCC-1701" style registry
+    // suffixes are accepted by design.
+    return gspl::sprites::lower_rights_class(classification);
 }
 
 gspl::sprites::AbilitySeed SpriteIrLowering::lower_ability(CanonicalAbility const& ability) {

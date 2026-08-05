@@ -3,6 +3,7 @@
 #include "gspl_sprites/package.hpp"
 #include "gspl_sprites/living_runtime.hpp"
 #include "gspl_sprites/transformation.hpp"
+#include "gspl_sprites/viewer_model.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -19,94 +20,41 @@ using namespace gspl::sprites;
 
 namespace {
 
-std::string voltfox_seed() {
-  return
-    "schema=gspl.sprite-seed/0.1\n"
-    "id=original.voltfox\n"
-    "name=Voltfox\n"
-    "classification=biological.fictional.electric-fox\n"
-    "rights=ORIGINAL_USER_CREATION\n"
-    "entropy_root=11072026\n"
-    "primary_color=#242038\n"
-    "accent_color=#56F1FF\n"
-    "ability=directional-lightning|electric.projectile.directional|25|8|2\n"
-    "rig=voltfox.rig\n"
-    "bone=root|-|0|0|0|1|1|12|-45|45\n"
-    "bone=head|root|4|0|0|1|1|8|-30|30\n"
-    "bone=tail|root|-4|0|0|1|1|10|-80|80\n"
-    "socket=muzzle|head|8|0|0|1|1\n"
-    "clip=idle|10|true\n"
-    "track=idle|head|0,4,0,-10,1,1;10,4,0,10,1,1\n"
-    "clip_event=idle|blink|5\n"
-    "clip=attack|2|false\n"
-    "track=attack|head|0,4,0,0,1,1;2,6,0,25,1,1\n"
-    "clip_event=attack|release|1\n"
-    "initial_state=idle\n"
-    "state=idle|idle\n"
-    "state=attack|attack\n"
-    "transition=idle|attack|attack|GREATER_EQUAL|1|0|1|10\n"
-    "transition=attack|idle|attack|LESS|1|2|1|10\n"
-    "collision=body|AXIS_ALIGNED_BOX|root|0|0|8|5\n"
-    "collision=bolt|CIRCLE|muzzle|3|0|2|2\n"
-    "collision_window=directional-lightning|bolt|0|2|true\n";
-}
-
-std::filesystem::path build_temp_package() {
-  auto tmp = std::filesystem::temp_directory_path() / "gspl-preview";
-  std::filesystem::remove_all(tmp);
-  const auto seed = parse_seed(voltfox_seed());
-  build_package(seed, tmp);
-  return tmp;
-}
-
 void print_diagnostics(const ValidationResult& vr) {
   for (const auto& d : vr.diagnostics)
     std::cerr << "  " << d.code << ": " << d.message << '\n';
 }
 
-int headless_main(const PackageVerification& verification) {
-  std::cout << "PACKAGE entity=" << verification.entity_id
-            << " identity=" << verification.package_identity
-            << " artifacts=" << verification.artifact_count
-            << " bytes=" << verification.total_artifact_bytes
+int headless_main(const LivingPackageViewer& viewer) {
+  const auto& prov = viewer.provenance();
+  std::cout << "PACKAGE entity=" << prov.entity_id
+            << " identity=" << prov.package_identity
+            << " artifact_count=" << prov.artifact_count
+            << " total_bytes=" << prov.total_artifact_bytes
+            << " frames=" << prov.frame_count
+            << " clips=" << prov.clip_count
+            << " channels=" << prov.channel_count
             << '\n';
 
-  LivingRuntimeProgram prog;
-  prog.id = "voltfox.runtime";
-  prog.ticks_per_second = 60;
-  prog.maximum_memory_records = 1024;
-  prog.goals = {
-    {"idle", 0, {}},
-    {"defend", 100, {{"perception.threat", Comparison::greater_equal, 1}}}
-  };
-  prog.actions = {
-    {"observe", "idle", 1, {}, {}, 1, 0, 0, true, {}},
-    {"attack", "defend", 10,
-     {{"perception.threat", 500000}},
-     {{"confidence.threat", Comparison::greater_equal, 500000}},
-      2, 3, 20, true, {{"release", 0}}}
-  };
-
-  LivingRuntimeState state;
-  state.energy = 100;
-
   std::cout << "HEADLESS_BEGIN\n";
-  for (std::uint64_t t = 0; t < 100; ++t) {
-    if (t == 5)
-      observe(state, prog, {"threat", "enemy", 2, 900000, state.tick, 2});
+  for (const auto& ci : viewer.clips()) {
+    std::cout << "CLIP " << ci.clip_id
+              << " frames=" << ci.frame_count
+              << " duration=" << ci.duration_ticks
+              << " looping=" << ci.looping
+              << '\n';
+  }
 
-    auto result = step_living_runtime(prog, state);
-
-    std::cout << "TICK " << t
-              << " energy=" << state.energy
-              << " action=";
-    if (state.active_action)
-      std::cout << state.active_action->action_id;
-    else
-      std::cout << "(none)";
-    if (result.selected_action)
-      std::cout << " selected=" << *result.selected_action;
-    std::cout << '\n';
+  // Show first clip playback (first 10 frames)
+  if (!viewer.clips().empty()) {
+    const auto& ci = viewer.clips()[0];
+    for (std::uint32_t t = 0; t < 10; ++t) {
+      auto f = viewer.frame_for_tick(ci.clip_id, t);
+      std::cout << "TICK " << t << " frame=" << f.frame_id
+                << " index=" << f.frame_index
+                << " source_tick=" << f.source_tick
+                << '\n';
+    }
   }
   std::cout << "HEADLESS_END\n";
   return 0;
@@ -281,7 +229,7 @@ static void render_3d(SDL_Renderer* ren, int w, int h, int tick,
 static void render_debug(SDL_Renderer* ren, int w, int h,
                          const PreviewState& ps,
                          const TransformationState& tstate,
-                         const PackageVerification& verification) {
+                         const ViewerProvenance& provenance) {
   SDL_SetRenderDrawColor(ren, 0, 0, 0, 180);
   SDL_Rect bg = {4, 4, 280, 160};
   SDL_RenderFillRect(ren, &bg);
@@ -311,7 +259,7 @@ static void render_debug(SDL_Renderer* ren, int w, int h,
 }
 
 static int sdl_main(const std::filesystem::path& package_path,
-                    const PackageVerification& verification) {
+                    const ViewerProvenance& provenance) {
   if (SDL_Init(SDL_INIT_VIDEO) < 0) {
     std::cerr << "SDL_Init: " << SDL_GetError() << '\n';
     return 1;
@@ -405,9 +353,9 @@ static int sdl_main(const std::filesystem::path& package_path,
   LivingRuntimeState rstate;
   rstate.energy = 100;
 
-  std::cout << "Preview: entity=" << verification.entity_id
-            << " package=" << verification.package_identity
-            << " artifacts=" << verification.artifact_count << '\n';
+  std::cout << "Preview: entity=" << provenance.entity_id
+            << " package=" << provenance.package_identity
+            << " artifacts=" << provenance.artifact_count << '\n';
   std::cout << "Controls: 2=2D 3=3D 5=2.5D A=ascend S=descend D=debug Q/ESC=quit\n";
 
   bool running = true;
@@ -465,7 +413,7 @@ static int sdl_main(const std::filesystem::path& package_path,
     }
 
     if (ps.debug)
-      render_debug(ren, w, h, ps, tstate, verification);
+      render_debug(ren, w, h, ps, tstate, provenance);
 
     SDL_RenderPresent(ren);
 
@@ -494,35 +442,28 @@ static int sdl_main(const std::filesystem::path& package_path,
 
 int main(int argc, char* argv[]) {
   try {
-    std::filesystem::path package_path;
-    bool cleanup_temp = false;
-
-    if (argc >= 2) {
-      package_path = argv[1];
-    } else {
-      std::cout << "No package path provided — building temp package from voltfox seed\n";
-      package_path = build_temp_package();
-      cleanup_temp = true;
-    }
-
-    auto verification = verify_package(package_path);
-    if (!verification.ok()) {
-      std::cerr << "Package verification failed:\n";
-      print_diagnostics(verification.validation);
-      if (cleanup_temp)
-        std::filesystem::remove_all(package_path);
+    if (argc < 2) {
+      std::cerr << "Usage: gspl_sprites_preview <package_path>\n";
       return 1;
     }
 
+    std::filesystem::path package_path = argv[1];
+
+    auto load_result = LivingPackageViewer::load(package_path);
+    if (!load_result.ok()) {
+      std::cerr << "Package load failed:\n";
+      print_diagnostics(load_result.diagnostics);
+      return 1;
+    }
+
+    auto& viewer = *load_result.value;
+
     int code;
 #ifdef GSPL_SPRITES_HAS_SDL2
-    code = sdl_main(package_path, verification);
+    code = sdl_main(package_path, viewer.provenance());
 #else
-    code = headless_main(verification);
+    code = headless_main(viewer);
 #endif
-
-    if (cleanup_temp)
-      std::filesystem::remove_all(package_path);
 
     return code;
   } catch (const std::exception& e) {

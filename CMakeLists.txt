@@ -197,6 +197,10 @@ add_library(gspl_sprites_core
    src/studio/visual/combat_editor_model.cpp
    src/studio/visual/graph_editor_model.cpp
    src/studio/tree/project_tree_model.cpp
+   src/rights.cpp
+   src/morphology.cpp
+   src/control.cpp
+   src/viewer_model.cpp
 )
 if(GSPL_CORE_ONLY)
   target_sources(gspl_sprites_core PRIVATE src/inference_stub.cpp)
@@ -466,6 +470,26 @@ add_test(NAME gspl_sprites_living_package_tests
 # machine does not kill it mid-run (it must still complete fully to pass).
 set_tests_properties(gspl_sprites_living_package_tests PROPERTIES TIMEOUT 300)
 
+# ── Semantic-to-visual spine tests (authority + viewer) ──
+add_executable(gspl_sprites_semantic_spine_tests tests/semantic_spine_tests.cpp)
+target_link_libraries(gspl_sprites_semantic_spine_tests PRIVATE gspl_sprites_core)
+target_compile_definitions(gspl_sprites_semantic_spine_tests PRIVATE
+  GSPL_SPRITES_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+  GSPL_SPRITES_GSPLC_PATH="$<TARGET_FILE:gsplc>")
+add_dependencies(gspl_sprites_semantic_spine_tests gsplc)
+add_test(NAME gspl_sprites_semantic_spine_tests
+  COMMAND gspl_sprites_semantic_spine_tests)
+set_tests_properties(gspl_sprites_semantic_spine_tests PROPERTIES TIMEOUT 300)
+
+# ── Viewer integration tests (real Voltfox package → LivingPackageViewer) ──
+add_executable(gspl_sprites_viewer_integration_tests tests/viewer_integration_tests.cpp)
+target_link_libraries(gspl_sprites_viewer_integration_tests PRIVATE gspl_sprites_core)
+target_compile_definitions(gspl_sprites_viewer_integration_tests PRIVATE
+  GSPL_SPRITES_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+add_test(NAME gspl_sprites_viewer_integration_tests
+  COMMAND gspl_sprites_viewer_integration_tests)
+set_tests_properties(gspl_sprites_viewer_integration_tests PROPERTIES TIMEOUT 300)
+
 add_executable(gspl_sprites_utf8_tests tests/utf8_tests.cpp)
 target_link_libraries(gspl_sprites_utf8_tests PRIVATE gspl_sprites_core)
 add_test(NAME gspl_sprites_utf8_tests COMMAND gspl_sprites_utf8_tests)
@@ -637,6 +661,9 @@ endif()
 add_subdirectory(src/studio)
 
 if(BUILD_PREVIEW)
+  # SDL2 is an optional GUI dependency (zlib license). Install via:
+  #   vcpkg install sdl2
+  #   or download from https://github.com/libsdl-org/SDL/releases
   find_package(SDL2 QUIET)
   if(SDL2_FOUND)
     add_executable(gspl_sprites_preview src/preview.cpp)

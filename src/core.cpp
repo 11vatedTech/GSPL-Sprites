@@ -1,5 +1,7 @@
 #include "gspl_sprites/core.hpp"
 #include "gspl_sprites/domain.hpp"
+#include "gspl_sprites/morphology.hpp"
+#include "gspl_sprites/rights.hpp"
 #include "gspl_sprites/target_contract.hpp"
 
 #include <algorithm>
@@ -92,30 +94,16 @@ std::vector<double> parse_double_list(std::string_view value, std::size_t expect
   return result;
 }
 
+// Rights classification conversion delegates to the single authority
+// (rights.hpp). No local rights name table may exist.
 RightsClass parse_rights(std::string_view value) {
-  static const std::map<std::string_view, RightsClass> values{
-    {"ORIGINAL_USER_CREATION", RightsClass::original_user_creation}, {"USER_OWNED_REFERENCE", RightsClass::user_owned},
-    {"LICENSED_REFERENCE", RightsClass::licensed}, {"PUBLIC_DOMAIN", RightsClass::public_domain},
-    {"PERMISSIVELY_LICENSED", RightsClass::permissive}, {"RESEARCH_ONLY_REFERENCE", RightsClass::research_only},
-    {"RESTRICTED_REFERENCE", RightsClass::restricted}, {"UNKNOWN_RIGHTS", RightsClass::unknown}, {"PROHIBITED", RightsClass::prohibited}};
-  const auto found = values.find(value);
-  if (found == values.end()) throw std::runtime_error("unknown rights classification");
-  return found->second;
+  const auto found = rights_class_from_string(value);
+  if (!found) throw std::runtime_error("unknown rights classification");
+  return *found;
 }
 
 std::string rights_text(RightsClass value) {
-  switch (value) {
-    case RightsClass::original_user_creation: return "ORIGINAL_USER_CREATION";
-    case RightsClass::user_owned: return "USER_OWNED_REFERENCE";
-    case RightsClass::licensed: return "LICENSED_REFERENCE";
-    case RightsClass::public_domain: return "PUBLIC_DOMAIN";
-    case RightsClass::permissive: return "PERMISSIVELY_LICENSED";
-    case RightsClass::research_only: return "RESEARCH_ONLY_REFERENCE";
-    case RightsClass::restricted: return "RESTRICTED_REFERENCE";
-    case RightsClass::unknown: return "UNKNOWN_RIGHTS";
-    case RightsClass::prohibited: return "PROHIBITED";
-  }
-  throw std::logic_error("unreachable rights classification");
+  return std::string(rights_class_to_string(value));
 }
 
 std::string escape_json(std::string_view value) {
@@ -460,44 +448,8 @@ ValidationResult enforce_resource_limits(const SpriteSeed& seed, const ResourceL
   return result;
 }
 
-// ── Helpers for canonicalizing morphology data ──
-static std::string canonicalize_morphology_part(const MorphologyPart& part) {
-  std::ostringstream out;
-  out << "{\"boneId\":\"" << escape_json(part.bone_id) << "\",\"color\":\"" << escape_json(part.color) << "\",\"electricalMarking\":" << (part.electrical_marking ? "true" : "false")
-      << ",\"emissive\":" << (part.emissive ? "true" : "false") << ",\"parent\":\"" << escape_json(part.parent) << "\",\"primitive\":\"" << escape_json(part.primitive)
-      << "\",\"rotationDegrees\":" << part.rotation_degrees << ",\"semanticRole\":\"" << escape_json(part.semantic_role)
-      << "\",\"sizeX\":" << part.size_x << ",\"sizeY\":" << part.size_y << ",\"sizeZ\":" << part.size_z
-      << ",\"x\":" << part.x << ",\"y\":" << part.y << ",\"z\":" << part.z
-      << ",\"zOrder\":" << part.z_order << "}";
-  return out.str();
-}
-
-static std::string canonicalize_morphology_map(const std::map<std::string, MorphologyPart, std::less<>>& map) {
-  std::ostringstream out;
-  out << "{";
-  bool first = true;
-  for (const auto& [name, part] : map) {
-    if (!first) out << ",";
-    first = false;
-    out << "\"" << escape_json(name) << "\":" << canonicalize_morphology_part(part);
-  }
-  out << "}";
-  return out.str();
-}
-
-static std::string canonicalize_form_morphology_overrides(const std::map<std::string, std::map<std::string, MorphologyPart, std::less<>>, std::less<>>& overrides) {
-  std::ostringstream out;
-  out << "{";
-  bool first_form = true;
-  for (const auto& [form_id, parts] : overrides) {
-    if (!first_form) out << ",";
-    first_form = false;
-    out << "\"" << escape_json(form_id) << "\":" << canonicalize_morphology_map(parts);
-  }
-  out << "}";
-  return out.str();
-}
-
+// Morphology serialization delegates to the single authority (morphology.hpp).
+// These forms feed seed identity and must remain byte-stable.
 std::string canonicalize(const SpriteSeed& seed) {
   // Abilities (sorted)
   std::vector<AbilitySeed> abilities = seed.abilities;
