@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.25)
 project(gspl_sprites VERSION 0.1.0 LANGUAGES C CXX)
 
 option(BUILD_PREVIEW "Build the preview executable" OFF)
+option(GSPL_FETCH_SDL2 "Download SDL2 development package (OFF by default, no network)" OFF)
 option(GSPL_CORE_ONLY "Build GSPL core without ONNX Runtime dependency (portable)" OFF)
 option(GSPL_BUILD_STUDIO "Build the GSPL Authoring Studio (requires Qt6)" OFF)
 option(GSPL_BUILD_TESTS "Build the GSPL test targets" ON)
@@ -664,11 +665,56 @@ if(BUILD_PREVIEW)
   # SDL2 is an optional GUI dependency (zlib license). Install via:
   #   vcpkg install sdl2
   #   or download from https://github.com/libsdl-org/SDL/releases
-  find_package(SDL2 QUIET)
+  #   or set GSPL_FETCH_SDL2=ON for automatic FetchContent download
+  if(GSPL_FETCH_SDL2 AND NOT SDL2_FOUND)
+    set(GSPL_SDL2_VERSION "2.30.9" CACHE STRING "SDL2 version for fetch")
+    FetchContent_Declare(gspl_sdl2
+      URL "https://github.com/libsdl-org/SDL/releases/download/release-${GSPL_SDL2_VERSION}/SDL2-devel-${GSPL_SDL2_VERSION}-VC.zip"
+      DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    )
+    FetchContent_GetProperties(gspl_sdl2)
+    if(NOT gspl_sdl2_POPULATED)
+      FetchContent_Populate(gspl_sdl2)
+    endif()
+    set(SDL2_INCLUDE_DIR "${gspl_sdl2_SOURCE_DIR}/include" CACHE PATH "SDL2 include")
+    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+      set(SDL2_LIBRARY "${gspl_sdl2_SOURCE_DIR}/lib/x64/SDL2.lib" CACHE FILEPATH "SDL2 import")
+      set(SDL2_MAIN_LIBRARY "${gspl_sdl2_SOURCE_DIR}/lib/x64/SDL2main.lib" CACHE FILEPATH "SDL2main import")
+      set(SDL2_DLL "${gspl_sdl2_SOURCE_DIR}/lib/x64/SDL2.dll" CACHE FILEPATH "SDL2 runtime")
+    else()
+      set(SDL2_LIBRARY "${gspl_sdl2_SOURCE_DIR}/lib/x86/SDL2.lib" CACHE FILEPATH "SDL2 import")
+      set(SDL2_MAIN_LIBRARY "${gspl_sdl2_SOURCE_DIR}/lib/x86/SDL2main.lib" CACHE FILEPATH "SDL2main import")
+      set(SDL2_DLL "${gspl_sdl2_SOURCE_DIR}/lib/x86/SDL2.dll" CACHE FILEPATH "SDL2 runtime")
+    endif()
+    message(STATUS "SDL2 fetch: checking ${SDL2_LIBRARY}")
+    if(EXISTS "${SDL2_LIBRARY}")
+      add_library(SDL2::SDL2 SHARED IMPORTED GLOBAL)
+      set_target_properties(SDL2::SDL2 PROPERTIES
+        IMPORTED_LOCATION "${SDL2_DLL}"
+        IMPORTED_IMPLIB "${SDL2_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES "${SDL2_INCLUDE_DIR}")
+      add_library(SDL2::SDL2main STATIC IMPORTED GLOBAL)
+      set_target_properties(SDL2::SDL2main PROPERTIES
+        IMPORTED_LOCATION "${SDL2_MAIN_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES "${SDL2_INCLUDE_DIR}")
+      set(SDL2_FOUND TRUE)
+      message(STATUS "SDL2 ${GSPL_SDL2_VERSION} fetched from GitHub (zlib license)")
+    else()
+      message(WARNING "SDL2 fetch: downloaded but library not found at ${SDL2_LIBRARY}")
+    endif()
+  endif()
+  if(NOT SDL2_FOUND)
+    find_package(SDL2 QUIET)
+  endif()
   if(SDL2_FOUND)
     add_executable(gspl_sprites_preview src/preview.cpp)
-    target_link_libraries(gspl_sprites_preview PRIVATE gspl_sprites_core SDL2::SDL2)
+    target_link_libraries(gspl_sprites_preview PRIVATE gspl_sprites_core SDL2::SDL2 SDL2::SDL2main)
     target_compile_definitions(gspl_sprites_preview PRIVATE GSPL_SPRITES_HAS_SDL2)
+    if(GSPL_FETCH_SDL2 AND DEFINED SDL2_DLL AND EXISTS "${SDL2_DLL}")
+      add_custom_command(TARGET gspl_sprites_preview POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${SDL2_DLL}" "$<TARGET_FILE_DIR:gspl_sprites_preview>")
+    endif()
   else()
     message(STATUS "SDL2 not found — preview target will build as a headless functional test")
     add_executable(gspl_sprites_preview src/preview.cpp)
