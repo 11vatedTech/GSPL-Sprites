@@ -832,7 +832,19 @@ static void generate_visual_evidence(const std::filesystem::path& dir, const std
   render_sprite_ir(vf, act, vc / "voltfox-action.png", "voltfox", "clean-flat", "base", "action");
   VisualCompileOptions storm = opts; storm.form_id = "storm";
   render_sprite_ir(vf, storm, vc / "voltfox-storm.png", "voltfox", "clean-flat", "storm", "idle");
+  // Transformation: storm form + soft-shaded style + a REAL ascending pose so
+  // the frame is a genuine distinct manifestation (storm palette also recolors
+  // the role-driven eye parts under clean-flat; the pose guarantees the panel
+  // never collapses byte-identical to the static soft-shaded panel).
   VisualCompileOptions trans = opts; trans.form_id = "storm"; trans.style_preset = "soft-shaded";
+  PerformanceState tperf;
+  PartMotion ul; ul.part_id = "left_leg"; ul.dy = 4.0; ul.rotation_degrees = 10.0;
+  PartMotion ur; ur.part_id = "right_leg"; ur.dy = 4.0; ur.rotation_degrees = -10.0;
+  PartMotion ut; ut.part_id = "tail"; ut.rotation_degrees = -20.0; ut.dx = 2.0;
+  PartMotion uh; uh.part_id = "head"; uh.dy = 2.0; uh.rotation_degrees = 4.0;
+  tperf.motions.push_back(ul); tperf.motions.push_back(ur);
+  tperf.motions.push_back(ut); tperf.motions.push_back(uh);
+  trans.performance = &tperf;
   render_sprite_ir(vf, trans, vc / "voltfox-transformation.png", "voltfox", "soft-shaded", "storm", "ascending");
   for (const char* st : {"inked", "soft-shaded", "pixel-constrained"}) {
     VisualCompileOptions o = opts; o.style_preset = st;
