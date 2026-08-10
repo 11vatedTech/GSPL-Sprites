@@ -202,6 +202,18 @@ add_library(gspl_sprites_core
    src/morphology.cpp
    src/control.cpp
    src/viewer_model.cpp
+   src/visual_geometry.cpp
+   src/visual_common.cpp
+   src/markings.cpp
+   src/visual_morphology.cpp
+   src/palette.cpp
+   src/style.cpp
+   src/material.cpp
+   src/performance.cpp
+   src/visual_ir.cpp
+   src/visual_compiler.cpp
+   src/visual_raster.cpp
+   src/visual_metrics.cpp
 )
 if(GSPL_CORE_ONLY)
   target_sources(gspl_sprites_core PRIVATE src/inference_stub.cpp)
@@ -469,7 +481,7 @@ add_test(NAME gspl_sprites_living_package_tests
 # atlas and runs CLI subprocess checks; a single Debug run is ~100 s locally.
 # Give it headroom beyond the default gate timeout so a loaded CI/OneDrive
 # machine does not kill it mid-run (it must still complete fully to pass).
-set_tests_properties(gspl_sprites_living_package_tests PROPERTIES TIMEOUT 300)
+set_tests_properties(gspl_sprites_living_package_tests PROPERTIES TIMEOUT 600)
 
 # ── Semantic-to-visual spine tests (authority + viewer) ──
 add_executable(gspl_sprites_semantic_spine_tests tests/semantic_spine_tests.cpp)
@@ -644,6 +656,15 @@ add_test(NAME gspl_sprites_git_ext_tests COMMAND gspl_sprites_git_ext_tests)
 add_executable(gspl_sprites_diff_parser_tests tests/studio/diff_parser_tests.cpp)
 target_link_libraries(gspl_sprites_diff_parser_tests PRIVATE gspl_sprites_core)
 add_test(NAME gspl_sprites_diff_parser_tests COMMAND gspl_sprites_diff_parser_tests)
+
+# Native Visual Core tests
+add_executable(gspl_sprites_visual_geometry_tests tests/visual_geometry_tests.cpp)
+target_link_libraries(gspl_sprites_visual_geometry_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_visual_geometry_tests COMMAND gspl_sprites_visual_geometry_tests)
+
+add_executable(gspl_sprites_visual_core_tests tests/visual_core_tests.cpp)
+target_link_libraries(gspl_sprites_visual_core_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_visual_core_tests COMMAND gspl_sprites_visual_core_tests)
 
 # Sample plugin (optional, built as a shared library when requested)
 option(GSPL_BUILD_SAMPLE_PLUGIN "Build the sample GSPL plugin" OFF)
