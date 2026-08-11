@@ -11,6 +11,11 @@
 
 namespace gspl::sprites::visual {
 
+struct VisualCanon;
+struct PerformanceIntent;
+struct KeyPose;
+struct StyleProgram;
+
 /* ── Visual Semantic Compiler ──
  * Production SpriteIr + form + style context + performance state
  * -> Canonical Visual IR. This is where high-level semantics become
@@ -26,6 +31,12 @@ struct VisualCompileOptions {
   std::string style_preset;                  // optional named preset
   std::vector<StylePatch> style_patches;     // deterministic precedence order
   const PerformanceState* performance{nullptr};
+  // Visual Intelligence inputs (all optional; compose through the same
+  // sealed pipeline when present):
+  const VisualCanon* canon{nullptr};         // canon-driven morphology + enforcement
+  const PerformanceIntent* intent{nullptr};  // semantic intent -> performance state
+  const KeyPose* key_pose{nullptr};          // key pose (requires intent)
+  const StyleProgram* style_program{nullptr};// factorized style program
   std::string projection_kind{"2d"};
   std::span<const ChannelRequest> channel_requests{};
 };

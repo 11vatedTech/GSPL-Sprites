@@ -1,4 +1,7 @@
 #include "gspl_sprites/morphology.hpp"
+#include "gspl_sprites/performance_intent.hpp"
+#include "gspl_sprites/style_program.hpp"
+#include "gspl_sprites/visual_canon.hpp"
 #include "gspl_sprites/visual_compiler.hpp"
 
 #include <algorithm>
@@ -48,43 +51,118 @@ VisualIrResult compile_visual_ir(const SpriteIr& ir, const VisualCompileOptions&
     form_id = ir.form_definitions.front().name;
   }
 
-  // 1. Resolve v1 morphology for the form (sealed semantics).
-  MorphologyMap v1 = resolve_form_morphology_ir(ir, form_id, diag);
-  if (v1.empty()) {
-    diag.diagnostics.push_back({"VISUAL_MORPHOLOGY_EMPTY",
-        "no morphology for form '" + form_id + "'"});
-    return result;
-  }
-
-  // 2. Lower to Visual Morphology v2 (deterministic compatibility path).
-  VisualMorphologyV2 morph = lower_visual_morphology_v1(v1, form_id);
-
-  // 3. Form palette: base form uses entity colors; derived forms use the
-  //    alternate (storm) palette when defined. Data-driven, no name fixed.
-  const bool base = is_base_form(ir, options.form_id.empty() ? std::string_view{} : std::string_view(form_id));
-  PaletteDefinition palette;
-  if (base) {
-    palette = make_default_palette(ir.primary_color, ir.accent_color, ir.emissive_color, ir.aura_color);
+  // 1. Resolve v1 morphology for the form (sealed semantics) when no
+  //    VisualCanon is supplied; a canon drives construction instead.
+  MorphologyMap v1;
+  bool canon_driven = false;
+  std::string canon_identity;
+  if (options.canon) {
+    // Canon-driven construction: validated above in the caller or here.
+    canon_driven = true;
+    const ValidationResult canon_check = validate_visual_canon(*options.canon);
+    for (const auto& d : canon_check.diagnostics) diag.diagnostics.push_back(d);
+    if (!canon_check.ok()) return result;
   } else {
-    const std::string p = !ir.storm_primary_color.empty() ? ir.storm_primary_color : ir.accent_color;
-    const std::string a = !ir.storm_accent_color.empty() ? ir.storm_accent_color : ir.primary_color;
-    palette = make_transformed_palette(p, a, ir.emissive_color, ir.aura_color);
+    v1 = resolve_form_morphology_ir(ir, form_id, diag);
+    if (v1.empty()) {
+      diag.diagnostics.push_back({"VISUAL_MORPHOLOGY_EMPTY",
+          "no morphology for form '" + form_id + "'"});
+      return result;
+    }
   }
-  palette.form_id = form_id;
 
-  // 4. Effective style: preset (if any) composed with explicit patches.
-  StyleSemantics style = options.style_preset.empty()
-      ? StyleSemantics{}
-      : make_style_preset(options.style_preset);
-  style = compose_style(style, options.style_patches);
+  // 2. Morphology: canon-driven (Visual Morphology v2 construction) or the
+  //    deterministic v1 -> v2 compatibility lowering. Canon coordinates are
+  //    authored in raster projection units (position x3 px, size x1.5 px);
+  //    body_scale is 1.0 for the sealed projection contract.
+  VisualMorphologyV2 morph = canon_driven
+      ? canon_to_morphology(*options.canon, form_id, 1.0)
+      : lower_visual_morphology_v1(v1, form_id);
 
-  // 5. Performance: bake motions and impact into part transforms.
+  // 2b. Canon-driven identity invariants validate the CANONICAL construction
+  //     before any pose/performance application: identity is a property of
+  //     what the entity is, enforced by check_identity_invariants here;
+  //     how far a pose may deviate is bounded separately by the deformation
+  //     envelopes (step 5). Hard invariant failures fail closed.
+  if (canon_driven) {
+    const ValidationResult inv = check_identity_invariants(*options.canon, morph);
+    for (const auto& d : inv.diagnostics) diag.diagnostics.push_back(d);
+    if (!inv.ok()) return result;
+  }
+
+  // 3. Form palette: canon palettes when canon-driven; otherwise the sealed
+  //    base/derived palette decision (data-driven, no name fixed).
+  PaletteDefinition palette;
+  if (canon_driven) {
+    palette.schema = "gspl.palette/0.1";
+    for (const auto& [role, hex] : options.canon->base_palette) {
+      if (const auto c = parse_hex_color(hex)) palette.colors[role] = *c;
+    }
+    const auto fit = options.canon->form_palettes.find(form_id);
+    if (fit != options.canon->form_palettes.end()) {
+      for (const auto& [role, hex] : fit->second) {
+        if (const auto c = parse_hex_color(hex)) palette.colors[role] = *c;
+      }
+    }
+    palette.form_id = form_id;
+  } else {
+    const bool base = is_base_form(ir, options.form_id.empty() ? std::string_view{} : std::string_view(form_id));
+    if (base) {
+      palette = make_default_palette(ir.primary_color, ir.accent_color, ir.emissive_color, ir.aura_color);
+    } else {
+      const std::string p = !ir.storm_primary_color.empty() ? ir.storm_primary_color : ir.accent_color;
+      const std::string a = !ir.storm_accent_color.empty() ? ir.storm_accent_color : ir.primary_color;
+      palette = make_transformed_palette(p, a, ir.emissive_color, ir.aura_color);
+    }
+    palette.form_id = form_id;
+  }
+
+  // 4. Effective style: factorized StyleProgram wins over preset+patches;
+  //    both paths lower deterministically to StyleSemantics.
+  StyleSemantics style;
+  if (options.style_program) {
+    style = effective_style(*options.style_program);
+  } else {
+    style = options.style_preset.empty()
+        ? StyleSemantics{}
+        : make_style_preset(options.style_preset);
+    style = compose_style(style, options.style_patches);
+  }
+
+  // 5. Performance: semantic intent (with optional key pose) lowers to the
+  //    PerformanceState consumed below; a direct state still wins if given.
   PerformanceState perf;
-  if (options.performance) perf = *options.performance;
+  if (options.performance) {
+    perf = *options.performance;
+  } else if (options.intent) {
+    perf = pose_to_performance_state(*options.intent, options.key_pose);
+    // Canon-driven deformation enforcement: clamp motions per envelope;
+    // hard-boundary violations fail closed.
+    if (canon_driven) {
+      const double expression_factor =
+          perf.expression_intent.empty() ? 0.0 : 0.5;
+      const ValidationResult env = enforce_deformation_envelopes(
+          *options.canon, perf,
+          perf.action_phase, expression_factor, 1.0, canon_driven ? 1.0 : 0.0);
+      // Deviation beyond 'allowed' is clamped in-place (permitted, per the
+      // envelope contract) and reported only as an informational note; only
+      // hard-boundary / rigid violations are identity-critical and fail
+      // closed. Informational notes never poison VisualIrResult::ok().
+      bool identity_violation = false;
+      for (const auto& d : env.diagnostics) {
+        if (d.code == "DEFORMATION_HARD_VIOLATION" || d.code == "DEFORMATION_RIGID_VIOLATION") {
+          identity_violation = true;
+          diag.diagnostics.push_back(d);
+        }
+      }
+      if (identity_violation) return result;
+    }
+  }
+  // Apply the effective performance state (direct state or intent-derived)
+  // to the constructed morphology. Default state has no motions and zero
+  // impact, so this is a no-op when no performance is supplied.
   for (auto& [id, part] : morph.parts) {
-    if (!options.performance) continue;
-    const PerformanceState& p = *options.performance;
-    for (const PartMotion& m : p.motions) {
+    for (const PartMotion& m : perf.motions) {
       if (m.part_id != id) continue;
       part.x += m.dx;
       part.y += m.dy;
@@ -93,8 +171,8 @@ VisualIrResult compile_visual_ir(const SpriteIr& ir, const VisualCompileOptions&
       part.size_y *= m.scale_y;
       if (m.opacity > 0.0) part.opacity = m.opacity;
     }
-    const double squash = 1.0 - p.impact * 0.15;
-    const double stretch = 1.0 + p.impact * 0.15;
+    const double squash = 1.0 - perf.impact * 0.15;
+    const double stretch = 1.0 + perf.impact * 0.15;
     part.size_x *= squash;
     part.size_y *= stretch;
   }
@@ -142,12 +220,19 @@ VisualIrResult compile_visual_ir(const SpriteIr& ir, const VisualCompileOptions&
     ir_out.channel_requests.assign(options.channel_requests.begin(), options.channel_requests.end());
   }
 
-  // 8. Visual manifestation identity (binds entity + form + sealed v1 morphology).
+  // 8. Visual manifestation identity (binds entity + form + sealed v1
+  //    morphology or the canon-driven construction).
   {
     std::string seed_part = ir.seed_identity.empty() ? ir.entity_id : ir.seed_identity;
-    const std::string morph_canon = gspl::sprites::canonicalize_morphology_map(v1);
-    ir_out.entity_identity = gspl::sprites::sha256(
-        seed_part + "|" + ir.entity_id + "|" + form_id + "|" + morph_canon);
+    if (canon_driven) {
+      canon_identity = visual_canon_identity(*options.canon);
+      ir_out.entity_identity = gspl::sprites::sha256(
+          seed_part + "|" + ir.entity_id + "|" + form_id + "|canon|" + canon_identity);
+    } else {
+      const std::string morph_canon = gspl::sprites::canonicalize_morphology_map(v1);
+      ir_out.entity_identity = gspl::sprites::sha256(
+          seed_part + "|" + ir.entity_id + "|" + form_id + "|" + morph_canon);
+    }
   }
 
   result.value = std::move(ir_out);

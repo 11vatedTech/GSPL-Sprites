@@ -214,6 +214,14 @@ add_library(gspl_sprites_core
    src/visual_compiler.cpp
    src/visual_raster.cpp
    src/visual_metrics.cpp
+   src/visual_canon.cpp
+   src/visual_canon_fixtures.cpp
+   src/performance_intent.cpp
+   src/style_program.cpp
+   src/temporal_identity.cpp
+   src/fx_semantics.cpp
+   src/cinematic.cpp
+   src/visual_quality.cpp
 )
 if(GSPL_CORE_ONLY)
   target_sources(gspl_sprites_core PRIVATE src/inference_stub.cpp)
@@ -665,6 +673,12 @@ add_test(NAME gspl_sprites_visual_geometry_tests COMMAND gspl_sprites_visual_geo
 add_executable(gspl_sprites_visual_core_tests tests/visual_core_tests.cpp)
 target_link_libraries(gspl_sprites_visual_core_tests PRIVATE gspl_sprites_core)
 add_test(NAME gspl_sprites_visual_core_tests COMMAND gspl_sprites_visual_core_tests)
+
+# Visual Intelligence tests (VisualCanon, invariants, performance intent,
+# style programs, temporal identity, FX, cinematic, quality diagnostics)
+add_executable(gspl_sprites_visual_intelligence_tests tests/visual_intelligence_tests.cpp)
+target_link_libraries(gspl_sprites_visual_intelligence_tests PRIVATE gspl_sprites_core)
+add_test(NAME gspl_sprites_visual_intelligence_tests COMMAND gspl_sprites_visual_intelligence_tests)
 
 # Sample plugin (optional, built as a shared library when requested)
 option(GSPL_BUILD_SAMPLE_PLUGIN "Build the sample GSPL plugin" OFF)
