@@ -156,7 +156,9 @@ static void test_canon_validation() {
   }
   {  // invariant referencing a hard boundary that is not finite
     VisualCanon c = make_voltfox_canon();
-    c.deformation_envelopes.at("torso").hard_boundary = std::numeric_limits<double>::infinity();
+    c.deformation_envelopes.at("torso").hard_translation = std::numeric_limits<double>::infinity();
+    c.deformation_envelopes.at("torso").hard_rotation    = std::numeric_limits<double>::infinity();
+    c.deformation_envelopes.at("torso").hard_scale        = std::numeric_limits<double>::infinity();
     check_fail(check_identity_invariants(c, canon_to_morphology(c, "base")),
                "hard_boundary invariant fails when envelope boundary is infinite");
   }

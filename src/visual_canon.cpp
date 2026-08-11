@@ -5,6 +5,7 @@
 #include <charconv>
 #include <cmath>
 #include <cstring>
+
 #include <limits>
 #include <set>
 #include <sstream>
@@ -37,7 +38,25 @@ void add_diag(ValidationResult& r, std::string code, std::string msg) {
   return true;
 }
 
-[[nodiscard]] bool parse_bool(std::string_view s) { return s == "true" || s == "1"; }
+// Strict boolean parsing: only true/false/1/0 are accepted. Malformed
+// values are rejected (caller fails the parse) instead of silently
+// interpreting unknown spellings as false.
+[[nodiscard]] std::optional<bool> parse_bool_strict(std::string_view s) {
+  if (s == "true" || s == "1") return true;
+  if (s == "false" || s == "0") return false;
+  return std::nullopt;
+}
+
+// Strict unsigned integer parsing via from_chars: no partial strtoul
+// acceptance, no negative wrap.
+[[nodiscard]] bool parse_uint_strict(std::string_view s, std::uint32_t& out) {
+  if (s.empty() || s.size() > 10) return false;
+  std::uint32_t v{};
+  const auto res = std::from_chars(s.data(), s.data() + s.size(), v, 10);
+  if (res.ec != std::errc{} || res.ptr != s.data() + s.size()) return false;
+  out = v;
+  return true;
+}
 
 struct MeasureParts {
   std::string kind;
@@ -269,6 +288,60 @@ std::optional<IdentityInvariantKind> identity_invariant_kind_from_name(std::stri
   return std::nullopt;
 }
 
+/* ── construction constraint enum tables ── */
+
+std::string_view construction_axis_name(ConstructionAxis axis) noexcept {
+  switch (axis) {
+    case ConstructionAxis::x: return "x";
+    case ConstructionAxis::y: return "y";
+    case ConstructionAxis::z: return "z";
+  }
+  return "x";
+}
+
+std::optional<ConstructionAxis> construction_axis_from_name(std::string_view name) noexcept {
+  if (name == "x") return ConstructionAxis::x;
+  if (name == "y") return ConstructionAxis::y;
+  if (name == "z") return ConstructionAxis::z;
+  return std::nullopt;
+}
+
+std::string_view construction_kind_name(ConstructionConstraintKind kind) noexcept {
+  switch (kind) {
+    case ConstructionConstraintKind::anchor: return "anchor";
+    case ConstructionConstraintKind::size_ratio: return "size_ratio";
+    case ConstructionConstraintKind::symmetry: return "symmetry";
+    case ConstructionConstraintKind::orientation: return "orientation";
+    case ConstructionConstraintKind::chain: return "chain";
+  }
+  return "size_ratio";
+}
+
+std::optional<ConstructionConstraintKind> construction_kind_from_name(std::string_view name) noexcept {
+  if (name == "anchor") return ConstructionConstraintKind::anchor;
+  if (name == "size_ratio") return ConstructionConstraintKind::size_ratio;
+  if (name == "symmetry") return ConstructionConstraintKind::symmetry;
+  if (name == "orientation") return ConstructionConstraintKind::orientation;
+  if (name == "chain") return ConstructionConstraintKind::chain;
+  return std::nullopt;
+}
+
+std::string_view invariant_severity_name(InvariantSeverity severity) noexcept {
+  switch (severity) {
+    case InvariantSeverity::advisory: return "advisory";
+    case InvariantSeverity::soft: return "soft";
+    case InvariantSeverity::hard: return "hard";
+  }
+  return "hard";
+}
+
+std::optional<InvariantSeverity> invariant_severity_from_name(std::string_view name) noexcept {
+  if (name == "advisory") return InvariantSeverity::advisory;
+  if (name == "soft") return InvariantSeverity::soft;
+  if (name == "hard") return InvariantSeverity::hard;
+  return std::nullopt;
+}
+
 /* ── measure helpers ── */
 
 std::string make_landmark_dist_measure(std::string_view a, std::string_view b) {
@@ -339,6 +412,48 @@ ValidationResult validate_visual_canon(const VisualCanon& canon, const CanonLimi
     }
   }
 
+  // Construction constraints: refs, finite bounds, determinism.
+  if (canon.construction.size() > limits.max_construction)
+    add_diag(r, "CANON_CONSTRUCTION_LIMIT", "too many construction constraints");
+  for (const auto& c : canon.construction) {
+    if (c.id.empty()) add_diag(r, "CANON_CONSTRUCTION_NO_ID", "construction constraint without id");
+    if (c.structure.empty() || !canon.structures.count(c.structure))
+      add_diag(r, "CANON_CONSTRUCTION_DANGLING_TARGET",
+               "construction constraint '" + c.id + "' target missing");
+    if (c.reference.empty() || !canon.structures.count(c.reference))
+      add_diag(r, "CANON_CONSTRUCTION_DANGLING_REF",
+               "construction constraint '" + c.id + "' reference missing");
+    if (c.kind == ConstructionConstraintKind::symmetry &&
+        canon.structures.count(c.structure) && canon.structures.count(c.reference) &&
+        canon.structures.at(c.structure).parent != canon.structures.at(c.reference).parent)
+      add_diag(r, "CANON_CONSTRUCTION_SYMMETRY_PARENT",
+               "symmetry constraint '" + c.id + "' requires shared parent");
+    if (is_nan_or_inf(c.factor) || is_nan_or_inf(c.offset))
+      add_diag(r, "CANON_CONSTRUCTION_NONFINITE", "nonfinite bound on constraint '" + c.id + "'");
+    if (c.kind == ConstructionConstraintKind::size_ratio && c.factor <= 0.0)
+      add_diag(r, "CANON_CONSTRUCTION_BAD_FACTOR", "size_ratio factor must be positive on '" + c.id + "'");
+    if (!c.scope.empty() && c.scope.rfind("form:", 0) != 0)
+      add_diag(r, "CANON_CONSTRUCTION_BAD_SCOPE", "construction scope must be 'form:<id>' on '" + c.id + "'");
+  }
+  // Cycle detection over size_ratio chains (a -> b -> a): unbounded solve.
+  {
+    std::map<std::string, int, std::less<>> state;
+    bool cycle = false;
+    const auto visit = [&](std::string cur, auto&& self) -> void {
+      if (cycle) return;
+      auto st = state.find(cur);
+      if (st != state.end() && st->second == 1) { cycle = true; return; }
+      state[cur] = 1;
+      for (const auto& c : canon.construction)
+        if (c.kind == ConstructionConstraintKind::size_ratio && c.reference == cur)
+          self(c.structure, self);
+      state[cur] = 2;
+    };
+    for (const auto& c : canon.construction)
+      if (c.kind == ConstructionConstraintKind::size_ratio) visit(c.structure, visit);
+    if (cycle) add_diag(r, "CANON_CONSTRUCTION_CYCLE", "size_ratio cycle detected");
+  }
+
   // Proportions.
   for (const auto& p : canon.proportions) {
     if (p.id.empty()) add_diag(r, "CANON_PROPORTION_NO_ID", "proportion without id");
@@ -353,6 +468,14 @@ ValidationResult validate_visual_canon(const VisualCanon& canon, const CanonLimi
     if (!(p.deformation_min <= p.min && p.max <= p.deformation_max))
       add_diag(r, "CANON_PROPORTION_BAD_DEFORMATION_RANGE",
                "deformation range must contain [min,max] in '" + p.id + "'");
+    if (!p.derived.empty()) {
+      const auto parts = split_measure(p.derived);
+      if (!parts || parts->kind != "size" || parts->args.size() != 2 ||
+          !canon.structures.count(parts->args[0]) ||
+          (parts->args[1] != "size_x" && parts->args[1] != "size_y" && parts->args[1] != "size_z"))
+        add_diag(r, "CANON_PROPORTION_BAD_DERIVED",
+                 "proportion '" + p.id + "' derived must be size:<part>:<axis>");
+    }
   }
 
   // Landmarks.
@@ -422,23 +545,31 @@ ValidationResult validate_visual_canon(const VisualCanon& canon, const CanonLimi
     if (!canon.structures.count(a.structure_ref))
       add_diag(r, "CANON_ATTACHMENT_DANGLING", "attachment '" + a.id + "' structure missing");
 
-  // Deformation envelopes.
+  // Deformation envelopes: typed per-axis bounds (dimensional correctness).
   for (const auto& [id, e] : canon.deformation_envelopes) {
     if (!canon.structures.count(e.structure_id))
       add_diag(r, "CANON_ENVELOPE_DANGLING", "envelope '" + id + "' structure missing");
-    if (is_nan_or_inf(e.canonical_value) || is_nan_or_inf(e.allowed_deviation) ||
-        is_nan_or_inf(e.action_scale) || is_nan_or_inf(e.expression_scale) ||
-        is_nan_or_inf(e.style_scale) || is_nan_or_inf(e.transformation_scale) ||
-        is_nan_or_inf(e.hard_boundary))
+    const bool finite_all = is_nan_or_inf(e.allowed_deviation) ||
+        is_nan_or_inf(e.allowed_translation) || is_nan_or_inf(e.allowed_rotation) ||
+        is_nan_or_inf(e.allowed_scale);
+    const bool finite_hard = is_nan_or_inf(e.hard_translation) ||
+        is_nan_or_inf(e.hard_rotation) || is_nan_or_inf(e.hard_scale);
+    if (finite_all || is_nan_or_inf(e.action_scale) || is_nan_or_inf(e.expression_scale) ||
+        is_nan_or_inf(e.style_scale) || is_nan_or_inf(e.transformation_scale) || finite_hard)
       add_diag(r, "CANON_ENVELOPE_NONFINITE", "envelope '" + id + "' nonfinite");
-    if (e.allowed_deviation < 0.0)
+    if (e.allowed_deviation < 0.0 || e.allowed_translation < 0.0 ||
+        e.allowed_rotation < 0.0 || e.allowed_scale < 0.0)
       add_diag(r, "CANON_ENVELOPE_NEGATIVE_ALLOWED", "envelope '" + id + "' negative allowed");
     if (e.action_scale < 0.0 || e.expression_scale < 0.0 || e.style_scale < 0.0 ||
         e.transformation_scale < 0.0)
       add_diag(r, "CANON_ENVELOPE_NEGATIVE_SCALE", "envelope '" + id + "' negative scale");
-    if (!(e.allowed_deviation <= e.hard_boundary))
+    const double eff_allowed_t = e.allowed_translation > 0.0 ? e.allowed_translation : e.allowed_deviation;
+    const double eff_allowed_r = e.allowed_rotation > 0.0 ? e.allowed_rotation : e.allowed_deviation;
+    const double eff_allowed_s = e.allowed_scale > 0.0 ? e.allowed_scale : e.allowed_deviation;
+    if (!(eff_allowed_t <= e.hard_translation && eff_allowed_r <= e.hard_rotation &&
+          eff_allowed_s <= e.hard_scale))
       add_diag(r, "CANON_ENVELOPE_BOUNDARY_ORDER",
-               "envelope '" + id + "' allowed must not exceed hard boundary");
+               "envelope '" + id + "' allowed must not exceed hard boundary per axis");
   }
 
   // Resolution features.
@@ -489,6 +620,196 @@ ValidationResult validate_visual_canon(const VisualCanon& canon, const CanonLimi
       if (!parse_hex_color(hex))
         add_diag(r, "CANON_PALETTE_BAD_HEX", "form palette " + form + "/" + role + " bad hex");
 
+  return r;
+}
+
+/* ── structural chain ── */
+
+std::vector<std::string> structural_chain(const VisualCanon& canon, std::string_view structure_id) {
+  std::vector<std::string> out;
+  const auto sit = canon.structures.find(std::string(structure_id));
+  if (sit == canon.structures.end()) return out;
+  std::string cur = sit->second.parent;
+  while (!cur.empty()) {
+    out.push_back(cur);
+    const auto it = canon.structures.find(cur);
+    if (it == canon.structures.end()) break;
+    cur = it->second.parent;
+  }
+  return out;
+}
+
+/* ── relational construction solver (internal shared impl) ── */
+
+namespace {
+
+// Solved geometry: the derived structure table used by construction.
+struct SolvedGeom {
+  std::map<std::string, double, std::less<>> x, y, z;
+  std::map<std::string, double, std::less<>> sx, sy, sz;
+  std::map<std::string, double, std::less<>> rot;
+};
+
+[[nodiscard]] double* axis_pos(SolvedGeom& g, ConstructionAxis a, const std::string& id) {
+  switch (a) {
+    case ConstructionAxis::x: return &g.x[id];
+    case ConstructionAxis::y: return &g.y[id];
+    case ConstructionAxis::z: return &g.z[id];
+  }
+  return &g.x[id];
+}
+
+[[nodiscard]] double* axis_size(SolvedGeom& g, ConstructionAxis a, const std::string& id) {
+  switch (a) {
+    case ConstructionAxis::x: return &g.sx[id];
+    case ConstructionAxis::y: return &g.sy[id];
+    case ConstructionAxis::z: return &g.sz[id];
+  }
+  return &g.sx[id];
+}
+
+// Core deterministic solve. Returns false (with diagnostics) on
+// contradictory hard constraints or cycle runaway; the geometry table is
+// left populated with the deterministic result either way.
+[[nodiscard]] bool solve_construction_impl(const VisualCanon& canon, std::string_view form_id,
+                                           SolvedGeom& g, ValidationResult& r) {
+  // Seed from absolute coordinates: classified projection hints/root anchors.
+  for (const auto& [id, s] : canon.structures) {
+    g.x[id] = s.x; g.y[id] = s.y; g.z[id] = s.z;
+    g.sx[id] = s.size_x; g.sy[id] = s.size_y; g.sz[id] = s.size_z;
+    g.rot[id] = s.rotation_degrees;
+  }
+
+  // Deterministic order: constraints sorted by id, then target.
+  std::vector<const ConstructionConstraint*> order;
+  for (const auto& c : canon.construction)
+    if (c.scope.empty() || c.scope == "form:" + std::string(form_id)) order.push_back(&c);
+  std::sort(order.begin(), order.end(), [](const ConstructionConstraint* a, const ConstructionConstraint* b) {
+    if (a->id != b->id) return a->id < b->id;
+    return a->structure < b->structure;
+  });
+
+  struct HardSet { bool set{}; double value{}; };
+  std::map<std::pair<std::string, std::string>, HardSet, std::less<>> hard_state;
+
+  const auto try_hard = [&](const std::string& id, const std::string& dim, double value,
+                            const std::string& cid) -> bool {
+    auto key = std::make_pair(id, dim);
+    auto it = hard_state.find(key);
+    if (it != hard_state.end() && it->second.set) {
+      if (std::abs(it->second.value - value) > 1e-9) {
+        add_diag(r, "CONSTRUCTION_HARD_CONTRADICTION",
+                 "hard constraint '" + cid + "' conflicts on " + id + " axis " + dim);
+        return false;
+      }
+      return true;
+    }
+    hard_state[key] = {true, value};
+    return true;
+  };
+  const auto dim_of = [](ConstructionAxis a) -> std::string {
+    return std::string(1, a == ConstructionAxis::x ? 'x' : (a == ConstructionAxis::y ? 'y' : 'z'));
+  };
+
+  // size_ratio pass: explicit construction constraints first.
+  for (std::size_t pass = 0; pass < canon.structures.size() + 1; ++pass) {
+    bool changed = false;
+    for (const ConstructionConstraint* cp : order) {
+      const ConstructionConstraint& c = *cp;
+      if (c.kind != ConstructionConstraintKind::size_ratio) continue;
+      double* out = axis_size(g, c.axis, c.structure);
+      const double base = *axis_size(g, c.axis, c.reference);
+      const double value = base * c.factor + c.offset;
+      if (std::abs(*out - value) > 1e-12) { *out = value; changed = true; }
+      if (c.hard && !try_hard(c.structure, dim_of(c.axis), value, c.id)) return false;
+    }
+    if (!changed) break;
+  }
+
+  // Generative proportion pass: rules with `derived` (size:<part>:<axis>)
+  // construct the target as denominator * preferred. This makes proportions
+  // CAUSAL: changing `preferred` changes the constructed geometry. The
+  // denominator may itself be derived (chained, deterministic fixed point).
+  for (std::size_t pass = 0; pass < canon.structures.size() + 1; ++pass) {
+    bool changed = false;
+    for (const auto& p : canon.proportions) {
+      if (p.derived.empty()) continue;
+      if (!p.scope.empty() && p.scope != "form:" + std::string(form_id)) continue;
+      const auto parts = split_measure(p.derived);
+      if (!parts || parts->kind != "size" || parts->args.size() != 2) continue;
+      const std::string& target = parts->args[0];
+      const std::string& axis = parts->args[1];
+      const ConstructionAxis ax = axis == "size_x" ? ConstructionAxis::x
+                                 : (axis == "size_y" ? ConstructionAxis::y : ConstructionAxis::z);
+      const auto den = split_measure(p.denominator);
+      if (!den || den->kind != "size" || den->args.size() != 2) continue;
+      const double base = *axis_size(g, ax, den->args[0]);
+      if (base <= 0.0) continue;  // denominator unresolved yet; next pass
+      const double value = base * p.preferred;
+      double* out = axis_size(g, ax, target);
+      if (std::abs(*out - value) > 1e-12) { *out = value; changed = true; }
+      if (p.derived_hard && !try_hard(target, dim_of(ax), value, "proportion:" + p.id)) return false;
+    }
+    if (!changed) break;
+  }
+
+  // Position/rotation passes: anchor, symmetry, chain, orientation.
+  for (std::size_t pass = 0; pass < canon.structures.size() + 1; ++pass) {
+    bool changed = false;
+    for (const ConstructionConstraint* cp : order) {
+      const ConstructionConstraint& c = *cp;
+      switch (c.kind) {
+        case ConstructionConstraintKind::size_ratio: break;
+        case ConstructionConstraintKind::anchor: {
+          const double value = *axis_pos(g, c.axis, c.reference) + c.offset;
+          if (std::abs(*axis_pos(g, c.axis, c.structure) - value) > 1e-12) {
+            *axis_pos(g, c.axis, c.structure) = value; changed = true;
+          }
+          if (c.hard && !try_hard(c.structure, dim_of(c.axis), value, c.id)) return false;
+          break;
+        }
+        case ConstructionConstraintKind::symmetry: {
+          // Mirror across the shared parent's axis plane: p_target = -p_ref*factor + offset.
+          const double value = -*axis_pos(g, c.axis, c.reference) * c.factor + c.offset;
+          if (std::abs(*axis_pos(g, c.axis, c.structure) - value) > 1e-12) {
+            *axis_pos(g, c.axis, c.structure) = value; changed = true;
+          }
+          if (c.hard && !try_hard(c.structure, dim_of(c.axis), value, c.id)) return false;
+          break;
+        }
+        case ConstructionConstraintKind::chain: {
+          // Extend along axis: p_target = p_ref + size_ref * factor + offset.
+          const double value = *axis_pos(g, c.axis, c.reference)
+                             + *axis_size(g, c.axis, c.reference) * c.factor + c.offset;
+          if (std::abs(*axis_pos(g, c.axis, c.structure) - value) > 1e-12) {
+            *axis_pos(g, c.axis, c.structure) = value; changed = true;
+          }
+          if (c.hard && !try_hard(c.structure, dim_of(c.axis), value, c.id)) return false;
+          break;
+        }
+        case ConstructionConstraintKind::orientation: {
+          const double value = g.rot[c.reference] * c.factor + c.offset;
+          if (std::abs(g.rot[c.structure] - value) > 1e-12) { g.rot[c.structure] = value; changed = true; }
+          if (c.hard && !try_hard(c.structure, "r", value, c.id)) return false;
+          break;
+        }
+      }
+    }
+    if (!changed) break;
+  }
+  return true;
+}
+
+} // namespace
+
+ValidationResult solve_construction_constraints(const VisualCanon& canon, std::string_view form_id) {
+  ValidationResult r;
+  if (!validate_visual_canon(canon).ok()) {
+    add_diag(r, "CONSTRUCTION_UNVALIDATED", "canon fails validation; construction not attempted");
+    return r;
+  }
+  SolvedGeom g;
+  (void)solve_construction_impl(canon, form_id, g, r);
   return r;
 }
 
@@ -553,6 +874,18 @@ std::string canonicalize_visual_canon(const VisualCanon& canon) {
       emit_kv(out, p + "rel." + std::string(relationship_kind_name(rel.kind)), rel.target);
   }
 
+  for (const auto& c : canon.construction) {
+    const std::string k = "construct." + c.id + ".";
+    emit_kv(out, k + "kind", construction_kind_name(c.kind));
+    emit_kv(out, k + "structure", c.structure);
+    emit_kv(out, k + "reference", c.reference);
+    emit_kv(out, k + "axis", construction_axis_name(c.axis));
+    emit_kv(out, k + "factor", d2s(c.factor));
+    emit_kv(out, k + "offset", d2s(c.offset));
+    emit_bool(out, k + "hard", c.hard);
+    emit_kv(out, k + "scope", c.scope);
+  }
+
   for (const auto& p : canon.proportions) {
     const std::string k = "proportion." + p.id + ".";
     emit_kv(out, k + "numerator", p.numerator);
@@ -563,6 +896,8 @@ std::string canonicalize_visual_canon(const VisualCanon& canon) {
     emit_kv(out, k + "deformation_min", d2s(p.deformation_min));
     emit_kv(out, k + "deformation_max", d2s(p.deformation_max));
     emit_bool(out, k + "hard", p.hard);
+    emit_kv(out, k + "derived", p.derived);
+    emit_bool(out, k + "derived_hard", p.derived_hard);
     emit_kv(out, k + "scope", p.scope);
   }
 
@@ -649,13 +984,17 @@ std::string canonicalize_visual_canon(const VisualCanon& canon) {
   for (const auto& [id, e] : canon.deformation_envelopes) {
     const std::string k = "envelope." + id + ".";
     emit_kv(out, k + "structure", e.structure_id);
-    emit_kv(out, k + "canonical", d2s(e.canonical_value));
     emit_kv(out, k + "allowed", d2s(e.allowed_deviation));
+    emit_kv(out, k + "allowed_translation", d2s(e.allowed_translation));
+    emit_kv(out, k + "allowed_rotation", d2s(e.allowed_rotation));
+    emit_kv(out, k + "allowed_scale", d2s(e.allowed_scale));
     emit_kv(out, k + "action", d2s(e.action_scale));
     emit_kv(out, k + "expression", d2s(e.expression_scale));
     emit_kv(out, k + "style", d2s(e.style_scale));
     emit_kv(out, k + "transformation", d2s(e.transformation_scale));
-    emit_kv(out, k + "boundary", d2s(e.hard_boundary));
+    emit_kv(out, k + "hard_translation", d2s(e.hard_translation));
+    emit_kv(out, k + "hard_rotation", d2s(e.hard_rotation));
+    emit_kv(out, k + "hard_scale", d2s(e.hard_scale));
     emit_bool(out, k + "rigid", e.rigid);
     emit_bool(out, k + "volume", e.volume_preserving);
   }
@@ -677,6 +1016,7 @@ std::string canonicalize_visual_canon(const VisualCanon& canon) {
     emit_join(out, k + "refs", inv.refs);
     emit_kv(out, k + "tolerance", d2s(inv.tolerance));
     emit_bool(out, k + "hard", inv.hard);
+    emit_kv(out, k + "severity", invariant_severity_name(inv.severity));
     emit_kv(out, k + "scope", inv.scope);
   }
 
@@ -762,7 +1102,23 @@ std::optional<VisualCanon> parse_visual_canon(std::string_view text, const Canon
       field = kv.path.size() >= 3 ? kv.path[2] : std::string{};
     }
 
-    if (sec == "schema") canon.schema = kv.value;
+    if (sec == "construct") {
+      if (canon.construction.size() >= limits.max_construction) { fail(); break; }
+      auto it = std::find_if(canon.construction.begin(), canon.construction.end(),
+                             [&](const ConstructionConstraint& c) { return c.id == id; });
+      if (it == canon.construction.end()) { canon.construction.push_back({}); it = canon.construction.end() - 1; it->id = id; }
+      double dv{};
+      if (field == "kind") { const auto v = construction_kind_from_name(kv.value); if (!v) fail(); else it->kind = *v; }
+      else if (field == "structure") it->structure = kv.value;
+      else if (field == "reference") it->reference = kv.value;
+      else if (field == "axis") { const auto v = construction_axis_from_name(kv.value); if (!v) fail(); else it->axis = *v; }
+      else if (field == "factor" && parse_double(kv.value, dv)) it->factor = dv;
+      else if (field == "offset" && parse_double(kv.value, dv)) it->offset = dv;
+      else if (field == "hard") { const auto b = parse_bool_strict(kv.value); if (!b) fail(); else it->hard = *b; }
+      else if (field == "scope") it->scope = kv.value;
+      else fail();
+    }
+    else if (sec == "schema") canon.schema = kv.value;
     else if (sec == "entity_id") canon.entity_id = kv.value;
     else if (sec == "name") canon.name = kv.value;
     else if (sec == "rights_class") canon.rights_class = kv.value;
@@ -789,9 +1145,9 @@ std::optional<VisualCanon> parse_visual_canon(std::string_view text, const Canon
       else if (field == "size_y" && parse_double(kv.value, dv)) s.size_y = dv;
       else if (field == "size_z" && parse_double(kv.value, dv)) s.size_z = dv;
       else if (field == "rotation" && parse_double(kv.value, dv)) s.rotation_degrees = dv;
-      else if (field == "z_order") s.z_order = static_cast<std::int32_t>(std::strtol(kv.value.c_str(), nullptr, 10));
-      else if (field == "emissive") s.emissive = parse_bool(kv.value);
-      else if (field == "silhouette_contribution") s.silhouette_contribution = parse_bool(kv.value);
+      else if (field == "z_order") { std::int32_t iv{}; const auto res = std::from_chars(kv.value.data(), kv.value.data() + kv.value.size(), iv, 10); if (res.ec != std::errc{} || res.ptr != kv.value.data() + kv.value.size()) fail(); else s.z_order = iv; }
+      else if (field == "emissive") { const auto b = parse_bool_strict(kv.value); if (!b) fail(); else s.emissive = *b; }
+      else if (field == "silhouette_contribution") { const auto b = parse_bool_strict(kv.value); if (!b) fail(); else s.silhouette_contribution = *b; }
       else if (field == "bone_id") s.bone_id = kv.value;
       else if (field == "socket_id") s.socket_id = kv.value;
       else if (field == "projection_behavior") s.projection_behavior = kv.value;
@@ -815,7 +1171,9 @@ std::optional<VisualCanon> parse_visual_canon(std::string_view text, const Canon
       else if (field == "max" && parse_double(kv.value, dv)) it->max = dv;
       else if (field == "deformation_min" && parse_double(kv.value, dv)) it->deformation_min = dv;
       else if (field == "deformation_max" && parse_double(kv.value, dv)) it->deformation_max = dv;
-      else if (field == "hard") it->hard = parse_bool(kv.value);
+      else if (field == "hard") { const auto b = parse_bool_strict(kv.value); if (!b) fail(); else it->hard = *b; }
+      else if (field == "derived") it->derived = kv.value;
+      else if (field == "derived_hard") { const auto b = parse_bool_strict(kv.value); if (!b) fail(); else it->derived_hard = *b; }
       else if (field == "scope") it->scope = kv.value;
       else fail();
     }
@@ -829,8 +1187,8 @@ std::optional<VisualCanon> parse_visual_canon(std::string_view text, const Canon
       else if (field == "oy" && parse_double(kv.value, dv)) lm.oy = dv;
       else if (field == "oz" && parse_double(kv.value, dv)) lm.oz = dv;
       else if (field == "symmetry") lm.symmetry = kv.value;
-      else if (field == "silhouette_anchor") lm.silhouette_anchor = parse_bool(kv.value);
-      else if (field == "required") lm.required = parse_bool(kv.value);
+      else if (field == "silhouette_anchor") { const auto b = parse_bool_strict(kv.value); if (!b) fail(); else lm.silhouette_anchor = *b; }
+      else if (field == "required") { const auto b = parse_bool_strict(kv.value); if (!b) fail(); else lm.required = *b; }
       else if (field == "deformability" && parse_double(kv.value, dv)) lm.deformability = dv;
       else if (field == "ordering_after") lm.ordering_after = split_semicolon(kv.value);
       else fail();
@@ -842,7 +1200,7 @@ std::optional<VisualCanon> parse_visual_canon(std::string_view text, const Canon
       if (it == canon.silhouette_features.end()) { canon.silhouette_features.push_back({}); it = canon.silhouette_features.end() - 1; it->id = id; }
       double dv{};
       if (field == "kind") { const auto v = silhouette_feature_kind_from_name(kv.value); if (!v) fail(); else it->kind = *v; }
-      else if (field == "priority") it->priority = static_cast<std::uint32_t>(std::strtoul(kv.value.c_str(), nullptr, 10));
+      else if (field == "priority") { std::uint32_t iv{}; if (!parse_uint_strict(kv.value, iv)) fail(); else it->priority = iv; }
       else if (field == "structure") it->structure_ref = kv.value;
       else if (field == "min_contribution" && parse_double(kv.value, dv)) it->min_contribution = dv;
       else if (field == "min_separation" && parse_double(kv.value, dv)) it->min_separation = dv;
@@ -935,15 +1293,19 @@ std::optional<VisualCanon> parse_visual_canon(std::string_view text, const Canon
       e.structure_id = id;
       double dv{};
       if (field == "structure") e.structure_id = kv.value;
-      else if (field == "canonical" && parse_double(kv.value, dv)) e.canonical_value = dv;
       else if (field == "allowed" && parse_double(kv.value, dv)) e.allowed_deviation = dv;
+      else if (field == "allowed_translation" && parse_double(kv.value, dv)) e.allowed_translation = dv;
+      else if (field == "allowed_rotation" && parse_double(kv.value, dv)) e.allowed_rotation = dv;
+      else if (field == "allowed_scale" && parse_double(kv.value, dv)) e.allowed_scale = dv;
       else if (field == "action" && parse_double(kv.value, dv)) e.action_scale = dv;
       else if (field == "expression" && parse_double(kv.value, dv)) e.expression_scale = dv;
       else if (field == "style" && parse_double(kv.value, dv)) e.style_scale = dv;
       else if (field == "transformation" && parse_double(kv.value, dv)) e.transformation_scale = dv;
-      else if (field == "boundary" && parse_double(kv.value, dv)) e.hard_boundary = dv;
-      else if (field == "rigid") e.rigid = parse_bool(kv.value);
-      else if (field == "volume") e.volume_preserving = parse_bool(kv.value);
+      else if (field == "hard_translation" && parse_double(kv.value, dv)) e.hard_translation = dv;
+      else if (field == "hard_rotation" && parse_double(kv.value, dv)) e.hard_rotation = dv;
+      else if (field == "hard_scale" && parse_double(kv.value, dv)) e.hard_scale = dv;
+      else if (field == "rigid") { const auto b = parse_bool_strict(kv.value); if (!b) fail(); else e.rigid = *b; }
+      else if (field == "volume") { const auto b = parse_bool_strict(kv.value); if (!b) fail(); else e.volume_preserving = *b; }
       else fail();
     }
     else if (sec == "feature_res") {
@@ -953,9 +1315,9 @@ std::optional<VisualCanon> parse_visual_canon(std::string_view text, const Canon
       if (it == canon.resolution_features.end()) { canon.resolution_features.push_back({}); it = canon.resolution_features.end() - 1; it->id = id; }
       double dv{};
       if (field == "structure") it->structure_ref = kv.value;
-      else if (field == "priority") it->semantic_priority = static_cast<std::uint32_t>(std::strtoul(kv.value.c_str(), nullptr, 10));
+      else if (field == "priority") { std::uint32_t iv{}; if (!parse_uint_strict(kv.value, iv)) fail(); else it->semantic_priority = iv; }
       else if (field == "importance" && parse_double(kv.value, dv)) it->recognition_importance = dv;
-      else if (field == "min_res") it->min_resolution = static_cast<std::uint32_t>(std::strtoul(kv.value.c_str(), nullptr, 10));
+      else if (field == "min_res") { std::uint32_t iv{}; if (!parse_uint_strict(kv.value, iv)) fail(); else it->min_resolution = iv; }
       else if (field == "substitution") it->substitution_rule = kv.value;
       else if (field == "merge") it->merge_rule = kv.value;
       else if (field == "omit") it->omission_rule = kv.value;
@@ -970,7 +1332,8 @@ std::optional<VisualCanon> parse_visual_canon(std::string_view text, const Canon
       if (field == "kind") { const auto v = identity_invariant_kind_from_name(kv.value); if (!v) fail(); else it->kind = *v; }
       else if (field == "refs") it->refs = split_semicolon(kv.value);
       else if (field == "tolerance" && parse_double(kv.value, dv)) it->tolerance = dv;
-      else if (field == "hard") it->hard = parse_bool(kv.value);
+      else if (field == "hard") { const auto b = parse_bool_strict(kv.value); if (!b) fail(); else { it->hard = *b; it->severity = *b ? InvariantSeverity::hard : InvariantSeverity::soft; } }
+      else if (field == "severity") { const auto v = invariant_severity_from_name(kv.value); if (!v) fail(); else { it->severity = *v; it->hard = (*v == InvariantSeverity::hard); } }
       else if (field == "scope") it->scope = kv.value;
       else fail();
     }
@@ -1017,17 +1380,27 @@ VisualMorphologyV2 canon_to_morphology(const VisualCanon& canon, std::string_vie
   out.schema = "gspl.visual-morphology/0.1";
   out.form_id = std::string(form_id);
 
+  // Relational construction: derive geometry from constraints (generative
+  // proportions, symmetry, anchors, chains, orientations). Absolute values
+  // remain projection hints/root anchors for unconstrained axes. The solve
+  // is deterministic; contradictions are impossible here because the canon
+  // was already validated by the caller (compile path) or the fixture is
+  // internally consistent.
+  SolvedGeom geom;
+  ValidationResult solve_diag;
+  (void)solve_construction_impl(canon, form_id, geom, solve_diag);
+
   for (const auto& [id, s] : canon.structures) {
     VisualPart p;
     p.id = id;
     p.parent = s.parent;
-    p.x = s.x * body_scale;
-    p.y = s.y * body_scale;
-    p.z = s.z;
-    p.size_x = s.size_x * body_scale;
-    p.size_y = s.size_y * body_scale;
-    p.size_z = s.size_z;
-    p.rotation_degrees = s.rotation_degrees;
+    p.x = geom.x.count(id) ? geom.x.at(id) * body_scale : s.x * body_scale;
+    p.y = geom.y.count(id) ? geom.y.at(id) * body_scale : s.y * body_scale;
+    p.z = geom.z.count(id) ? geom.z.at(id) : s.z;
+    p.size_x = geom.sx.count(id) ? geom.sx.at(id) * body_scale : s.size_x * body_scale;
+    p.size_y = geom.sy.count(id) ? geom.sy.at(id) * body_scale : s.size_y * body_scale;
+    p.size_z = geom.sz.count(id) ? geom.sz.at(id) : s.size_z;
+    p.rotation_degrees = geom.rot.count(id) ? geom.rot.at(id) : s.rotation_degrees;
     p.shape = shape_from_primitive(s.primitive);
     p.color_role = role_from_string(s.color_role);
     p.material_class = s.material_class;
@@ -1239,7 +1612,11 @@ ValidationResult enforce_deformation_envelopes(const VisualCanon& canon, Perform
     if (!action_phase.empty()) scale *= e.action_scale;
     if (expression != 0.0) scale *= e.expression_scale;
     scale *= style_factor * transformation_factor;
-    const double allowed = e.allowed_deviation * scale;
+
+    // Typed per-axis bounds (units: world units / degrees / dimensionless).
+    const double allowed_t = (e.allowed_translation > 0.0 ? e.allowed_translation : e.allowed_deviation) * scale;
+    const double allowed_r = (e.allowed_rotation > 0.0 ? e.allowed_rotation : e.allowed_deviation) * scale;
+    const double allowed_s = (e.allowed_scale > 0.0 ? e.allowed_scale : e.allowed_deviation) * scale;
 
     const auto clamp_mag = [](double v, double bound) -> double {
       const double a = std::abs(v);
@@ -1248,36 +1625,52 @@ ValidationResult enforce_deformation_envelopes(const VisualCanon& canon, Perform
     const double trans = std::sqrt(m.dx * m.dx + m.dy * m.dy);
     const double rot = std::abs(m.rotation_degrees);
     const double scale_dev = std::max(std::abs(m.scale_x - 1.0), std::abs(m.scale_y - 1.0));
-    const double requested = std::max({trans, rot, scale_dev});
 
-    if (requested > e.hard_boundary) {
-      // Identity boundary exceeded: fail closed, do not silently clamp.
+    // Per-axis hard boundary check (dimensional correctness: never compare
+    // degrees against world units against a single scalar).
+    bool hard_hit = false;
+    if (trans > e.hard_translation) {
       add_diag(r, "DEFORMATION_HARD_VIOLATION",
-               "structure '" + m.part_id + "' requested deviation " + d2s(requested) +
-               " exceeds hard boundary " + d2s(e.hard_boundary));
-      continue;
+               "structure '" + m.part_id + "' translation " + d2s(trans) +
+               " exceeds hard translation boundary " + d2s(e.hard_translation));
+      hard_hit = true;
     }
-    if (e.rigid && requested > allowed) {
+    if (rot > e.hard_rotation) {
+      add_diag(r, "DEFORMATION_HARD_VIOLATION",
+               "structure '" + m.part_id + "' rotation " + d2s(rot) +
+               " exceeds hard rotation boundary " + d2s(e.hard_rotation));
+      hard_hit = true;
+    }
+    if (scale_dev > e.hard_scale) {
+      add_diag(r, "DEFORMATION_HARD_VIOLATION",
+               "structure '" + m.part_id + "' scale deviation " + d2s(scale_dev) +
+               " exceeds hard scale boundary " + d2s(e.hard_scale));
+      hard_hit = true;
+    }
+    if (hard_hit) continue;  // fail closed, never silently clamp past identity boundary
+
+    if (e.rigid && (trans > allowed_t || rot > allowed_r || scale_dev > allowed_s)) {
       add_diag(r, "DEFORMATION_RIGID_VIOLATION",
-               "rigid structure '" + m.part_id + "' requested deviation " + d2s(requested) +
-               " exceeds allowed " + d2s(allowed));
+               "rigid structure '" + m.part_id + "' requested deviation exceeds allowed");
       continue;
     }
-    if (requested > allowed) {
+
+    bool clamped = false;
+    if (trans > allowed_t) {
+      const double f = allowed_t / trans;
+      m.dx *= f; m.dy *= f; clamped = true;
+    }
+    if (rot > allowed_r) { m.rotation_degrees = clamp_mag(m.rotation_degrees, allowed_r); clamped = true; }
+    if (scale_dev > allowed_s) {
+      const double f = allowed_s / scale_dev;
+      m.scale_x = 1.0 + (m.scale_x - 1.0) * f;
+      m.scale_y = 1.0 + (m.scale_y - 1.0) * f;
+      clamped = true;
+    }
+    if (clamped) {
       add_diag(r, "DEFORMATION_CLAMPED",
-               "structure '" + m.part_id + "' deviation " + d2s(requested) +
-               " clamped to allowed " + d2s(allowed));
-      if (trans > allowed) {
-        const double f = allowed / trans;
-        m.dx *= f;
-        m.dy *= f;
-      }
-      if (rot > allowed) m.rotation_degrees = clamp_mag(m.rotation_degrees, allowed);
-      if (scale_dev > allowed) {
-        const double f = allowed / scale_dev;
-        m.scale_x = 1.0 + (m.scale_x - 1.0) * f;
-        m.scale_y = 1.0 + (m.scale_y - 1.0) * f;
-      }
+               "structure '" + m.part_id + "' deviation clamped to typed allowed bounds "
+               "(t=" + d2s(allowed_t) + ", r=" + d2s(allowed_r) + ", s=" + d2s(allowed_s) + ")");
     }
   }
   return r;
@@ -1394,10 +1787,126 @@ ValidationResult check_identity_invariants(const VisualCanon& canon, const Visua
       case IdentityInvariantKind::hard_boundary: {
         for (const auto& ref : inv.refs) {
           const auto eit = canon.deformation_envelopes.find(ref);
-          if (eit == canon.deformation_envelopes.end() || !std::isfinite(eit->second.hard_boundary))
+          const bool finite = eit != canon.deformation_envelopes.end() &&
+              std::isfinite(eit->second.hard_translation) &&
+              std::isfinite(eit->second.hard_rotation) &&
+              std::isfinite(eit->second.hard_scale);
+          if (eit == canon.deformation_envelopes.end() || !finite)
             add_diag(r, prefix + "BOUNDARY", "structure '" + ref + "' has no finite hard boundary");
         }
         break;
+      }
+    }
+    // Severity semantics: advisory diagnostics are informational; soft
+    // diagnostics are quality violations that never fail closed; hard
+    // diagnostics are identity violations. Every diagnostic emitted for
+    // this invariant carries the ":severity" suffix so downstream consumers
+    // can classify without re-deriving it.
+    const std::string sev_suffix = ":" + std::string(invariant_severity_name(inv.severity));
+    for (auto& d : r.diagnostics)
+      if (d.code.rfind(prefix, 0) == 0 && d.code.find(':') == std::string::npos)
+        d.code += sev_suffix;
+  }
+  return r;
+}
+
+/* ── facial/expressive canon application ── */
+
+ValidationResult apply_expression(const VisualCanon& canon, VisualMorphologyV2& morph,
+                                  std::string_view emotion, double gaze_x, double gaze_y) {
+  ValidationResult r;
+  (void)emotion;  // reserved for future emotion-to-feature-mapping table
+  for (const auto& region : canon.facial_regions) {
+    const auto pit = morph.parts.find(region.structure_ref);
+    if (pit == morph.parts.end()) {
+      add_diag(r, "EXPRESSION_REGION_MISSING", "expressive region '" + region.id + "' structure missing");
+      continue;
+    }
+    for (const auto& f : region.features) {
+      switch (f.kind) {
+        case ExpressiveFeatureKind::eye: {
+          auto eit = morph.parts.find(f.id.empty() ? std::string{} : f.id);
+          // Feature may target the structure by id or by eye-role search.
+          if (eit == morph.parts.end()) {
+            for (auto& [id, p] : morph.parts)
+              if (p.semantic_role == "eye") { eit = morph.parts.find(id); break; }
+          }
+          if (eit == morph.parts.end()) break;
+          const double aperture = std::clamp(f.aperture, 0.0, 1.0);
+          const double squash = 0.3 + 0.7 * aperture;
+          eit->second.size_x *= squash;
+          eit->second.size_y *= std::max(0.3, aperture * 0.9);
+          // Gaze shifts the eye laterally within its parent.
+          const double gaze_shift = std::clamp(gaze_x + f.gaze, -1.0, 1.0) * 0.4;
+          eit->second.x += gaze_shift;
+          break;
+        }
+        case ExpressiveFeatureKind::mouth:
+        case ExpressiveFeatureKind::visor: {
+          auto mit = morph.parts.find(f.id);
+          if (mit == morph.parts.end()) {
+            for (auto& [id, p] : morph.parts)
+              if (p.semantic_role == "mouth" || p.semantic_role == "visor" || p.semantic_role == "eye") {
+                if (f.kind == ExpressiveFeatureKind::visor && p.semantic_role != "visor") continue;
+                if (f.kind == ExpressiveFeatureKind::mouth && p.semantic_role != "mouth") continue;
+                mit = morph.parts.find(id); break;
+              }
+          }
+          if (mit == morph.parts.end()) break;
+          const double aperture = std::clamp(f.aperture, 0.05, 1.0);
+          mit->second.size_y *= aperture;
+          break;
+        }
+        case ExpressiveFeatureKind::ear: {
+          auto eit = morph.parts.find(f.id);
+          if (eit == morph.parts.end()) {
+            for (auto& [id, p] : morph.parts)
+              if (p.semantic_role == "appendage" && id.find("ear") != std::string::npos) {
+                eit = morph.parts.find(id); break;
+              }
+          }
+          if (eit == morph.parts.end()) break;
+          eit->second.rotation_degrees += f.rotation;
+          break;
+        }
+        case ExpressiveFeatureKind::light:
+        case ExpressiveFeatureKind::panel: {
+          auto eit = morph.parts.find(f.id);
+          if (eit == morph.parts.end()) {
+            for (auto& [id, p] : morph.parts)
+              if (p.emissive) { eit = morph.parts.find(id); break; }
+          }
+          if (eit == morph.parts.end()) break;
+          eit->second.emissive = true;
+          break;
+        }
+        case ExpressiveFeatureKind::antenna: {
+          auto eit = morph.parts.find(f.id);
+          if (eit == morph.parts.end()) {
+            for (auto& [id, p] : morph.parts)
+              if (id.find("antenna") != std::string::npos) { eit = morph.parts.find(id); break; }
+          }
+          if (eit == morph.parts.end()) break;
+          eit->second.rotation_degrees += f.rotation * 0.5;
+          break;
+        }
+        case ExpressiveFeatureKind::brow: {
+          auto eit = morph.parts.find(f.id);
+          if (eit == morph.parts.end()) break;
+          eit->second.y += (std::abs(gaze_y) * 0.5 + 0.25) * (f.id.find("left") != std::string::npos ? -1.0 : 1.0);
+          break;
+        }
+        case ExpressiveFeatureKind::tail: {
+          auto eit = morph.parts.find(f.id);
+          if (eit == morph.parts.end()) {
+            for (auto& [id, p] : morph.parts)
+              if (id.find("tail") != std::string::npos) { eit = morph.parts.find(id); break; }
+          }
+          if (eit == morph.parts.end()) break;
+          eit->second.rotation_degrees += f.rotation * 0.5;
+          break;
+        }
+        case ExpressiveFeatureKind::custom: break;
       }
     }
   }

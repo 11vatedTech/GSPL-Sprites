@@ -161,6 +161,7 @@ struct ShapeGeom {
 struct LightingModel {
   double lx{}, ly{};   // unit light direction (screen space)
   double ambient{0.42}, key{0.55}, fill{0.18}, rim{0.15};
+  std::uint32_t band_count{1};  // cel band quantization (1 = smooth)
 };
 
 [[nodiscard]] RgbaF shade_pixel(const LightingModel& L, const WorldPart& wp, const RgbaF& base,
@@ -168,7 +169,15 @@ struct LightingModel {
                                 double sdf, double grad, std::int32_t px, std::int32_t py) {
   if (L.ambient == 0.0 && L.key == 0.0 && L.fill == 0.0 && L.rim == 0.0) return base;
   (void)sdf;
-  const double h = clamp01(grad);                      // light-axis gradient proxy
+  double h = clamp01(grad);                      // light-axis gradient proxy
+  // Cel band quantization: when band_count > 1, quantize the gradient
+  // into discrete steps for a toon/cel look. Each band is a step function
+  // of the continuous gradient.
+  if (L.band_count > 1) {
+    const double step = 1.0 / static_cast<double>(L.band_count);
+    h = std::floor(h / step) * step + step * 0.5;
+    h = clamp01(h);
+  }
   const double lit = L.ambient + L.key * h + L.fill * (1.0 - h);
   double r = base.r * lit, g = base.g * lit, b = base.b * lit;
   // Roughness flattens shading toward the base.
@@ -597,7 +606,8 @@ RasterResult render_visual_ir(const VisualIr& ir, const RasterLimits& limits) {
   // Lighting from IR.
   const double lrad = ir.lighting.light_degrees * kPi / 180.0;
   ctx.light = LightingModel{std::cos(lrad), std::sin(lrad), ir.lighting.ambient,
-                            ir.lighting.key, ir.lighting.fill, ir.lighting.rim};
+                            ir.lighting.key, ir.lighting.fill, ir.lighting.rim,
+                            ir.style.shadow_model == ShadowModel::cell ? ir.style.band_count : 1u};
   ctx.aa_width = (ir.style.aa_policy == AntiAliasPolicy::none) ? 0.0
       : 0.75 + ir.style.edge_softness * 1.25;
   ctx.additive_layers = (ir.style.layer_compositing == LayerCompositing::additive);
@@ -632,6 +642,54 @@ RasterResult render_visual_ir(const VisualIr& ir, const RasterLimits& limits) {
     mats[i] = resolve_material(make_material(p.material_class, p.material_id), ir.style);
     glows[i] = resolve_emission(p, mats[i]);
     layers[i] = layer_idx_of(layer_name(p.layer));
+  }
+
+  // StyleProgram max_colors: when non-zero, clamp the palette to the
+  // requested maximum by collapsing the least-frequent colors to their
+  // nearest neighbor (deterministic Euclidean distance in RGB).
+  if (ir.style.max_colors > 0 && np > ir.style.max_colors) {
+    std::map<std::uint32_t, std::size_t, std::less<>> freq;
+    for (std::size_t i = 0; i < np; ++i) ++freq[colors[i]];
+    const std::uint32_t limit = ir.style.max_colors;
+    while (freq.size() > limit) {
+      // Find rarest color and nearest neighbor to merge into.
+      std::uint32_t rarest = 0, best_target = 0;
+      std::size_t rarest_cnt = std::numeric_limits<std::size_t>::max();
+      double best_dist = std::numeric_limits<double>::max();
+      for (const auto& [c, n] : freq) {
+        if (n < rarest_cnt) { rarest = c; rarest_cnt = n; }
+      }
+      // Find the nearest color to merge into (exclude self).
+      const double rr = static_cast<double>((rarest >> 16) & 0xFF) / 255.0;
+      const double rg = static_cast<double>((rarest >> 8) & 0xFF) / 255.0;
+      const double rb = static_cast<double>(rarest & 0xFF) / 255.0;
+      for (const auto& [c, n] : freq) {
+        if (c == rarest) continue;
+        const double dr = rr - static_cast<double>((c >> 16) & 0xFF) / 255.0;
+        const double dg = rg - static_cast<double>((c >> 8) & 0xFF) / 255.0;
+        const double db = rb - static_cast<double>(c & 0xFF) / 255.0;
+        const double d = dr * dr + dg * dg + db * db;
+        if (d < best_dist) { best_dist = d; best_target = c; }
+      }
+      freq[best_target] += rarest_cnt;
+      freq.erase(rarest);
+    }
+    // Remap: each color maps to its nearest palette color.
+    for (std::size_t i = 0; i < np; ++i) {
+      std::uint32_t best = 0;
+      double best_dist = std::numeric_limits<double>::max();
+      const double cr = static_cast<double>((colors[i] >> 16) & 0xFF) / 255.0;
+      const double cg = static_cast<double>((colors[i] >> 8) & 0xFF) / 255.0;
+      const double cb = static_cast<double>(colors[i] & 0xFF) / 255.0;
+      for (const auto& [c, n] : freq) {
+        const double dr = cr - static_cast<double>((c >> 16) & 0xFF) / 255.0;
+        const double dg = cg - static_cast<double>((c >> 8) & 0xFF) / 255.0;
+        const double db = cb - static_cast<double>(c & 0xFF) / 255.0;
+        const double d = dr * dr + dg * dg + db * db;
+        if (d < best_dist) { best_dist = d; best = c; }
+      }
+      colors[i] = best;
+    }
   }
 
   // Deterministic draw order: layer, then z_order, then part id (stable).

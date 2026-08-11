@@ -113,10 +113,12 @@ StyleSemantics effective_style(const StyleProgram& program) {
 
   out.shadow_model = program.shading.shadow_model;
   out.highlight_model = program.shading.highlight_model;
+  out.band_count = program.shading.band_count;
 
   out.palette_policy = program.palette.palette_policy;
   out.value_grouping = program.palette.value_grouping;
   out.saturation_behavior = program.palette.saturation_behavior;
+  out.max_colors = program.palette.max_colors;
 
   out.layer_compositing = program.compositing.layer_compositing;
   out.aa_policy = program.compositing.aa_policy;

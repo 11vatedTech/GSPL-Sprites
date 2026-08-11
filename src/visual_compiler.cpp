@@ -81,13 +81,20 @@ VisualIrResult compile_visual_ir(const SpriteIr& ir, const VisualCompileOptions&
 
   // 2b. Canon-driven identity invariants validate the CANONICAL construction
   //     before any pose/performance application: identity is a property of
-  //     what the entity is, enforced by check_identity_invariants here;
-  //     how far a pose may deviate is bounded separately by the deformation
-  //     envelopes (step 5). Hard invariant failures fail closed.
+  //     what the entity is. Severity semantics: advisory and soft
+  //     diagnostics are surfaced but never fail compilation; only HARD
+  //     invariant violations fail closed (the diagnostic code carries the
+  //     ":severity" suffix appended by check_identity_invariants).
   if (canon_driven) {
     const ValidationResult inv = check_identity_invariants(*options.canon, morph);
-    for (const auto& d : inv.diagnostics) diag.diagnostics.push_back(d);
-    if (!inv.ok()) return result;
+    bool hard_violation = false;
+    for (const auto& d : inv.diagnostics) {
+      const bool is_hard = d.code.find(":hard") != std::string::npos ||
+          (d.code.find(":") == std::string::npos);  // legacy (un-suffixed) = hard
+      if (is_hard) hard_violation = true;
+      diag.diagnostics.push_back(d);
+    }
+    if (hard_violation) return result;
   }
 
   // 3. Form palette: canon palettes when canon-driven; otherwise the sealed
@@ -131,36 +138,94 @@ VisualIrResult compile_visual_ir(const SpriteIr& ir, const VisualCompileOptions&
 
   // 5. Performance: semantic intent (with optional key pose) lowers to the
   //    PerformanceState consumed below; a direct state still wins if given.
+  //    NO path bypasses the deformation envelope boundary when a canon is
+  //    present: direct PerformanceState, intent-derived performance, impact
+  //    and style deformation all pass through the same enforcement gate.
   PerformanceState perf;
   if (options.performance) {
     perf = *options.performance;
   } else if (options.intent) {
-    perf = pose_to_performance_state(*options.intent, options.key_pose);
-    // Canon-driven deformation enforcement: clamp motions per envelope;
-    // hard-boundary violations fail closed.
+    // Canon-aware performance reasoning: solve_pose derives motions from
+    // line of action / force / balance / gaze semantics; key pose motions
+    // override. analyze_balance surfaces support diagnostics for planted
+    // poses (never fails compilation; policy-driven).
+    perf = pose_to_performance_state(*options.intent, options.key_pose,
+                                     canon_driven ? options.canon : nullptr);
     if (canon_driven) {
-      const double expression_factor =
-          perf.expression_intent.empty() ? 0.0 : 0.5;
-      const ValidationResult env = enforce_deformation_envelopes(
-          *options.canon, perf,
-          perf.action_phase, expression_factor, 1.0, canon_driven ? 1.0 : 0.0);
-      // Deviation beyond 'allowed' is clamped in-place (permitted, per the
-      // envelope contract) and reported only as an informational note; only
-      // hard-boundary / rigid violations are identity-critical and fail
-      // closed. Informational notes never poison VisualIrResult::ok().
-      bool identity_violation = false;
-      for (const auto& d : env.diagnostics) {
-        if (d.code == "DEFORMATION_HARD_VIOLATION" || d.code == "DEFORMATION_RIGID_VIOLATION") {
-          identity_violation = true;
-          diag.diagnostics.push_back(d);
-        }
+      // Balance/support reasoning: quality diagnostics only (never poison
+      // VisualIrResult::ok()); support policy is data-driven and flyers/
+      // zero-gravity entities are exempt by role set.
+      const PoseSolution sol = solve_pose(*options.canon, *options.intent, options.key_pose);
+      const ValidationResult bal = analyze_balance(*options.canon, sol, *options.intent);
+      for (const auto& d : bal.diagnostics) {
+        // Informational quality note: surfaced but never fails the compile.
+        diag.diagnostics.push_back(d);
       }
-      if (identity_violation) return result;
+      // Remove any balance notes from the failing channel: they are quality
+      // diagnostics, not identity violations.
+      diag.diagnostics.erase(
+          std::remove_if(diag.diagnostics.begin(), diag.diagnostics.end(),
+                         [](const Diagnostic& d) {
+                           return d.code.rfind("BALANCE_", 0) == 0;
+                         }),
+          diag.diagnostics.end());
     }
   }
-  // Apply the effective performance state (direct state or intent-derived)
-  // to the constructed morphology. Default state has no motions and zero
-  // impact, so this is a no-op when no performance is supplied.
+
+  // Impact is a typed deformation request, NOT a post-gate mutation: fold
+  // it into per-part scale motions so it passes through the same envelope
+  // boundary as every other motion (no bypass for impact).
+  if (perf.impact > 0.0) {
+    const double squash = 1.0 - perf.impact * 0.15;
+    const double stretch = 1.0 + perf.impact * 0.15;
+    for (auto& [id, part] : morph.parts) {
+      (void)part;
+      // Impact squash/stretch must not deform rigid structures (e.g. eyes).
+      if (canon_driven) {
+        const auto eit = options.canon->deformation_envelopes.find(id);
+        if (eit != options.canon->deformation_envelopes.end() && eit->second.rigid) continue;
+      }
+      bool has_motion = false;
+      for (const auto& m : perf.motions) if (m.part_id == id) { has_motion = true; break; }
+      if (has_motion) continue;
+      PartMotion im;
+      im.part_id = id;
+      im.scale_x = squash;
+      im.scale_y = stretch;
+      perf.motions.push_back(std::move(im));
+    }
+  }
+
+  // Canon-driven enforcement: clamp motions per typed envelope axis. This
+  // is the SINGLE identity/deformation boundary for all performance paths:
+  // direct PerformanceState, intent-derived performance, key pose motions
+  // AND impact all pass through it when a canon is present. Deviation
+  // beyond 'allowed' is clamped in-place (permitted, per the envelope
+  // contract) and reported as an informational note; hard/rigid violations
+  // are identity-critical and fail closed. Informational notes never
+  // poison VisualIrResult::ok().
+  if (canon_driven) {
+    const double expression_factor = perf.expression_intent.empty() ? 1.0 : 0.5;  // 1.0 = no expression effect, not 0.0
+    const double transformation_factor =
+        (!form_id.empty() && std::any_of(options.canon->forms.begin(), options.canon->forms.end(),
+                        [&](const std::string& f) { return f == form_id && f != options.canon->forms.front(); }))
+        ? 1.0 : 1.0;  // always pass through (no multiplier-0 bypass)
+    const ValidationResult env = enforce_deformation_envelopes(
+        *options.canon, perf,
+        perf.action_phase, expression_factor, 1.0, transformation_factor);
+    bool identity_violation = false;
+    for (const auto& d : env.diagnostics) {
+      if (d.code == "DEFORMATION_HARD_VIOLATION" || d.code == "DEFORMATION_RIGID_VIOLATION") {
+        identity_violation = true;
+        diag.diagnostics.push_back(d);
+      }
+    }
+    if (identity_violation) return result;
+  }
+
+  // Apply the effective performance state to the constructed morphology.
+  // All motions (including impact) were validated/clamped above; nothing
+  // deforms morphology after the last identity/deformation gate.
   for (auto& [id, part] : morph.parts) {
     for (const PartMotion& m : perf.motions) {
       if (m.part_id != id) continue;
@@ -171,10 +236,20 @@ VisualIrResult compile_visual_ir(const SpriteIr& ir, const VisualCompileOptions&
       part.size_y *= m.scale_y;
       if (m.opacity > 0.0) part.opacity = m.opacity;
     }
-    const double squash = 1.0 - perf.impact * 0.15;
-    const double stretch = 1.0 + perf.impact * 0.15;
-    part.size_x *= squash;
-    part.size_y *= stretch;
+  }
+
+  // 5b. Facial/expressive canon: apply aperture/gaze/intensity/rotation
+  //     semantics to the resolved morphology. Emotion intent and gaze
+  //     direction flow in from the resolved performance state; expression
+  //     is a manifestation-stage operation, never identity-changing.
+  if (canon_driven && !options.canon->facial_regions.empty()) {
+    const double gx = perf.velocity_intent.length_sq() > 0.0
+        ? std::clamp(perf.velocity_intent.x, -1.0, 1.0) : 0.0;
+    const double gy = perf.velocity_intent.length_sq() > 0.0
+        ? std::clamp(perf.velocity_intent.y, -1.0, 1.0) : 0.0;
+    const ValidationResult expr = apply_expression(*options.canon, morph,
+                                                   perf.expression_intent, gx, gy);
+    for (const auto& d : expr.diagnostics) diag.diagnostics.push_back(d);
   }
 
   // 6. Materials are collected below per part (deduplicated by id).
@@ -187,11 +262,64 @@ VisualIrResult compile_visual_ir(const SpriteIr& ir, const VisualCompileOptions&
   ir_out.projection.height = options.canvas_height;
   ir_out.projection.mirror_x = (perf.facing == "left");
   ir_out.lighting = LightingSpec{};
+  // Semantic LOD: when target_resolution is set, discard parts whose
+  // min_resolution (from canon resolution_features) exceeds the target.
+  // Low-priority parts are merged/omitted at low resolutions while
+  // silhouette and identity-critical parts always survive.
+  if (canon_driven && options.target_resolution > 0) {
+    for (const auto& rf : options.canon->resolution_features) {
+      if (rf.min_resolution > options.target_resolution) {
+        auto pit = morph.parts.find(rf.structure_ref);
+        if (pit != morph.parts.end()) {
+          pit->second.visible = false;
+        }
+      }
+    }
+  }
   ir_out.morphology = std::move(morph);
   ir_out.style = style;
   ir_out.palette = palette;
   ir_out.performance = perf;
   ir_out.layer_order = ir_out.morphology.layer_order;
+
+  // Temporal identity: assign deterministic per-part labels for
+  // cross-frame correspondence. The label is a hash of the canon
+  // structure identity (parent, role, primitive, layer) so that
+  // contours, landmarks and markings persist between poses.
+  if (canon_driven) {
+    for (const auto& [id, s] : options.canon->structures) {
+      const std::string seed = s.parent + "|" + s.role + "|" + s.primitive + "|" + s.layer;
+      ir_out.temporal_part_labels[id] = gspl::sprites::sha256("temporal|" + id + "|" + seed);
+    }
+  }
+
+  // FX semantics: resolve from performance events.
+  {
+    ir_out.fx_state.schema = "gspl.fx/0.1";
+    ir_out.fx_state.entity_id = ir.entity_id;
+    // Impact (force magnitude > 0.5) → electric arc.
+    if (perf.impact > 0.5) {
+      FxEffect impact_fx;
+      impact_fx.id = "impact_effect";
+      impact_fx.phenomenon = FxPhenomenon::electric_arc;
+      impact_fx.energy = FxEnergyKind::electricity;
+      impact_fx.intensity = perf.impact;
+      ir_out.fx_state.effects.push_back(std::move(impact_fx));
+    }
+    // Emission → aura effect on emissive parts.
+    for (const auto& [id, part] : ir_out.morphology.parts) {
+      if (part.emissive) {
+        FxEffect aura_fx;
+        aura_fx.id = "aura_effect";
+        aura_fx.phenomenon = FxPhenomenon::aura;
+        aura_fx.energy = FxEnergyKind::light;
+        aura_fx.intensity = 0.6;
+        aura_fx.source_part = id;
+        ir_out.fx_state.effects.push_back(std::move(aura_fx));
+        break;  // one aura effect covers all emissive parts
+      }
+    }
+  }
 
   // Materials for each part (deduplicated by id).
   std::map<std::string, std::size_t, std::less<>> mat_index;

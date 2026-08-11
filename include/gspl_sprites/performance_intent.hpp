@@ -62,11 +62,45 @@ struct KeyPose {
   std::vector<PartMotion> motions;                 // explicit part motions (deterministic)
 };
 
+/* ── Deterministic Pose/Acting Solver ──
+ * Derives part transforms from SEMANTIC intent (not copied explicit
+ * motions): line of action, force direction/magnitude, phase, balance,
+ * commitment and gaze. The solver is structural-hierarchy driven and
+ * entity-agnostic; explicit KeyPose::motions remain as OVERRIDES applied
+ * after derived motions. This is what makes PerformanceIntent causal.
+ * See docs/architecture/VISUAL_PERFORMANCE_ARCHITECTURE.md. */
+struct VisualCanon;
+
+/* Solver result: derived motions + resolved semantic facts. */
+struct PoseSolution {
+  std::vector<PartMotion> motions;      // derived + key-pose overrides
+  double balance_offset_x{0.0};         // solved CoM shift (world units)
+  double balance_offset_y{0.0};
+  Vec2 gaze_direction;                  // resolved gaze (world)
+  double head_rotation_degrees{0.0};    // derived head/gaze orientation
+  std::vector<std::string> applied_chains;  // structural chains affected
+};
+
+/* Solve a pose from intent semantics against a canon. Explicit key pose
+ * motions are applied last (override), preserving determinism. */
+[[nodiscard]] PoseSolution solve_pose(const VisualCanon& canon,
+                                      const PerformanceIntent& intent,
+                                      const KeyPose* key_pose = nullptr);
+
+/* Balance/support reasoning: projected center of mass vs support contacts.
+ * Returns diagnostics when a supposedly planted pose has no plausible
+ * support. Support policy is data-driven (support roles from canon). */
+[[nodiscard]] ValidationResult analyze_balance(const VisualCanon& canon,
+                                               const PoseSolution& solution,
+                                               const PerformanceIntent& intent);
+
 /* Deterministic lowering: intent + key pose → PerformanceState (the
  * existing compiler input). facing derives from force/gaze; phase and
- * action flow into motion/action phase fields. */
+ * action flow into motion/action phase fields. Uses solve_pose when a
+ * canon is provided; otherwise carries explicit key pose motions. */
 [[nodiscard]] PerformanceState pose_to_performance_state(const PerformanceIntent& intent,
-                                                         const KeyPose* key_pose = nullptr);
+                                                         const KeyPose* key_pose = nullptr,
+                                                         const VisualCanon* canon = nullptr);
 [[nodiscard]] ValidationResult validate_performance_intent(const PerformanceIntent& intent);
 [[nodiscard]] ValidationResult validate_key_pose(const KeyPose& pose);
 [[nodiscard]] std::string canonicalize_performance_intent(const PerformanceIntent& intent);

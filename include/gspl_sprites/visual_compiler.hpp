@@ -39,6 +39,9 @@ struct VisualCompileOptions {
   const StyleProgram* style_program{nullptr};// factorized style program
   std::string projection_kind{"2d"};
   std::span<const ChannelRequest> channel_requests{};
+  // Semantic LOD: when non-zero, features with min_resolution above
+  // this are discarded (see VisualFeature::min_resolution).
+  std::uint32_t target_resolution{0};
 };
 
 struct VisualIrResult {

@@ -74,6 +74,55 @@ struct CanonStructure {
 [[nodiscard]] std::string make_landmark_dist_measure(std::string_view a, std::string_view b);
 [[nodiscard]] std::string make_size_measure(std::string_view part, std::string_view axis);
 
+/* ── Relational Construction Constraints ──
+ * Canonical identity is authored primarily through typed relationships
+ * (anchor, size ratio, symmetry, orientation, chain), NOT absolute pixel
+ * coordinates. Absolute x/y/z in CanonStructure are classified projection
+ * hints/root anchors; when a structure participates in a construction
+ * constraint, the constraint DERIVES the geometry instead. The solver is
+ * deterministic (fixed iteration order by constraint id + target id) and
+ * fails closed on contradictions. See docs/architecture/VISUAL_CANON_ARCHITECTURE.md. */
+
+enum class ConstructionAxis { x, y, z };
+[[nodiscard]] std::string_view construction_axis_name(ConstructionAxis axis) noexcept;
+[[nodiscard]] std::optional<ConstructionAxis> construction_axis_from_name(std::string_view name) noexcept;
+
+enum class ConstructionConstraintKind {
+  anchor,         // position = reference position + offset
+  size_ratio,     // size = reference size * factor (generative proportion)
+  symmetry,       // position mirrors reference across a parent-local axis plane
+  orientation,    // rotation = reference rotation + offset
+  chain,          // position = reference position + reference_size * factor (extend along axis)
+};
+[[nodiscard]] std::string_view construction_kind_name(ConstructionConstraintKind kind) noexcept;
+[[nodiscard]] std::optional<ConstructionConstraintKind> construction_kind_from_name(std::string_view name) noexcept;
+
+struct ConstructionConstraint {
+  std::string id;
+  ConstructionConstraintKind kind{ConstructionConstraintKind::size_ratio};
+  std::string structure;   // constrained structure id
+  std::string reference;   // reference structure id
+  ConstructionAxis axis{ConstructionAxis::x};  // x/y/z (symmetry: mirror plane normal)
+  double factor{1.0};
+  double offset{0.0};
+  bool hard{true};         // contradiction fails closed; soft resolves via deterministic precedence
+  std::string scope;       // optional "form:<id>" restriction
+};
+
+struct VisualCanon;  // forward declaration (solver operates on canon)
+
+/* Deterministic construction: applies all applicable construction
+ * constraints to the canon structures and returns the derived geometry
+ * plus any diagnostics. Contradictory hard constraints fail closed.
+ * This is the generative core behind canon_to_morphology. */
+[[nodiscard]] ValidationResult solve_construction_constraints(
+    const VisualCanon& canon, std::string_view form_id);
+
+/* Structural chain: ordered list of ancestor ids from the named structure
+ * up to (not including) the root, deterministically. */
+[[nodiscard]] std::vector<std::string> structural_chain(const VisualCanon& canon,
+                                                        std::string_view structure_id);
+
 struct ProportionRule {
   std::string id;
   std::string numerator;    // measure string
@@ -84,6 +133,12 @@ struct ProportionRule {
   double deformation_min{0.0};
   double deformation_max{std::numeric_limits<double>::infinity()};
   bool hard{};
+  // Generative proportion: when set, construction DERIVES this target from
+  // the rule (target = denominator * preferred). "size:<part>:<axis>" only
+  // (distance-based rules stay validation-only). Changing `preferred`
+  // changes constructed geometry deterministically.
+  std::string derived;      // "size:<part>:<axis>" or "" = measurement only
+  bool derived_hard{true};  // derived value is identity-critical
   std::string scope;        // optional "form:<id>" or "style:<name>" restriction
 };
 
@@ -174,17 +229,24 @@ struct AttachmentPoint {
   std::string role;
 };
 
-/* Semantic deformation envelope: how far a structure may deviate from its
- * canonical condition, per context, with a hard identity boundary. */
+/* ── Typed deformation envelope ──
+ * Dimensional correctness: translation (world units), rotation (degrees)
+ * and scale (dimensionless ratio) each carry their own bound instead of
+ * one scalar compared against every channel. per-axis values default to
+ * `allowed_deviation` when 0 (legacy scalar semantics preserved). */
 struct DeformationEnvelope {
   std::string structure_id;
-  double canonical_value{0.0};       // canonical proportion/rotation/etc.
-  double allowed_deviation{0.0};     // everyday pose/expression range
+  double allowed_deviation{0.0};     // legacy scalar bound (default for all axes)
+  double allowed_translation{0.0};   // world units; 0 = allowed_deviation
+  double allowed_rotation{0.0};      // degrees;    0 = allowed_deviation
+  double allowed_scale{0.0};         // |scale-1|;  0 = allowed_deviation
   double action_scale{1.0};          // action-driven multiplier
   double expression_scale{1.0};      // expression-driven multiplier
   double style_scale{1.0};           // style-driven multiplier
   double transformation_scale{1.0};  // transformation-driven multiplier
-  double hard_boundary{std::numeric_limits<double>::infinity()};
+  double hard_translation{std::numeric_limits<double>::infinity()};
+  double hard_rotation{std::numeric_limits<double>::infinity()};
+  double hard_scale{std::numeric_limits<double>::infinity()};
   bool rigid{};                      // identity-critical: never exceeds boundary
   bool volume_preserving{};          // request volume conservation
 };
@@ -208,12 +270,20 @@ enum class IdentityInvariantKind {
 [[nodiscard]] std::string_view identity_invariant_kind_name(IdentityInvariantKind kind) noexcept;
 [[nodiscard]] std::optional<IdentityInvariantKind> identity_invariant_kind_from_name(std::string_view name) noexcept;
 
+/* Severity semantics: advisory = informational (never fails), soft = quality
+ * violation (diagnostic only, does NOT fail compilation), hard = identity
+ * violation (fails closed). The `hard` field maps to severity==hard. */
+enum class InvariantSeverity { advisory, soft, hard };
+[[nodiscard]] std::string_view invariant_severity_name(InvariantSeverity severity) noexcept;
+[[nodiscard]] std::optional<InvariantSeverity> invariant_severity_from_name(std::string_view name) noexcept;
+
 struct IdentityInvariant {
   std::string id;
   IdentityInvariantKind kind{IdentityInvariantKind::proportion};
   std::vector<std::string> refs;   // proportion ids / landmark ids / structure ids
   double tolerance{0.0};
   bool hard{};
+  InvariantSeverity severity{InvariantSeverity::hard};  // operational severity
   std::string scope;               // optional "form:<id>" restriction
 };
 
@@ -225,6 +295,7 @@ struct VisualCanon {
   std::string provenance;                   // free-form provenance note
   std::vector<std::string> forms;           // form ids (base first)
   std::map<std::string, CanonStructure, std::less<>> structures;
+  std::vector<ConstructionConstraint> construction;  // relational construction (generative)
   std::vector<ProportionRule> proportions;
   std::map<std::string, VisualLandmark, std::less<>> landmarks;
   std::vector<SilhouetteFeature> silhouette_features;
@@ -245,6 +316,7 @@ struct VisualCanon {
 struct CanonLimits {
   std::uint32_t max_structures{512};
   std::uint32_t max_proportions{512};
+  std::uint32_t max_construction{512};
   std::uint32_t max_landmarks{512};
   std::uint32_t max_features{512};
   std::uint32_t max_markings{256};
@@ -261,10 +333,12 @@ struct CanonLimits {
 [[nodiscard]] std::string visual_canon_identity(const VisualCanon& canon);
 
 /* ── Canon → morphology (deterministic construction) ──
- * Builds the form's VisualMorphologyV2 from canon structures. Proportions
- * are authored relationally in the canon (local sizes/positions are
- * proportional units); the body_scale maps canonical units to canvas
- * units. No entity-specific behavior. */
+ * Builds the form's VisualMorphologyV2 from canon structures. Geometry is
+ * derived through the Relational Construction System (construction
+ * constraints, generative proportions); absolute coordinates are only
+ * projection hints/root anchors used when no constraint applies. The
+ * body_scale maps canonical units to canvas units. No entity-specific
+ * behavior. */
 [[nodiscard]] VisualMorphologyV2 canon_to_morphology(const VisualCanon& canon,
                                                      std::string_view form_id,
                                                      double body_scale = 1.0);
@@ -300,8 +374,20 @@ struct CanonLimits {
 
 /* ── Identity invariant checks ──
  * Validates proportion/landmark/silhouette/material/color invariants
- * against the constructed morphology. Hard invariants fail closed. */
+ * against the constructed morphology. Hard invariants fail closed;
+ * diagnostic codes carry a ":<severity>" suffix (advisory/soft/hard). */
 [[nodiscard]] ValidationResult check_identity_invariants(const VisualCanon& canon,
                                                          const VisualMorphologyV2& morph);
+
+/* ── Facial/expressive canon application ──
+ * Makes ExpressiveRegion/ExpressiveFeature operational: aperture, gaze,
+ * intensity and rotation translate into concrete part transforms on the
+ * resolved morphology (eye squash from aperture, emissive from intensity,
+ * ear/visor rotation, mouth aperture). Deterministic, entity-agnostic. */
+[[nodiscard]] ValidationResult apply_expression(const VisualCanon& canon,
+                                                 VisualMorphologyV2& morph,
+                                                 std::string_view emotion = {},
+                                                 double gaze_x = 0.0,
+                                                 double gaze_y = 0.0);
 
 } // namespace gspl::sprites::visual

@@ -46,6 +46,9 @@ struct StyleSemantics {
   AntiAliasPolicy aa_policy{AntiAliasPolicy::analytic};
   double pixel_quantization{0.0};
   LayerCompositing layer_compositing{LayerCompositing::source_over};
+  // StyleProgram-driven fields (lowered from factorized program):
+  std::uint32_t band_count{1};   // cel shading bands (1 = smooth)
+  std::uint32_t max_colors{0};   // palette limit (0 = unlimited)
 };
 
 struct StylePatch {

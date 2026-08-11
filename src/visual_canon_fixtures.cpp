@@ -66,7 +66,12 @@ void add_envelope(VisualCanon& c, std::string structure, double allowed,
   DeformationEnvelope e;
   e.structure_id = std::move(structure);
   e.allowed_deviation = allowed;
-  e.hard_boundary = boundary;
+  e.allowed_translation = allowed;
+  e.allowed_rotation = allowed;
+  e.allowed_scale = allowed;
+  e.hard_translation = boundary;
+  e.hard_rotation = boundary;
+  e.hard_scale = boundary;
   e.rigid = rigid;
   e.action_scale = action_scale;
   c.deformation_envelopes.emplace(e.structure_id, std::move(e));
@@ -81,8 +86,42 @@ void add_invariant(VisualCanon& c, std::string id, IdentityInvariantKind kind,
   inv.refs = std::move(refs);
   inv.tolerance = tolerance;
   inv.hard = hard;
+  inv.severity = hard ? InvariantSeverity::hard : InvariantSeverity::soft;
   inv.scope = std::move(scope);
   c.identity_invariants.push_back(std::move(inv));
+}
+
+void add_envelope_typed(VisualCanon& c, std::string structure, double allowed_translation,
+                        double allowed_rotation, double allowed_scale,
+                        double hard_translation, double hard_rotation, double hard_scale,
+                        bool rigid) {
+  DeformationEnvelope e;
+  e.structure_id = std::move(structure);
+  e.allowed_deviation = std::max({allowed_translation, allowed_rotation, allowed_scale});
+  e.allowed_translation = allowed_translation;
+  e.allowed_rotation = allowed_rotation;
+  e.allowed_scale = allowed_scale;
+  e.hard_translation = hard_translation;
+  e.hard_rotation = hard_rotation;
+  e.hard_scale = hard_scale;
+  e.rigid = rigid;
+  c.deformation_envelopes.emplace(e.structure_id, std::move(e));
+}
+
+void add_construction(VisualCanon& c, std::string id, ConstructionConstraintKind kind,
+                      std::string structure, std::string reference, ConstructionAxis axis,
+                      double factor, double offset, bool hard = true, std::string scope = "") {
+  ConstructionConstraint cc;
+  cc.id = std::move(id);
+  cc.kind = kind;
+  cc.structure = std::move(structure);
+  cc.reference = std::move(reference);
+  cc.axis = axis;
+  cc.factor = factor;
+  cc.offset = offset;
+  cc.hard = hard;
+  cc.scope = std::move(scope);
+  c.construction.push_back(std::move(cc));
 }
 
 } // namespace
@@ -177,13 +216,67 @@ VisualCanon make_voltfox_canon() {
   add_landmark(c, "hip.left", "hip", "left_hind", 0, 3.5, "hip.right");
   add_landmark(c, "hip.right", "hip", "right_hind", 0, 3.5, "hip.left");
 
-  // Relational proportions (raster-unit invariant ratios).
-  add_proportion(c, "head_to_body", make_size_measure("head", "size_x"),
-                 make_size_measure("torso", "size_x"), 0.44, 0.39, 0.50, 0.32, 0.56, true);
+  // Relational construction constraints (GENERATIVE): geometry is derived
+  // from relationships, not copied from absolute coordinates. Absolute
+  // values remain projection hints for unconstrained axes.
+  // head width = torso width * ratio (this IS head_to_body, generative).
+  add_construction(c, "gen_head_width", ConstructionConstraintKind::size_ratio,
+                   "head", "torso", ConstructionAxis::x, 8.0 / 18.0, 0.0);
+  // head height anchored to torso top chain: head.y = torso.y + torso.size_y * 0.82.
+  add_construction(c, "gen_head_height", ConstructionConstraintKind::size_ratio,
+                   "head", "torso", ConstructionAxis::y, 7.0 / 11.0, 0.0);
+  // Muzzle chain: muzzle.y = head.y + head.size_y * 0.36 (snout forward).
+  add_construction(c, "gen_muzzle_chain", ConstructionConstraintKind::chain,
+                   "muzzle", "head", ConstructionAxis::y, 0.36, 0.0);
+  // Ears: symmetry across the head-local x plane.
+  add_construction(c, "gen_ear_symmetry", ConstructionConstraintKind::symmetry,
+                   "right_ear", "left_ear", ConstructionAxis::x, 1.0, 0.0);
+  add_construction(c, "gen_ear_orient", ConstructionConstraintKind::orientation,
+                   "right_ear", "left_ear", ConstructionAxis::x, -1.0, 0.0);
+  // Eyes: symmetry across the head-local x plane.
+  add_construction(c, "gen_eye_symmetry", ConstructionConstraintKind::symmetry,
+                   "right_eye", "left_eye", ConstructionAxis::x, 1.0, 0.0);
+  // Legs: symmetry across the torso-local x plane.
+  add_construction(c, "gen_leg_symmetry", ConstructionConstraintKind::symmetry,
+                   "right_leg", "left_leg", ConstructionAxis::x, 1.0, 0.0);
+  add_construction(c, "gen_leg_orient", ConstructionConstraintKind::orientation,
+                   "right_leg", "left_leg", ConstructionAxis::x, -1.0, 0.0);
+  // Hind legs: symmetry.
+  add_construction(c, "gen_hind_symmetry", ConstructionConstraintKind::symmetry,
+                   "right_hind", "left_hind", ConstructionAxis::x, 1.0, 0.0);
+  // Tail chain: tail_mid extends from tail_base, tail_tip from tail_mid.
+  add_construction(c, "gen_tail_mid", ConstructionConstraintKind::chain,
+                   "tail_mid", "tail_base", ConstructionAxis::x, 0.5, 0.0);
+  add_construction(c, "gen_tail_tip", ConstructionConstraintKind::chain,
+                   "tail_tip", "tail_mid", ConstructionAxis::x, 0.5, 0.0);
+
+  // Relational proportions (raster-unit invariant ratios). The `derived`
+  // field makes the proportion GENERATIVE: changing `preferred` changes
+  // constructed geometry (causal, mutation-tested).
+  ProportionRule ph;
+  ph.id = "head_to_body";
+  ph.numerator = make_size_measure("head", "size_x");
+  ph.denominator = make_size_measure("torso", "size_x");
+  ph.preferred = 8.0 / 18.0;
+  ph.min = 0.39; ph.max = 0.50;
+  ph.deformation_min = 0.32; ph.deformation_max = 0.56;
+  ph.hard = true;
+  ph.derived = make_size_measure("head", "size_x");   // generative
+  ph.derived_hard = true;
+  c.proportions.push_back(std::move(ph));
   add_proportion(c, "eye_spacing", make_landmark_dist_measure("eye_center.left", "eye_center.right"),
                  make_size_measure("head", "size_x"), 0.55, 0.48, 0.62, 0.38, 0.70, true);
-  add_proportion(c, "leg_to_body", make_size_measure("left_leg", "size_y"),
-                 make_size_measure("torso", "size_y"), 0.73, 0.64, 0.82, 0.5, 0.95, true);
+  ProportionRule pl;
+  pl.id = "leg_to_body";
+  pl.numerator = make_size_measure("left_leg", "size_y");
+  pl.denominator = make_size_measure("torso", "size_y");
+  pl.preferred = 8.0 / 11.0;
+  pl.min = 0.64; pl.max = 0.82;
+  pl.deformation_min = 0.5; pl.deformation_max = 0.95;
+  pl.hard = true;
+  pl.derived = make_size_measure("left_leg", "size_y");
+  pl.derived_hard = true;
+  c.proportions.push_back(std::move(pl));
   add_proportion(c, "tail_length", make_landmark_dist_measure("tail_base_lm", "tail_tip_lm"),
                  make_size_measure("torso", "size_x"), 0.27, 0.20, 0.35, 0.14, 0.42, false);
   add_proportion(c, "muzzle_to_head", make_size_measure("muzzle", "size_y"),

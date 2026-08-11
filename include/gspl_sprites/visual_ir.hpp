@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gspl_sprites/channel_map.hpp"
+#include "gspl_sprites/fx_semantics.hpp"
 #include "gspl_sprites/material.hpp"
 #include "gspl_sprites/palette.hpp"
 #include "gspl_sprites/performance.hpp"
@@ -8,6 +9,7 @@
 #include "gspl_sprites/visual_morphology.hpp"
 
 #include <cstdint>
+#include <map>
 #include <span>
 #include <string>
 #include <string_view>
@@ -53,6 +55,9 @@ struct VisualLimits {
   std::uint32_t max_canvas_width{2048};
   std::uint32_t max_canvas_height{2048};
   std::uint32_t max_channel_requests{16};
+  // Semantic LOD: when non-zero, features with min_resolution above
+  // this target are discarded (see VisualFeature::min_resolution).
+  std::uint32_t target_resolution{0};
 };
 
 struct VisualIr {
@@ -68,6 +73,13 @@ struct VisualIr {
   PerformanceState performance;
   std::vector<std::string> layer_order;
   std::vector<ChannelRequest> channel_requests;
+  // Temporal identity: part_id -> deterministic temporal label (stable
+  // hash of the canon structure/parent/role). Persists across frames for
+  // contour/landmark/marking correspondence.
+  std::map<std::string, std::string, std::less<>> temporal_part_labels;
+  // FX state: resolved from performance events (impact, emission, aura).
+  // The renderer consults fx_state for active effect draw params.
+  FxState fx_state;
 };
 
 [[nodiscard]] ValidationResult validate_visual_ir(const VisualIr& ir, const VisualLimits& limits = {});

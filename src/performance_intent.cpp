@@ -1,5 +1,6 @@
 #include "gspl_sprites/core.hpp"
 #include "gspl_sprites/performance_intent.hpp"
+#include "gspl_sprites/visual_canon.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -69,10 +70,168 @@ void add_diag(ValidationResult& r, std::string code, std::string msg) {
   r.diagnostics.push_back({std::move(code), std::move(msg)});
 }
 
+[[nodiscard]] double clamp_abs(double v, double bound) {
+  const double a = std::abs(v);
+  return a > bound ? (v < 0 ? -bound : bound) : v;
+}
+
+[[nodiscard]] Vec2 normalized_or(Vec2 v, Vec2 fallback) {
+  return v.length_sq() > 0.0 ? v.normalized() : fallback;
+}
+
+/* Structural role helpers over canon roles (extensible, data-driven). */
+[[nodiscard]] bool is_support_role(std::string_view role) {
+  return role == "limb" || role == "leg" || role == "foot" || role == "paw" ||
+         role == "tread" || role == "wheel" || role == "appendage";
+}
+[[nodiscard]] bool is_root_mass_role(std::string_view role) {
+  return role == "body-mass" || role == "torso" || role == "chassis" || role == "body";
+}
+
 } // namespace
 
+/* ── deterministic pose/acting solver ── */
+
+PoseSolution solve_pose(const VisualCanon& canon, const PerformanceIntent& intent,
+                        const KeyPose* key_pose) {
+  PoseSolution out;
+  const double commitment = std::clamp(intent.commitment, 0.0, 1.0);
+  const double force = std::clamp(intent.force_magnitude, 0.0, 1.0);
+  const Vec2 force_dir = normalized_or(intent.force_direction, Vec2{1.0, 0.0});
+  out.gaze_direction = intent.gaze_direction.length_sq() > 0.0
+      ? intent.gaze_direction.normalized() : force_dir;
+  out.balance_offset_x = 0.0;
+  out.balance_offset_y = 0.0;
+
+  // Deterministic structure ordering: roots first, then children.
+  std::vector<std::string> root_masses;
+  std::vector<std::string> chains;  // non-root structures with support/root ancestor
+  for (const auto& [id, s] : canon.structures) {
+    if (is_root_mass_role(s.role)) root_masses.push_back(id);
+    else if (!s.parent.empty()) chains.push_back(id);
+  }
+  std::sort(root_masses.begin(), root_masses.end());
+  std::sort(chains.begin(), chains.end());
+
+  // 1. Balance: shifted/recoil translate the root mass (CoM intent).
+  double balance_shift = 0.0;
+  switch (intent.balance) {
+    case BalanceIntent::planted: balance_shift = 0.0; break;
+    case BalanceIntent::shifted: balance_shift = 1.0; break;
+    case BalanceIntent::recoil: balance_shift = -0.8; break;
+    case BalanceIntent::intentional_imbalance: balance_shift = 0.5; break;
+  }
+  if (std::abs(balance_shift) > 0.0 && !root_masses.empty()) {
+    const double shift = balance_shift * commitment * 3.0;
+    PartMotion m;
+    m.part_id = root_masses.front();
+    m.dx = -force_dir.y * shift * 0.2;
+    m.dy = shift * 0.6;
+    out.balance_offset_x = m.dx;
+    out.balance_offset_y = m.dy;
+    out.motions.push_back(std::move(m));
+  }
+
+  // 2. Line of action + force phase on the dominant root mass: anticipation
+  //    compresses along the force axis, extension/contact/impact extend.
+  if (!root_masses.empty()) {
+    const std::string& root = root_masses.front();
+    const double phase_scale =
+        (intent.phase == PerformancePhase::anticipation || intent.phase == PerformancePhase::recovery ||
+         intent.phase == PerformancePhase::settle) ? -0.5
+        : (intent.phase == PerformancePhase::extension || intent.phase == PerformancePhase::contact ||
+           intent.phase == PerformancePhase::impact) ? 0.5 : 0.0;
+    const double lean = phase_scale * force * commitment * 8.0;
+    if (std::abs(lean) > 1e-9) {
+      PartMotion m;
+      m.part_id = root;
+      m.dx = force_dir.x * lean * 0.3;
+      m.dy = force_dir.y * lean * 0.3;
+      // Rotation about the line of action (into the page) — lean.
+      m.rotation_degrees = -force_dir.y * lean * 0.4;
+      out.motions.push_back(std::move(m));
+      out.applied_chains.push_back(root);
+    }
+  }
+
+  // 3. Gaze: head structure (role facial-feature with smallest size or the
+  //    head in the face chain) rotates toward gaze direction.
+  {
+    const Vec2 g = normalized_or(out.gaze_direction, Vec2{1.0, 0.0});
+    out.head_rotation_degrees = clamp_abs(g.y * 18.0 * commitment, 24.0);
+    // Find a head: landmark owner role facial-feature/eye parent, smallest.
+    std::string head_id;
+    double best = std::numeric_limits<double>::max();
+    for (const auto& [id, s] : canon.structures) {
+      if (s.role != "facial-feature") continue;  // gaze applies to facial-feature mass, not rigid eyes
+      const double area = s.size_x * s.size_y;
+      if (area < best) { best = area; head_id = id; }
+    }
+    if (!head_id.empty() && std::abs(out.head_rotation_degrees) > 1e-9) {
+      PartMotion m;
+      m.part_id = head_id;
+      m.rotation_degrees = out.head_rotation_degrees;
+      out.motions.push_back(std::move(m));
+    }
+  }
+
+  // 4. Key pose: explicit motions are OVERRIDES applied after derived
+  //    motions (authoritative when provided), then re-sorted deterministically.
+  if (key_pose) {
+    for (const auto& m : key_pose->motions) out.motions.push_back(m);
+    if (!key_pose->emotion.empty()) { /* emotion flows via expression_intent */ }
+  }
+  std::sort(out.motions.begin(), out.motions.end(),
+            [](const PartMotion& a, const PartMotion& b) {
+              return a.part_id < b.part_id;
+            });
+  return out;
+}
+
+ValidationResult analyze_balance(const VisualCanon& canon, const PoseSolution& solution,
+                                 const PerformanceIntent& intent) {
+  ValidationResult r;
+  // Support policy: only entities with support roles are ground-checked.
+  bool has_support = false;
+  for (const auto& [id, s] : canon.structures)
+    if (is_support_role(s.role)) { has_support = true; break; }
+  if (!has_support) return r;  // flyers/zero-gravity: policy says no check
+
+  // Compute approximate CoM: root mass center + solved balance offset.
+  double cx = 0.0, cy = 0.0, wsum = 0.0;
+  for (const auto& [id, s] : canon.structures) {
+    if (!is_root_mass_role(s.role) && s.role != "facial-feature") continue;
+    const double w = std::max(0.5, s.size_x * s.size_y);
+    cx += s.x * w; cy += s.y * w; wsum += w;
+  }
+  if (wsum <= 0.0) return r;
+  cx /= wsum; cy /= wsum;
+  cx += solution.balance_offset_x;
+  cy += solution.balance_offset_y;
+
+  // Support polygon: min/max x of support structures (planted ground).
+  double min_x = std::numeric_limits<double>::max(), max_x = -std::numeric_limits<double>::max();
+  for (const auto& [id, s] : canon.structures) {
+    if (!is_support_role(s.role)) continue;
+    min_x = std::min(min_x, s.x); max_x = std::max(max_x, s.x);
+  }
+  const double planted = (intent.balance == BalanceIntent::planted ||
+                          intent.balance == BalanceIntent::shifted);
+  if (planted && max_x <= min_x) {
+    add_diag(r, "BALANCE_NO_SUPPORT", "planted pose has no plausible support polygon");
+    return r;
+  }
+  if (planted && (cx < min_x || cx > max_x)) {
+    add_diag(r, "BALANCE_OUTSIDE_SUPPORT",
+             "center of mass x=" + d2s(cx) + " outside support polygon [" +
+             d2s(min_x) + ", " + d2s(max_x) + "]");
+  }
+  return r;
+}
+
 PerformanceState pose_to_performance_state(const PerformanceIntent& intent,
-                                           const KeyPose* key_pose) {
+                                           const KeyPose* key_pose,
+                                           const VisualCanon* canon) {
   PerformanceState out;
   out.motion_phase = std::string(performance_phase_name(intent.phase));
   out.action_phase = intent.action;
@@ -84,7 +243,13 @@ PerformanceState pose_to_performance_state(const PerformanceIntent& intent,
   out.velocity_intent = dir * intent.force_magnitude;
   out.facing = (intent.gaze_direction.x < 0.0 || (intent.gaze_direction.x == 0.0 && dir.x < 0.0))
       ? "left" : "right";
-  if (key_pose) {
+  if (canon) {
+    // Canon-aware: derive motions from semantics (the actual performance
+    // reasoning path). Key pose explicit motions override derived ones.
+    const PoseSolution solution = solve_pose(*canon, intent, key_pose);
+    out.motions = solution.motions;
+    out.velocity_intent = dir * intent.force_magnitude;
+  } else if (key_pose) {
     for (const auto& m : key_pose->motions) out.motions.push_back(m);
     if (!key_pose->emotion.empty()) out.expression_intent = key_pose->emotion;
   }
