@@ -55,6 +55,7 @@ struct VisualLimits {
   std::uint32_t max_canvas_width{2048};
   std::uint32_t max_canvas_height{2048};
   std::uint32_t max_channel_requests{16};
+  FxLimits fx_limits;
   // Semantic LOD: when non-zero, features with min_resolution above
   // this target are discarded (see VisualFeature::min_resolution).
   std::uint32_t target_resolution{0};

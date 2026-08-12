@@ -87,14 +87,9 @@ VisualIrResult compile_visual_ir(const SpriteIr& ir, const VisualCompileOptions&
   //     ":severity" suffix appended by check_identity_invariants).
   if (canon_driven) {
     const ValidationResult inv = check_identity_invariants(*options.canon, morph);
-    bool hard_violation = false;
-    for (const auto& d : inv.diagnostics) {
-      const bool is_hard = d.code.find(":hard") != std::string::npos ||
-          (d.code.find(":") == std::string::npos);  // legacy (un-suffixed) = hard
-      if (is_hard) hard_violation = true;
+    for (const auto& d : inv.diagnostics)
       diag.diagnostics.push_back(d);
-    }
-    if (hard_violation) return result;
+    if (inv.has_errors()) return result;
   }
 
   // 3. Form palette: canon palettes when canon-driven; otherwise the sealed
@@ -198,12 +193,22 @@ VisualIrResult compile_visual_ir(const SpriteIr& ir, const VisualCompileOptions&
 
   // Canon-driven enforcement: clamp motions per typed envelope axis. This
   // is the SINGLE identity/deformation boundary for all performance paths:
-  // direct PerformanceState, intent-derived performance, key pose motions
-  // AND impact all pass through it when a canon is present. Deviation
-  // beyond 'allowed' is clamped in-place (permitted, per the envelope
-  // contract) and reported as an informational note; hard/rigid violations
-  // are identity-critical and fail closed. Informational notes never
-  // poison VisualIrResult::ok().
+  // direct PerformanceState, intent-derived performance, key pose motions,
+  // impact, AND expression all pass through it when a canon is present.
+  // Expression (facial features: aperture, gaze, ear rotation, etc.) is
+  // applied as typed PartMotions BEFORE the gate — no post-gate bypass.
+  if (canon_driven && !options.canon->facial_regions.empty()) {
+    // Collect expression-driven PartMotions from the facial canon.
+    // apply_expression_to_motions creates motions for aperture, gaze,
+    // rotation, etc. without mutating morph directly.
+    const double gx = perf.velocity_intent.length_sq() > 0.0
+        ? std::clamp(perf.velocity_intent.x, -1.0, 1.0) : 0.0;
+    const double gy = perf.velocity_intent.length_sq() > 0.0
+        ? std::clamp(perf.velocity_intent.y, -1.0, 1.0) : 0.0;
+    const auto expr_motions = expression_motions(*options.canon, perf.expression_intent, gx, gy);
+    for (const auto& m : expr_motions) perf.motions.push_back(m);
+  }
+
   if (canon_driven) {
     const double expression_factor = perf.expression_intent.empty() ? 1.0 : 0.5;  // 1.0 = no expression effect, not 0.0
     const double transformation_factor =
@@ -215,7 +220,7 @@ VisualIrResult compile_visual_ir(const SpriteIr& ir, const VisualCompileOptions&
         perf.action_phase, expression_factor, 1.0, transformation_factor);
     bool identity_violation = false;
     for (const auto& d : env.diagnostics) {
-      if (d.code == "DEFORMATION_HARD_VIOLATION" || d.code == "DEFORMATION_RIGID_VIOLATION") {
+      if (d.severity == DiagnosticSeverity::error) {
         identity_violation = true;
         diag.diagnostics.push_back(d);
       }
@@ -236,20 +241,6 @@ VisualIrResult compile_visual_ir(const SpriteIr& ir, const VisualCompileOptions&
       part.size_y *= m.scale_y;
       if (m.opacity > 0.0) part.opacity = m.opacity;
     }
-  }
-
-  // 5b. Facial/expressive canon: apply aperture/gaze/intensity/rotation
-  //     semantics to the resolved morphology. Emotion intent and gaze
-  //     direction flow in from the resolved performance state; expression
-  //     is a manifestation-stage operation, never identity-changing.
-  if (canon_driven && !options.canon->facial_regions.empty()) {
-    const double gx = perf.velocity_intent.length_sq() > 0.0
-        ? std::clamp(perf.velocity_intent.x, -1.0, 1.0) : 0.0;
-    const double gy = perf.velocity_intent.length_sq() > 0.0
-        ? std::clamp(perf.velocity_intent.y, -1.0, 1.0) : 0.0;
-    const ValidationResult expr = apply_expression(*options.canon, morph,
-                                                   perf.expression_intent, gx, gy);
-    for (const auto& d : expr.diagnostics) diag.diagnostics.push_back(d);
   }
 
   // 6. Materials are collected below per part (deduplicated by id).
@@ -304,6 +295,8 @@ VisualIrResult compile_visual_ir(const SpriteIr& ir, const VisualCompileOptions&
       impact_fx.phenomenon = FxPhenomenon::electric_arc;
       impact_fx.energy = FxEnergyKind::electricity;
       impact_fx.intensity = perf.impact;
+      // Bind to the active striking part if any motion is present.
+      impact_fx.source_part = perf.motions.empty() ? std::string("torso") : perf.motions[0].part_id;
       ir_out.fx_state.effects.push_back(std::move(impact_fx));
     }
     // Emission → aura effect on emissive parts.

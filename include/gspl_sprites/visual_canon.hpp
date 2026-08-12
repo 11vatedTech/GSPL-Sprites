@@ -282,8 +282,7 @@ struct IdentityInvariant {
   IdentityInvariantKind kind{IdentityInvariantKind::proportion};
   std::vector<std::string> refs;   // proportion ids / landmark ids / structure ids
   double tolerance{0.0};
-  bool hard{};
-  InvariantSeverity severity{InvariantSeverity::hard};  // operational severity
+  InvariantSeverity severity{InvariantSeverity::hard};  // single authority
   std::string scope;               // optional "form:<id>" restriction
 };
 
@@ -308,6 +307,9 @@ struct VisualCanon {
   std::map<std::string, DeformationEnvelope, std::less<>> deformation_envelopes;
   std::vector<VisualFeature> resolution_features;
   std::vector<IdentityInvariant> identity_invariants;
+  std::string gaze_driver;              // structure id that orients toward gaze ("" = auto-detect)
+  std::string attention_driver;          // structure id for attention/awareness ("" = gaze_driver)
+  std::string support_policy{"auto"};    // "auto"|"grounded"|"flight"|"buoyant"|"free" (data-driven)
   // Role-name -> concrete color palettes (deterministic; roles never vanish).
   std::map<std::string, std::string, std::less<>> base_palette;   // role -> "#rrggbb"
   std::map<std::string, std::map<std::string, std::string, std::less<>>, std::less<>> form_palettes; // form -> role -> hex
@@ -389,5 +391,13 @@ struct CanonLimits {
                                                  std::string_view emotion = {},
                                                  double gaze_x = 0.0,
                                                  double gaze_y = 0.0);
+
+/* expression_motions: collect expression-driven PartMotions for the facial
+ * canon BEFORE the deformation enforcement gate. Returns aperture, gaze,
+ * rotation, etc. as motions; does NOT mutate morph. Consumed by the compiler
+ * to close the post-gate expression bypass. */
+[[nodiscard]] std::vector<PartMotion> expression_motions(const VisualCanon& canon,
+                                                         std::string_view emotion,
+                                                         double gaze_x, double gaze_y);
 
 } // namespace gspl::sprites::visual

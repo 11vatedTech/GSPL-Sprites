@@ -17,8 +17,9 @@ using namespace std::string_view_literals;
 
 [[nodiscard]] bool is_nan_or_inf(double v) { return !std::isfinite(v); }
 
-void add_diag(ValidationResult& r, std::string code, std::string msg) {
-  r.diagnostics.push_back({std::move(code), std::move(msg)});
+void add_diag(ValidationResult& r, std::string code, std::string msg,
+              DiagnosticSeverity severity = DiagnosticSeverity::error) {
+  r.diagnostics.push_back({std::move(code), std::move(msg), severity});
 }
 
 [[nodiscard]] std::string d2s(double v) {
@@ -738,12 +739,22 @@ struct SolvedGeom {
       const auto parts = split_measure(p.derived);
       if (!parts || parts->kind != "size" || parts->args.size() != 2) continue;
       const std::string& target = parts->args[0];
-      const std::string& axis = parts->args[1];
-      const ConstructionAxis ax = axis == "size_x" ? ConstructionAxis::x
-                                 : (axis == "size_y" ? ConstructionAxis::y : ConstructionAxis::z);
+      const std::string& targ_axis = parts->args[1];
+      const ConstructionAxis ax = targ_axis == "x"   ? ConstructionAxis::x
+                                 : targ_axis == "y"   ? ConstructionAxis::y
+                                 : targ_axis == "size_x" ? ConstructionAxis::x
+                                 : targ_axis == "size_y" ? ConstructionAxis::y
+                                 :                       ConstructionAxis::z;
       const auto den = split_measure(p.denominator);
       if (!den || den->kind != "size" || den->args.size() != 2) continue;
-      const double base = *axis_size(g, ax, den->args[0]);
+      // Denominator has its own axis — derive from that axis, not the target.
+      const std::string& den_axis = den->args[1];
+      const ConstructionAxis dax = den_axis == "x"   ? ConstructionAxis::x
+                                  : den_axis == "y"   ? ConstructionAxis::y
+                                  : den_axis == "size_x" ? ConstructionAxis::x
+                                  : den_axis == "size_y" ? ConstructionAxis::y
+                                  :                       ConstructionAxis::z;
+      const double base = *axis_size(g, dax, den->args[0]);
       if (base <= 0.0) continue;  // denominator unresolved yet; next pass
       const double value = base * p.preferred;
       double* out = axis_size(g, ax, target);
@@ -1015,7 +1026,6 @@ std::string canonicalize_visual_canon(const VisualCanon& canon) {
     emit_kv(out, k + "kind", identity_invariant_kind_name(inv.kind));
     emit_join(out, k + "refs", inv.refs);
     emit_kv(out, k + "tolerance", d2s(inv.tolerance));
-    emit_bool(out, k + "hard", inv.hard);
     emit_kv(out, k + "severity", invariant_severity_name(inv.severity));
     emit_kv(out, k + "scope", inv.scope);
   }
@@ -1332,8 +1342,8 @@ std::optional<VisualCanon> parse_visual_canon(std::string_view text, const Canon
       if (field == "kind") { const auto v = identity_invariant_kind_from_name(kv.value); if (!v) fail(); else it->kind = *v; }
       else if (field == "refs") it->refs = split_semicolon(kv.value);
       else if (field == "tolerance" && parse_double(kv.value, dv)) it->tolerance = dv;
-      else if (field == "hard") { const auto b = parse_bool_strict(kv.value); if (!b) fail(); else { it->hard = *b; it->severity = *b ? InvariantSeverity::hard : InvariantSeverity::soft; } }
-      else if (field == "severity") { const auto v = invariant_severity_from_name(kv.value); if (!v) fail(); else { it->severity = *v; it->hard = (*v == InvariantSeverity::hard); } }
+      else if (field == "hard") { const auto b = parse_bool_strict(kv.value); if (!b) fail(); else it->severity = *b ? InvariantSeverity::hard : InvariantSeverity::soft; }
+      else if (field == "severity") { const auto v = invariant_severity_from_name(kv.value); if (!v) fail(); else it->severity = *v; }
       else if (field == "scope") it->scope = kv.value;
       else fail();
     }
@@ -1670,7 +1680,8 @@ ValidationResult enforce_deformation_envelopes(const VisualCanon& canon, Perform
     if (clamped) {
       add_diag(r, "DEFORMATION_CLAMPED",
                "structure '" + m.part_id + "' deviation clamped to typed allowed bounds "
-               "(t=" + d2s(allowed_t) + ", r=" + d2s(allowed_r) + ", s=" + d2s(allowed_s) + ")");
+               "(t=" + d2s(allowed_t) + ", r=" + d2s(allowed_r) + ", s=" + d2s(allowed_s) + ")",
+               DiagnosticSeverity::warning);
     }
   }
   return r;
@@ -1733,8 +1744,19 @@ ValidationResult check_identity_invariants(const VisualCanon& canon, const Visua
             if (lm.owner == ref && lm.silhouette_anchor) anchored = true;
           for (const auto& f : canon.silhouette_features)
             if (f.structure_ref == ref && f.kind == SilhouetteFeatureKind::anchor) anchored = true;
-          if (!anchored && !canon.structures.count(ref))
-            add_diag(r, prefix + "MISSING", "silhouette anchor structure '" + ref + "' missing");
+          if (canon.structures.count(ref)) {
+            // Structure exists — if an anchor invariant requires it, it must
+            // actually have a qualifying silhouette anchor (landmark or
+            // silhouette feature).  This is the explicit fix for the bug
+            // where a present structure with a required anchor escaped.
+            if (!anchored)
+              add_diag(r, prefix + "UNANCHORED",
+                       "structure '" + ref + "' has no silhouette anchor");
+          } else {
+            if (!anchored)
+              add_diag(r, prefix + "MISSING",
+                       "silhouette anchor structure '" + ref + "' missing");
+          }
         }
         break;
       }
@@ -1797,20 +1819,85 @@ ValidationResult check_identity_invariants(const VisualCanon& canon, const Visua
         break;
       }
     }
-    // Severity semantics: advisory diagnostics are informational; soft
-    // diagnostics are quality violations that never fail closed; hard
-    // diagnostics are identity violations. Every diagnostic emitted for
-    // this invariant carries the ":severity" suffix so downstream consumers
-    // can classify without re-deriving it.
-    const std::string sev_suffix = ":" + std::string(invariant_severity_name(inv.severity));
+    // Typed severity: advisory=info, soft=warning, hard=error.
+    const DiagnosticSeverity sev =
+        inv.severity == InvariantSeverity::advisory ? DiagnosticSeverity::info
+        : inv.severity == InvariantSeverity::soft ? DiagnosticSeverity::warning
+        : DiagnosticSeverity::error;
     for (auto& d : r.diagnostics)
-      if (d.code.rfind(prefix, 0) == 0 && d.code.find(':') == std::string::npos)
-        d.code += sev_suffix;
+      if (d.code.rfind(prefix, 0) == 0) d.severity = sev;
   }
   return r;
 }
 
 /* ── facial/expressive canon application ── */
+
+std::vector<PartMotion> expression_motions(const VisualCanon& canon,
+                                           std::string_view emotion,
+                                           double gaze_x, double gaze_y) {
+  std::vector<PartMotion> out;
+  (void)emotion;  // reserved for future emotion-to-feature-mapping table
+  auto find_by_role = [&](const std::string& role) -> std::string {
+    for (const auto& [id, s] : canon.structures)
+      if (s.role == role || (role == "ear" && id.find("ear") != std::string::npos))
+        return id;
+    return {};
+  };
+
+  for (const auto& region : canon.facial_regions) {
+    for (const auto& f : region.features) {
+      // Resolve feature-to-part binding: by explicit id in the canon, then by
+      // role-based search. Feature IDs (like "feature.eye_left") are metadata;
+      // the actual motion must target a canon structure ID.
+      std::string target_id;
+      if (!f.id.empty() && canon.structures.find(f.id) != canon.structures.end()) {
+        target_id = f.id;
+      } else {
+        switch (f.kind) {
+          case ExpressiveFeatureKind::eye: target_id = find_by_role("eye"); break;
+          case ExpressiveFeatureKind::mouth: target_id = find_by_role("mouth"); break;
+          case ExpressiveFeatureKind::visor: target_id = find_by_role("visor"); break;
+          case ExpressiveFeatureKind::ear: target_id = find_by_role("ear"); break;
+          case ExpressiveFeatureKind::brow: target_id = find_by_role(f.id.empty() ? std::string{} : f.id); break;
+          case ExpressiveFeatureKind::antenna: target_id = find_by_role(f.id.empty() ? std::string{} : f.id); break;
+          default: break;
+        }
+      }
+      if (target_id.empty()) continue;
+      PartMotion m;
+      m.part_id = target_id;
+      switch (f.kind) {
+        case ExpressiveFeatureKind::eye: {
+          const double aperture = std::clamp(f.aperture, 0.0, 1.0);
+          m.scale_x = 0.3 + 0.7 * aperture;
+          m.scale_y = std::max(0.3, aperture * 0.9);
+          m.dx = std::clamp(gaze_x + f.gaze, -1.0, 1.0) * 0.4;
+          break;
+        }
+        case ExpressiveFeatureKind::mouth:
+        case ExpressiveFeatureKind::visor: {
+          m.scale_y = std::clamp(f.aperture, 0.05, 1.0);
+          break;
+        }
+        case ExpressiveFeatureKind::ear: {
+          m.rotation_degrees = f.rotation;
+          break;
+        }
+        case ExpressiveFeatureKind::brow: {
+          m.dy = (std::abs(gaze_y) * 0.5 + 0.25) * (target_id.find("left") != std::string::npos ? -1.0 : 1.0);
+          break;
+        }
+        case ExpressiveFeatureKind::antenna: {
+          m.rotation_degrees = f.rotation * 0.5;
+          break;
+        }
+        default: break;
+      }
+      out.push_back(std::move(m));
+    }
+  }
+  return out;
+}
 
 ValidationResult apply_expression(const VisualCanon& canon, VisualMorphologyV2& morph,
                                   std::string_view emotion, double gaze_x, double gaze_y) {

@@ -14,8 +14,9 @@ namespace {
   return std::string(buf, res.ptr);
 }
 
-void add_diag(ValidationResult& r, std::string code, std::string msg) {
-  r.diagnostics.push_back({std::move(code), std::move(msg)});
+void add_diag(ValidationResult& r, std::string code, std::string msg,
+              DiagnosticSeverity severity = DiagnosticSeverity::error) {
+  r.diagnostics.push_back({std::move(code), std::move(msg), severity});
 }
 
 [[nodiscard]] std::string outline_name(OutlineSelection v) {

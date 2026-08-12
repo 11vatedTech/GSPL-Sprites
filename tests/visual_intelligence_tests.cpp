@@ -264,10 +264,10 @@ static void test_deformation_enforcement() {
     PartMotion m; m.part_id = "left_leg"; m.dx = 5.0;  // allowed 3.2, boundary 7.0
     perf.motions.push_back(m);
     const ValidationResult r = enforce_deformation_envelopes(vf, perf, "", 0.0, 1.0, 1.0);
-    check(!r.ok(), "over-allowed motion reports clamped diagnostic");
     bool clamped = false;
     for (const auto& d : r.diagnostics) if (d.code == "DEFORMATION_CLAMPED") clamped = true;
-    check(clamped, "over-allowed motion clamped (not failed)");
+    check(clamped, "over-allowed motion reports clamped diagnostic (warning, not error)");
+    check(r.ok(), "clamping is a warning — ok() still true");
     check(perf.motions[0].dx <= 3.2 + 1e-9, "motion clamped to allowed bound");
   }
   {  // hard boundary exceeded -> fail closed, no silent clamp

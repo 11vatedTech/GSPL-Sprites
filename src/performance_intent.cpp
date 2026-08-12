@@ -66,8 +66,9 @@ namespace {
   return d2s(v.x) + "," + d2s(v.y);
 }
 
-void add_diag(ValidationResult& r, std::string code, std::string msg) {
-  r.diagnostics.push_back({std::move(code), std::move(msg)});
+void add_diag(ValidationResult& r, std::string code, std::string msg,
+              DiagnosticSeverity severity = DiagnosticSeverity::error) {
+  r.diagnostics.push_back({std::move(code), std::move(msg), severity});
 }
 
 [[nodiscard]] double clamp_abs(double v, double bound) {
@@ -154,18 +155,16 @@ PoseSolution solve_pose(const VisualCanon& canon, const PerformanceIntent& inten
     }
   }
 
-  // 3. Gaze: head structure (role facial-feature with smallest size or the
-  //    head in the face chain) rotates toward gaze direction.
+  // 3. Gaze: the canon's explicit gaze_driver structure (or first "head"-role
+  //    structure if unset) rotates toward gaze direction. No heuristic.
   {
     const Vec2 g = normalized_or(out.gaze_direction, Vec2{1.0, 0.0});
     out.head_rotation_degrees = clamp_abs(g.y * 18.0 * commitment, 24.0);
-    // Find a head: landmark owner role facial-feature/eye parent, smallest.
-    std::string head_id;
-    double best = std::numeric_limits<double>::max();
-    for (const auto& [id, s] : canon.structures) {
-      if (s.role != "facial-feature") continue;  // gaze applies to facial-feature mass, not rigid eyes
-      const double area = s.size_x * s.size_y;
-      if (area < best) { best = area; head_id = id; }
+    // Determine gaze driver: explicit canon field > role "head" > empty.
+    std::string head_id = canon.gaze_driver;
+    if (head_id.empty()) {
+      for (const auto& [id, s] : canon.structures)
+        if (s.role == "head") { head_id = id; break; }
     }
     if (!head_id.empty() && std::abs(out.head_rotation_degrees) > 1e-9) {
       PartMotion m;
@@ -176,9 +175,16 @@ PoseSolution solve_pose(const VisualCanon& canon, const PerformanceIntent& inten
   }
 
   // 4. Key pose: explicit motions are OVERRIDES applied after derived
-  //    motions (authoritative when provided), then re-sorted deterministically.
+  //    motions (authoritative when provided): KeyPose with the same part_id
+  //    REPLACES any previously derived motion (override, not append).
   if (key_pose) {
-    for (const auto& m : key_pose->motions) out.motions.push_back(m);
+    for (const auto& m : key_pose->motions) {
+      // Remove any derived motion for the same part (override semantics).
+      std::erase_if(out.motions, [&](const PartMotion& existing) {
+        return existing.part_id == m.part_id;
+      });
+      out.motions.push_back(m);
+    }
     if (!key_pose->emotion.empty()) { /* emotion flows via expression_intent */ }
   }
   std::sort(out.motions.begin(), out.motions.end(),

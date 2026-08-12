@@ -88,6 +88,12 @@ ValidationResult validate_visual_ir(const VisualIr& ir, const VisualLimits& limi
       add("VISUAL_IR_CHANNEL_ID", "channel request has an empty id");
     }
   }
+
+  // Validate FX state embedded in IR (if present).
+  if (!ir.fx_state.entity_id.empty()) {
+    const auto fx_result = validate_fx_state(ir.fx_state, limits.fx_limits);
+    for (auto& d : fx_result.diagnostics) result.diagnostics.push_back(std::move(d));
+  }
   return result;
 }
 
@@ -138,7 +144,19 @@ std::string canonicalize_visual_ir(const VisualIr& ir) {
     out << "{\"kind\":" << static_cast<int>(ir.channel_requests[i].kind)
         << ",\"id\":\"" << ir.channel_requests[i].id << "\"}";
   }
-  out << "]}";
+  out << "]";  // close channels array
+  // Temporal part labels (per-part identity for frame correspondence)
+  out << ",\"temporal_labels\":[";
+  bool first_tl = true;
+  for (const auto& [part_id, label] : ir.temporal_part_labels) {
+    if (!first_tl) out << ",";
+    first_tl = false;
+    out << "{\"p\":\"" << part_id << "\",\"l\":\"" << label << "\"}";
+  }
+  out << "]";
+  // FX state (if populated) is canonical manifestation state
+  out << ",\"fx\":" << canonicalize_fx_state(ir.fx_state);
+  out << "}";  // close root JSON object
   return out.str();
 }
 

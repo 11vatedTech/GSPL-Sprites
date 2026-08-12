@@ -85,7 +85,6 @@ void add_invariant(VisualCanon& c, std::string id, IdentityInvariantKind kind,
   inv.kind = kind;
   inv.refs = std::move(refs);
   inv.tolerance = tolerance;
-  inv.hard = hard;
   inv.severity = hard ? InvariantSeverity::hard : InvariantSeverity::soft;
   inv.scope = std::move(scope);
   c.identity_invariants.push_back(std::move(inv));
