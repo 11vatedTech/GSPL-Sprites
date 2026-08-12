@@ -147,23 +147,17 @@ VisualIrResult compile_visual_ir(const SpriteIr& ir, const VisualCompileOptions&
     perf = pose_to_performance_state(*options.intent, options.key_pose,
                                      canon_driven ? options.canon : nullptr);
     if (canon_driven) {
-      // Balance/support reasoning: quality diagnostics only (never poison
-      // VisualIrResult::ok()); support policy is data-driven and flyers/
-      // zero-gravity entities are exempt by role set.
+      // Balance/support reasoning: data-driven support policy (grounded /
+      // flight / buoyant / free / auto) and declared support_capable
+      // structures; KeyPose support contacts and center_of_mass are consumed
+      // when authored. Findings are quality diagnostics with WARNING severity
+      // — surfaced and preserved for tooling, never fatal (ok() checks only
+      // error severity). Flyers/zero-gravity entities produce none.
       const PoseSolution sol = solve_pose(*options.canon, *options.intent, options.key_pose);
-      const ValidationResult bal = analyze_balance(*options.canon, sol, *options.intent);
+      const ValidationResult bal = analyze_balance(*options.canon, sol, *options.intent, options.key_pose);
       for (const auto& d : bal.diagnostics) {
-        // Informational quality note: surfaced but never fails the compile.
         diag.diagnostics.push_back(d);
       }
-      // Remove any balance notes from the failing channel: they are quality
-      // diagnostics, not identity violations.
-      diag.diagnostics.erase(
-          std::remove_if(diag.diagnostics.begin(), diag.diagnostics.end(),
-                         [](const Diagnostic& d) {
-                           return d.code.rfind("BALANCE_", 0) == 0;
-                         }),
-          diag.diagnostics.end());
     }
   }
 
@@ -258,14 +252,8 @@ VisualIrResult compile_visual_ir(const SpriteIr& ir, const VisualCompileOptions&
   // Low-priority parts are merged/omitted at low resolutions while
   // silhouette and identity-critical parts always survive.
   if (canon_driven && options.target_resolution > 0) {
-    for (const auto& rf : options.canon->resolution_features) {
-      if (rf.min_resolution > options.target_resolution) {
-        auto pit = morph.parts.find(rf.structure_ref);
-        if (pit != morph.parts.end()) {
-          pit->second.visible = false;
-        }
-      }
-    }
+    const ValidationResult lod = apply_semantic_lod(*options.canon, morph, options.target_resolution);
+    for (const auto& d : lod.diagnostics) diag.diagnostics.push_back(d);
   }
   ir_out.morphology = std::move(morph);
   ir_out.style = style;
@@ -273,44 +261,80 @@ VisualIrResult compile_visual_ir(const SpriteIr& ir, const VisualCompileOptions&
   ir_out.performance = perf;
   ir_out.layer_order = ir_out.morphology.layer_order;
 
-  // Temporal identity: assign deterministic per-part labels for
-  // cross-frame correspondence. The label is a hash of the canon
-  // structure identity (parent, role, primitive, layer) so that
-  // contours, landmarks and markings persist between poses.
+  // Temporal identity: deterministic semantic labels for cross-frame
+  // correspondence across parts, landmarks, markings, material regions,
+  // expressive features and FX emitters. Labels derive from STABLE canon
+  // identity (parent/role/primitive/layer, owner/kind, etc.) — never from
+  // pose-dependent geometry — so a structure keeps its identity while its
+  // transform changes between poses.
   if (canon_driven) {
     for (const auto& [id, s] : options.canon->structures) {
       const std::string seed = s.parent + "|" + s.role + "|" + s.primitive + "|" + s.layer;
-      ir_out.temporal_part_labels[id] = gspl::sprites::sha256("temporal|" + id + "|" + seed);
+      ir_out.temporal_part_labels[id] = gspl::sprites::sha256("temporal|part|" + id + "|" + seed);
     }
+    for (const auto& [id, lm] : options.canon->landmarks) {
+      const std::string seed = lm.owner + "|" + lm.role + "|" + lm.symmetry;
+      ir_out.temporal_landmark_labels[id] = gspl::sprites::sha256("temporal|landmark|" + id + "|" + seed);
+    }
+    for (const auto& mk : options.canon->markings) {
+      const std::string seed = mk.structure_ref + "|" + std::string(marking_kind_name(mk.kind)) + "|" + mk.color_role;
+      ir_out.temporal_marking_labels[mk.id] = gspl::sprites::sha256("temporal|marking|" + mk.id + "|" + seed);
+    }
+    for (const auto& m : options.canon->materials) {
+      const std::string seed = m.structure_ref + "|" + m.material_class;
+      ir_out.temporal_material_labels[m.id] = gspl::sprites::sha256("temporal|material|" + m.id + "|" + seed);
+    }
+    for (const auto& reg : options.canon->facial_regions)
+      for (const auto& f : reg.features) {
+        const std::string seed = reg.id + "|" + std::string(expressive_feature_kind_name(f.kind));
+        ir_out.temporal_feature_labels[f.id] = gspl::sprites::sha256("temporal|feature|" + f.id + "|" + seed);
+      }
+  }
+  for (const auto& e : ir_out.fx_state.effects) {
+    const std::string seed = e.source_part + "|" + std::string(fx_phenomenon_name(e.phenomenon));
+    ir_out.temporal_fx_labels[e.id] = gspl::sprites::sha256("temporal|fx|" + e.id + "|" + seed);
   }
 
-  // FX semantics: resolve from performance events.
+  // FX semantics: resolve TYPED requests only. A request carries explicit
+  // phenomenon+energy+source semantics; force/commitment may scale intensity
+  // but NEVER invent the phenomenon. Each request is validated (bounds +
+  // source/target parts exist in the resolved morphology) before it becomes
+  // FxState. No magnitude heuristic; no anatomy fallback ("torso" removed).
   {
-    ir_out.fx_state.schema = "gspl.fx/0.1";
-    ir_out.fx_state.entity_id = ir.entity_id;
-    // Impact (force magnitude > 0.5) → electric arc.
-    if (perf.impact > 0.5) {
-      FxEffect impact_fx;
-      impact_fx.id = "impact_effect";
-      impact_fx.phenomenon = FxPhenomenon::electric_arc;
-      impact_fx.energy = FxEnergyKind::electricity;
-      impact_fx.intensity = perf.impact;
-      // Bind to the active striking part if any motion is present.
-      impact_fx.source_part = perf.motions.empty() ? std::string("torso") : perf.motions[0].part_id;
-      ir_out.fx_state.effects.push_back(std::move(impact_fx));
-    }
-    // Emission → aura effect on emissive parts.
-    for (const auto& [id, part] : ir_out.morphology.parts) {
-      if (part.emissive) {
-        FxEffect aura_fx;
-        aura_fx.id = "aura_effect";
-        aura_fx.phenomenon = FxPhenomenon::aura;
-        aura_fx.energy = FxEnergyKind::light;
-        aura_fx.intensity = 0.6;
-        aura_fx.source_part = id;
-        ir_out.fx_state.effects.push_back(std::move(aura_fx));
-        break;  // one aura effect covers all emissive parts
+    for (const auto& req : options.fx_requests) {
+      const auto vr = validate_fx_request(req);
+      for (const auto& d : vr.diagnostics) diag.diagnostics.push_back(d);
+      if (!vr.ok()) continue;  // invalid request: reported, never emitted
+      if (!ir_out.morphology.parts.count(req.source_part)) {
+        diag.diagnostics.push_back({"VISUAL_FX_SOURCE_MISSING",
+            "fx request '" + req.id + "' source part '" + req.source_part + "' missing from morphology"});
+        continue;
       }
+      if (!req.target_part.empty() && !ir_out.morphology.parts.count(req.target_part)) {
+        diag.diagnostics.push_back({"VISUAL_FX_TARGET_MISSING",
+            "fx request '" + req.id + "' target part '" + req.target_part + "' missing from morphology"});
+        continue;
+      }
+      FxEffect effect;
+      effect.id = req.id;
+      effect.phenomenon = req.phenomenon;
+      effect.energy = req.energy;
+      effect.source_part = req.source_part;
+      effect.target_part = req.target_part;
+      // Semantic magnitude scales intensity; the phenomenon is authoritative.
+      effect.intensity = std::clamp(req.intensity * (0.5 + 0.5 * perf.impact), 0.0, 1.0);
+      effect.temperature = req.temperature;
+      effect.charge = req.charge;
+      effect.velocity = req.velocity;
+      effect.branching = req.branching;
+      effect.persistence = req.persistence;
+      effect.emission = req.emission;
+      effect.color_role = req.color_role;
+      ir_out.fx_state.effects.push_back(std::move(effect));
+    }
+    if (!ir_out.fx_state.effects.empty()) {
+      ir_out.fx_state.schema = "gspl.fx/0.1";
+      ir_out.fx_state.entity_id = ir.entity_id;
     }
   }
 

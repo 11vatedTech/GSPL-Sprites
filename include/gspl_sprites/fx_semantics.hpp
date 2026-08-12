@@ -63,6 +63,29 @@ struct FxLimits {
   std::uint32_t max_effects{64};
 };
 
+/* ── Typed FX request (semantic authority) ──
+ * FX phenomenon and energy NEVER originate from magnitude heuristics
+ * (force > 0.5 does not invent electricity). An effect is requested with an
+ * explicit phenomenon + energy + semantic source; force/commitment may only
+ * scale intensity. Requests are validated against the resolved morphology
+ * (source/target part ids must exist) before becoming FxState. */
+struct FxRequest {
+  std::string id;
+  FxPhenomenon phenomenon{FxPhenomenon::impact_flash};
+  FxEnergyKind energy{FxEnergyKind::neutral};
+  std::string source_part;          // semantic emitter (structure/part id)
+  std::string target_part;          // semantic receiver ("" allowed)
+  double intensity{1.0};            // 0..1 (semantic magnitude, not invented)
+  double temperature{0.0};
+  double charge{0.0};
+  Vec2 velocity;
+  double branching{0.0};
+  double persistence{1.0};
+  double emission{0.0};
+  std::string color_role{"effect"};
+};
+
+[[nodiscard]] ValidationResult validate_fx_request(const FxRequest& request);
 [[nodiscard]] ValidationResult validate_fx_state(const FxState& state, const FxLimits& limits = {});
 [[nodiscard]] std::string canonicalize_fx_state(const FxState& state);
 [[nodiscard]] std::string fx_state_identity(const FxState& state);

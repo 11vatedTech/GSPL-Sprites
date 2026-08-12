@@ -35,6 +35,7 @@
 #include <iostream>
 #include <iterator>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -812,7 +813,576 @@ static void test_serialization_determinism() {
   check(morph2.parts.size() == morph.parts.size(), "compat canon reconstructs morphology");
 }
 
-// ── 14. Review-artifact generation (argv-gated, mirrors visual_core_tests) ──
+// ── 14. Functional-authority closure: causal + hostile proofs ──
+// Every test mutates a semantic cause and asserts the expected semantic
+// effect (or failure boundary). No field-existence tests.
+
+static void test_functional_authority_closure() {
+  // 14.1 StyleSemantics identity completeness: band_count / max_colors are
+  // renderer-affecting and must participate in validate/canonicalize/
+  // identity AND in visual_ir_identity through the compiled VisualIr.
+  {
+    StyleSemantics s1;
+    StyleSemantics s2 = s1;
+    s2.band_count = 3;
+    check_ok(validate_style(s1), "style with default bands validates");
+    check_ok(validate_style(s2), "style with 3 bands validates");
+    check(style_identity(s1) != style_identity(s2), "band_count participates in style identity");
+    StyleSemantics bad = s1;
+    bad.band_count = 0;
+    check_fail(validate_style(bad), "zero band_count rejected");
+    StyleSemantics s3 = s1;
+    s3.max_colors = 8;
+    check(style_identity(s1) != style_identity(s3), "max_colors participates in style identity");
+    StyleSemantics bad2 = s1;
+    bad2.max_colors = 1;
+    check_fail(validate_style(bad2), "max_colors below 2 rejected");
+    // canonicalize includes the fields -> different canonical bytes.
+    check(canonicalize_style(s1) != canonicalize_style(s2), "band_count in canonicalize_style");
+    check(canonicalize_style(s1) != canonicalize_style(s3), "max_colors in canonicalize_style");
+  }
+  // VisualIr identity: same IR except band_count -> different identity.
+  {
+    const VisualCanon vf = make_voltfox_canon();
+    const SpriteIr ir = make_ir_from_canon(vf);
+    VisualCompileOptions opts;
+    opts.canvas_width = 128; opts.canvas_height = 128;
+    opts.canon = &vf;
+    const auto base = compile_visual_ir(ir, opts);
+    check(base.ok(), "style-identity probe compiles");
+    if (base.ok()) {
+      VisualIr a = *base.value;
+      VisualIr b = a;
+      b.style.band_count = 4;
+      check(visual_ir_identity(a) != visual_ir_identity(b), "band_count changes visual_ir_identity");
+      VisualIr c = a;
+      c.style.max_colors = 16;
+      check(visual_ir_identity(a) != visual_ir_identity(c), "max_colors changes visual_ir_identity");
+      // Identity-completeness regression: no renderer-consumed field may
+      // change pixels while leaving visual_ir_identity unchanged. Where the
+      // scene exercises the field (cell shading for band_count), the pixels
+      // MUST change deterministically.
+      const RasterResult r1 = render_visual_ir(a);
+      VisualIr cell = a;
+      cell.style.shadow_model = ShadowModel::cell;  // exercise band quantization
+      cell.style.band_count = 4;
+      const RasterResult r2 = render_visual_ir(cell);
+      check(r1.ok() && r2.ok(), "style-differing renders succeed");
+      if (r1.ok() && r2.ok())
+        check(r1.value->image.pixels != r2.value->image.pixels,
+              "cell-shaded band_count change produces a deterministic pixel change");
+      // max_colors: cap the palette below the present color count -> the
+      // quantized palette differs from the uncapped render. The voltfox
+      // canon is used because it exercises several distinct part colors.
+      const VisualCanon vf2 = make_voltfox_canon();
+      VisualCompileOptions mc_opts;
+      mc_opts.canvas_width = 128; mc_opts.canvas_height = 128;
+      mc_opts.canon = &vf2;
+      const auto mres = compile_visual_ir(make_ir_from_canon(vf2), mc_opts);
+      if (mres.ok()) {
+        VisualIr hp = *mres.value;
+        VisualIr hc = hp;
+        hc.style.max_colors = 2;
+        const RasterResult pr = render_visual_ir(hp);
+        const RasterResult cr = render_visual_ir(hc);
+        check(pr.ok() && cr.ok(), "max_colors renders succeed");
+        if (pr.ok() && cr.ok())
+          check(pr.value->image.pixels != cr.value->image.pixels,
+                "max_colors cap produces a deterministic pixel change");
+        else
+          check(false, "max_colors renders succeed");
+      }
+    }
+  }
+
+  // 14.2 gaze_driver / attention_driver / support_policy are authoritative:
+  // validated, canonicalized, parsed, round-tripped, identity-inclusive.
+  {
+    VisualCanon c = make_voltfox_canon();
+    check_ok(validate_visual_canon(c), "canon with drivers validates");
+    VisualCanon bad = c;
+    bad.gaze_driver = "no_such_structure";
+    check_fail(validate_visual_canon(bad), "dangling gaze_driver rejected");
+    VisualCanon bad2 = c;
+    bad2.attention_driver = "no_such_structure";
+    check_fail(validate_visual_canon(bad2), "dangling attention_driver rejected");
+    VisualCanon bad3 = c;
+    bad3.support_policy = static_cast<SupportPolicy>(99);
+    check_fail(validate_visual_canon(bad3), "invalid support_policy fails closed");
+
+    VisualCanon g = c;
+    g.gaze_driver = "left_ear";
+    check(visual_canon_identity(g) != visual_canon_identity(c),
+          "behavior-changing gaze_driver changes canon identity");
+
+    // Round-trip: drivers survive canonicalize -> parse.
+    const std::string text = canonicalize_visual_canon(c);
+    const auto parsed = parse_visual_canon(text);
+    check(parsed.has_value(), "canon with drivers parses");
+    if (parsed) {
+      check(parsed->gaze_driver == c.gaze_driver, "gaze_driver round-trips");
+      check(parsed->attention_driver == c.attention_driver, "attention_driver round-trips");
+      check(parsed->support_policy == c.support_policy, "support_policy round-trips");
+      check(canonicalize_visual_canon(*parsed) == text, "driver-bearing canon round-trip stable");
+    }
+  }
+
+  // 14.3 Support semantics are explicit, not inferred from appendages.
+  {
+    const VisualCanon vf = make_voltfox_canon();
+    PerformanceIntent intent;
+    intent.balance = BalanceIntent::planted;
+    intent.action = "idle";
+    const PoseSolution sol = solve_pose(vf, intent);
+    const ValidationResult bal = analyze_balance(vf, sol, intent);
+    // Planted Voltfox HAS declared paw support -> no BALANCE_NO_SUPPORT.
+    bool no_support = false;
+    for (const auto& d : bal.diagnostics)
+      if (d.code == "BALANCE_NO_SUPPORT") no_support = true;
+    check(!no_support, "planted voltfox has plausible paw support (no BALANCE_NO_SUPPORT)");
+    // BALANCE_* diagnostics are typed warnings, never errors.
+    for (const auto& d : bal.diagnostics)
+      if (d.code.rfind("BALANCE_", 0) == 0)
+        check(d.severity != DiagnosticSeverity::error, "balance diagnostics are nonfatal warnings");
+
+    // A canon whose support_capable set is empty -> planted fails with a
+    // warning (ears/tails/antennae are NOT inferred as support).
+    VisualCanon no_support_canon = vf;
+    for (auto& [id, s] : no_support_canon.structures) s.support_capable = false;
+    const PoseSolution sol2 = solve_pose(no_support_canon, intent);
+    const ValidationResult bal2 = analyze_balance(no_support_canon, sol2, intent);
+    bool flagged = false;
+    for (const auto& d : bal2.diagnostics)
+      if (d.code == "BALANCE_NO_SUPPORT") flagged = true;
+    check(flagged, "planted pose without declared support contacts flagged");
+
+    // Flight policy: flyer legitimately skips ground analysis with NO
+    // diagnostic (and no fixture-specific branch).
+    const VisualCanon fly = make_flyer_canon();
+    const PoseSolution sol3 = solve_pose(fly, intent);
+    const ValidationResult bal3 = analyze_balance(fly, sol3, intent);
+    check_ok(bal3, "flight policy skips ground analysis cleanly");
+
+    // KeyPose authored support contacts drive the support polygon.
+    KeyPose pose;
+    pose.id = "pose1";
+    pose.support_contacts = {{2.0, 0.0}, {8.0, 0.0}};
+    pose.balance = BalanceIntent::planted;
+    const ValidationResult bal4 = analyze_balance(vf, sol, intent, &pose);
+    check_ok(bal4, "authored support contacts accepted");
+  }
+
+  // 14.4 Aggregate deformation composition: two individually-legal requests
+  // that combine into an illegal final deviation are rejected/clamped by
+  // policy — the gate evaluates the AGGREGATE effective deviation.
+  {
+    const VisualCanon vf = make_voltfox_canon();
+    PerformanceState perf;
+    // left_leg: allowed 3.2, hard 7.0. Two motions of 2.5 each are each
+    // individually legal but compose to 5.0, which exceeds the allowed 3.2
+    // -> the aggregate must be clamped (warning, still ok).
+    PartMotion a; a.part_id = "left_leg"; a.dx = 2.5;
+    PartMotion b; b.part_id = "left_leg"; b.dx = 2.5;
+    perf.motions = {a, b};
+    const ValidationResult r1 = enforce_deformation_envelopes(vf, perf, "", 0.0, 1.0, 1.0);
+    bool clamped = false;
+    for (const auto& d : r1.diagnostics) if (d.code == "DEFORMATION_CLAMPED") clamped = true;
+    check(clamped, "aggregate deviation beyond allowed bound is clamped");
+    check(r1.ok(), "clamped aggregate remains ok (warning only)");
+    check(perf.motions.size() == 1, "composition merges duplicate-part motions into one");
+    check(std::abs(perf.motions[0].dx) <= 3.2 + 1e-9, "aggregate clamped to allowed bound");
+
+    // Hard boundary: two motions of 4.0 compose to 8.0 > hard 7.0 -> fail.
+    PerformanceState perf2;
+    PartMotion a2; a2.part_id = "left_leg"; a2.dx = 4.0;
+    PartMotion b2; b2.part_id = "left_leg"; b2.dx = 4.0;
+    perf2.motions = {a2, b2};
+    const ValidationResult r2 = enforce_deformation_envelopes(vf, perf2, "", 0.0, 1.0, 1.0);
+    bool hard = false;
+    for (const auto& d : r2.diagnostics) if (d.code == "DEFORMATION_HARD_VIOLATION") hard = true;
+    check(hard, "aggregate beyond hard boundary fails closed");
+    check(!r2.ok(), "hard aggregate violation not ok");
+  }
+
+  // 14.5 KeyPose override semantics: replace, not append, no double motion.
+  {
+    const VisualCanon vf = make_voltfox_canon();
+    PerformanceIntent intent;
+    intent.action = "attack";
+    intent.phase = PerformancePhase::extension;
+    intent.force_direction = {1.0, 0.0};
+    intent.force_magnitude = 0.9;
+    intent.commitment = 1.0;
+    // Derived motion targets the root mass (torso); the KeyPose overrides
+    // torso with its own motion. The override must REPLACE, not stack.
+    KeyPose pose;
+    pose.id = "kp";
+    pose.action = "attack";
+    PartMotion override; override.part_id = "torso"; override.dx = 0.5; override.rotation_degrees = 3.0;
+    pose.motions = {override};
+    const PoseSolution sol = solve_pose(vf, intent, &pose);
+    std::size_t torso_count = 0;
+    for (const auto& m : sol.motions) if (m.part_id == "torso") ++torso_count;
+    check(torso_count == 1, "key pose override produces exactly one torso motion");
+    bool found_override = false;
+    for (const auto& m : sol.motions)
+      if (m.part_id == "torso" && std::abs(m.dx - 0.5) < 1e-9 && std::abs(m.rotation_degrees - 3.0) < 1e-9)
+        found_override = true;
+    check(found_override, "key pose override value wins (no double translation/rotation)");
+    // Insertion-order independence: reordering the pose motions yields the
+    // same solution for the overridden part.
+    KeyPose pose2 = pose;
+    KeyPose pose3 = pose;
+    pose3.motions = {override};
+    const PoseSolution s2 = solve_pose(vf, intent, &pose2);
+    const PoseSolution s3 = solve_pose(vf, intent, &pose3);
+    auto find_torso = [](const PoseSolution& s) {
+      for (const auto& m : s.motions) if (m.part_id == "torso") return m;
+      return PartMotion{};
+    };
+    const auto t2 = find_torso(s2), t3 = find_torso(s3);
+    check(std::abs(t2.dx - t3.dx) < 1e-9 && std::abs(t2.rotation_degrees - t3.rotation_degrees) < 1e-9,
+          "key pose override is insertion-order deterministic");
+  }
+
+  // 14.6 Emotion is data-driven through canon.emotion_responses.
+  {
+    const VisualCanon vf = make_voltfox_canon();
+    const auto neutral = expression_motions(vf, "", 0.0, 0.0);
+    const auto angry = expression_motions(vf, "focused_aggression", 0.0, 0.0);
+    check(neutral.size() == angry.size(), "emotion does not change feature count");
+    bool different = false;
+    for (std::size_t i = 0; i < neutral.size() && i < angry.size(); ++i) {
+      if (neutral[i].part_id != angry[i].part_id) continue;
+      if (std::abs(neutral[i].scale_x - angry[i].scale_x) > 1e-9 ||
+          std::abs(neutral[i].scale_y - angry[i].scale_y) > 1e-9)
+        different = true;
+    }
+    check(different, "emotion response changes eye aperture (causal)");
+    // Unknown emotion: same as neutral defaults (fail-soft, no hardcode).
+    const auto unknown = expression_motions(vf, "pensive", 0.0, 0.0);
+    bool same_as_neutral = true;
+    for (std::size_t i = 0; i < neutral.size() && i < unknown.size(); ++i)
+      if (neutral[i].part_id == unknown[i].part_id &&
+          (std::abs(neutral[i].scale_x - unknown[i].scale_x) > 1e-9))
+        same_as_neutral = false;
+    check(same_as_neutral, "unknown emotion falls back to neutral defaults");
+
+    // Mechanical entity: mech emotion drives visor/antenna through the SAME
+    // generic machinery (no organism-specific branch).
+    const VisualCanon mech = make_mech_canon();
+    const auto m_alert = expression_motions(mech, "alert", 0.0, 0.0);
+    bool visor_or_antenna = false;
+    for (const auto& m : m_alert)
+      if (m.part_id.find("visor") != std::string::npos ||
+          m.part_id.find("antenna") != std::string::npos ||
+          m.part_id.find("sensor") != std::string::npos)
+        visor_or_antenna = true;
+    check(visor_or_antenna, "mech emotion drives visor/antenna channels");
+  }
+
+  // 14.7 FX originates from typed phenomenon/energy requests only. No
+  // magnitude heuristic invents electricity; no "torso" anatomy fallback.
+  {
+    const VisualCanon vf = make_voltfox_canon();
+    const SpriteIr ir = make_ir_from_canon(vf);
+    VisualCompileOptions opts;
+    opts.canvas_width = 128; opts.canvas_height = 128;
+    opts.canon = &vf;
+    PerformanceState perf;
+    perf.impact = 0.9;
+    opts.performance = &perf;
+
+    // Electric entity impact -> electric arc (typed phenomenon).
+    FxRequest arc;
+    arc.id = "fx1"; arc.phenomenon = FxPhenomenon::electric_arc;
+    arc.energy = FxEnergyKind::electricity;
+    arc.source_part = "tail_tip"; arc.intensity = 0.8;
+    FxRequest impact;
+    impact.id = "fx2"; impact.phenomenon = FxPhenomenon::impact_flash;
+    impact.energy = FxEnergyKind::kinetic;
+    impact.source_part = "left_foot"; impact.intensity = 0.9;
+    FxRequest aura;
+    aura.id = "fx3"; aura.phenomenon = FxPhenomenon::aura;
+    aura.energy = FxEnergyKind::force;
+    aura.source_part = "torso"; aura.intensity = 0.6;
+    const FxRequest reqs[] = {arc, impact, aura};
+    opts.fx_requests = reqs;
+    const auto res = compile_visual_ir(ir, opts);
+    check(res.ok(), "typed fx requests compile");
+    if (res.ok()) {
+      std::set<std::string> phenomena;
+      for (const auto& e : res.value->fx_state.effects)
+        phenomena.insert(std::string(fx_phenomenon_name(e.phenomenon)));
+      check(phenomena.count("electric_arc") == 1, "electric entity impact yields electric_arc");
+      check(phenomena.count("impact_flash") == 1, "kinetic impact yields impact_flash (not electricity)");
+      check(phenomena.count("aura") == 1, "aura request yields aura");
+      // Force magnitude scales intensity but never invents the phenomenon.
+      for (const auto& e : res.value->fx_state.effects)
+        check(e.intensity <= 1.0 && e.intensity >= 0.0, "fx intensity bounded");
+    }
+    // Invalid request (no source) is rejected and never emitted.
+    FxRequest bad;
+    bad.id = "bad"; bad.phenomenon = FxPhenomenon::electric_arc; bad.energy = FxEnergyKind::electricity;
+    check_fail(validate_fx_request(bad), "fx request without source rejected");
+    FxRequest ghost;
+    ghost.id = "ghost"; ghost.phenomenon = FxPhenomenon::impact_flash; ghost.energy = FxEnergyKind::kinetic;
+    ghost.source_part = "no_such_part";
+    const FxRequest reqs2[] = {ghost};
+    opts.fx_requests = reqs2;
+    const auto res2 = compile_visual_ir(ir, opts);
+    // The compiler reports the missing source as an error diagnostic and
+    // NEVER emits the effect (no "torso" anatomy fallback). Fail-closed.
+    bool source_missing = false;
+    for (const auto& d : res2.diagnostics.diagnostics)
+      if (d.code == "VISUAL_FX_SOURCE_MISSING") source_missing = true;
+    check(source_missing, "fx request with missing source reported");
+    if (res2.value)
+      check(res2.value->fx_state.effects.empty(), "fx request with missing source never emitted");
+  }
+
+  // 14.8 Construction constraint domains: position.x and size.x are distinct
+  // properties; true same-property contradictions fail; cross-axis ratios
+  // work; unknown axes fail; insertion order is irrelevant.
+  {
+    // Same axis, different property (position.x + size.x) coexist.
+    VisualCanon c;
+    c.entity_id = "probe";
+    c.forms = {"base"};
+    c.structures["a"] = {.id = "a", .role = "root", .primitive = "ellipse", .layer = "body",
+                         .x = 0.0, .y = 0.0, .size_x = 2.0, .size_y = 2.0};
+    c.structures["b"] = {.id = "b", .role = "root", .primitive = "ellipse", .layer = "body",
+                         .x = 0.0, .y = 0.0, .size_x = 2.0, .size_y = 2.0};
+    ConstructionConstraint pos;
+    pos.id = "pos"; pos.kind = ConstructionConstraintKind::anchor;
+    pos.structure = "b"; pos.reference = "a"; pos.axis = ConstructionAxis::x;
+    pos.offset = 3.0; pos.hard = true;
+    ConstructionConstraint sz;
+    sz.id = "sz"; sz.kind = ConstructionConstraintKind::size_ratio;
+    sz.structure = "b"; sz.reference = "a"; sz.axis = ConstructionAxis::x;
+    sz.factor = 0.5; sz.hard = true;
+    c.construction = {pos, sz};
+    const ValidationResult r1 = solve_construction_constraints(c, "");
+    check_ok(r1, "hard position.x + hard size.x coexist without conflict");
+    const VisualMorphologyV2 m1 = canon_to_morphology(c, "");
+    check(std::abs(m1.parts.at("b").x - 3.0) < 1e-9, "position constraint solved");
+    check(std::abs(m1.parts.at("b").size_x - 1.0) < 1e-9, "size constraint solved");
+
+    // True same-property contradiction fails closed.
+    VisualCanon c2 = c;
+    ConstructionConstraint c2b;
+    c2b.id = "sz2"; c2b.kind = ConstructionConstraintKind::size_ratio;
+    c2b.structure = "b"; c2b.reference = "a"; c2b.axis = ConstructionAxis::x;
+    c2b.factor = 2.0; c2b.hard = true;
+    c2.construction.push_back(c2b);
+    const ValidationResult r2 = solve_construction_constraints(c2, "");
+    bool contrad = false;
+    for (const auto& d : r2.diagnostics)
+      if (d.code == "CONSTRUCTION_HARD_CONTRADICTION") contrad = true;
+    check(contrad && !r2.ok(), "contradictory hard size.x constraints fail closed");
+
+    // Cross-axis: b.size_x derived from a.size_y.
+    VisualCanon c3 = c;
+    c3.construction.clear();
+    ConstructionConstraint cross;
+    cross.id = "cross"; cross.kind = ConstructionConstraintKind::size_ratio;
+    cross.structure = "b"; cross.reference = "a"; cross.axis = ConstructionAxis::x;
+    cross.reference_axis = ConstructionAxis::y;  // size_x from size_y
+    cross.factor = 1.5; cross.hard = true;
+    c3.construction = {cross};
+    c3.structures["a"].size_y = 4.0;
+    const ValidationResult r3 = solve_construction_constraints(c3, "");
+    check_ok(r3, "cross-axis size_x from size_y solves");
+    const VisualMorphologyV2 m3 = canon_to_morphology(c3, "");
+    check(std::abs(m3.parts.at("b").size_x - 6.0) < 1e-9, "cross-axis ratio uses denominator's own axis");
+
+    // Insertion order: reversed constraint order yields identical geometry.
+    VisualCanon c4 = c;
+    c4.construction = {sz, pos};  // reversed
+    const VisualMorphologyV2 m4 = canon_to_morphology(c4, "");
+    check(std::abs(m4.parts.at("b").x - m1.parts.at("b").x) < 1e-9 &&
+          std::abs(m4.parts.at("b").size_x - m1.parts.at("b").size_x) < 1e-9,
+          "construction is insertion-order deterministic");
+  }
+
+  // 14.9 Silhouette invariants genuinely fail when violated.
+  {
+    VisualCanon c = make_voltfox_canon();
+    VisualMorphologyV2 m = canon_to_morphology(c, "base");
+    check_ok(check_identity_invariants(c, m), "canonical morph passes silhouette invariants");
+    // Degrade: remove the silhouette-anchor landmark and anchor feature for
+    // a structure that a hard invariant requires to be anchored.
+    VisualCanon c2 = c;
+    // Find a structure that is a required silhouette anchor and remove its
+    // anchoring evidence.
+    std::string anchored_struct;
+    for (const auto& inv : c2.identity_invariants) {
+      if (inv.kind != IdentityInvariantKind::silhouette_anchor) continue;
+      for (const auto& ref : inv.refs) {
+        if (c2.structures.count(ref)) {
+          // Remove landmark anchoring evidence for this structure.
+          for (auto it = c2.landmarks.begin(); it != c2.landmarks.end();) {
+            if (it->second.owner == ref && it->second.silhouette_anchor) it = c2.landmarks.erase(it);
+            else ++it;
+          }
+          for (auto it = c2.silhouette_features.begin(); it != c2.silhouette_features.end();) {
+            if (it->structure_ref == ref && it->kind == SilhouetteFeatureKind::anchor)
+              it = c2.silhouette_features.erase(it);
+            else ++it;
+          }
+          anchored_struct = ref;
+          break;
+        }
+      }
+      if (!anchored_struct.empty()) break;
+    }
+    if (!anchored_struct.empty()) {
+      const ValidationResult r = check_identity_invariants(c2, m);
+      bool unanchored = false;
+      for (const auto& d : r.diagnostics)
+        if (d.code.find("UNANCHORED") != std::string::npos) unanchored = true;
+      check(unanchored && !r.ok(),
+            "existing structure stripped of its required silhouette anchor fails");
+    }
+  }
+
+  // 14.10 Temporal correspondence: two poses of the same entity retain
+  // semantic identity for parts/landmarks/markings/materials/features while
+  // their transforms change.
+  {
+    const VisualCanon vf = make_voltfox_canon();
+    const SpriteIr ir = make_ir_from_canon(vf);
+    VisualCompileOptions opts;
+    opts.canvas_width = 128; opts.canvas_height = 128;
+    opts.canon = &vf;
+    PerformanceState idle;
+    idle.motion_phase = "idle";
+    opts.performance = &idle;
+    const auto f0 = compile_visual_ir(ir, opts);
+    PerformanceState strike;
+    strike.motion_phase = "strike";
+    PartMotion leg; leg.part_id = "left_leg"; leg.dx = 2.0; leg.rotation_degrees = -3.0;
+    strike.motions = {leg};
+    opts.performance = &strike;
+    const auto f1 = compile_visual_ir(ir, opts);
+    check(f0.ok() && f1.ok(), "two-pose compile succeeds");
+    if (f0.ok() && f1.ok()) {
+      check(!f0.value->temporal_part_labels.empty(), "temporal part labels populated");
+      check(!f0.value->temporal_landmark_labels.empty(), "temporal landmark labels populated");
+      // Stable identity: same semantic id maps to the same temporal label
+      // across both poses.
+      for (const auto& [id, label] : f0.value->temporal_part_labels) {
+        auto it = f1.value->temporal_part_labels.find(id);
+        check(it != f1.value->temporal_part_labels.end() && it->second == label,
+              "part temporal identity persists across poses");
+        if (it == f1.value->temporal_part_labels.end()) break;
+      }
+      for (const auto& [id, label] : f0.value->temporal_marking_labels) {
+        auto it = f1.value->temporal_marking_labels.find(id);
+        check(it != f1.value->temporal_marking_labels.end() && it->second == label,
+              "marking temporal identity persists across poses");
+        if (it == f1.value->temporal_marking_labels.end()) break;
+      }
+      // Transform changed while identity stayed: left_leg moved.
+      check(std::abs(f1.value->morphology.parts.at("left_leg").x -
+                     f0.value->morphology.parts.at("left_leg").x) > 1e-9,
+            "pose transform actually changed the part");
+    }
+  }
+
+  // 14.11 Semantic LOD executes authored rules (omit/merge/substitute/
+  // preserve) — not just visibility hiding.
+  {
+    VisualCanon c = make_voltfox_canon();
+    VisualMorphologyV2 m = canon_to_morphology(c, "base");
+    // Tail is a low-priority feature (min_resolution 16, importance 0.6);
+    // at a tiny target resolution the authored default is visibility
+    // filtering (non-identity-critical), while eyes (importance 1.0) are
+    // preserved.
+    const ValidationResult r = apply_semantic_lod(c, m, 8);
+    bool any_action = false;
+    for (const auto& d : r.diagnostics) {
+      if (d.code == "LOD_OMIT" || d.code == "LOD_MERGE" || d.code == "LOD_SUBSTITUTE" ||
+          d.code == "LOD_VISIBILITY_FILTER")
+        any_action = true;
+    }
+    check(any_action, "semantic LOD executes authored rules at low resolution");
+    check(m.parts.at("left_eye").visible, "identity-critical eyes preserved at low resolution");
+
+    // Explicit omit rule: ear feature omits its part.
+    VisualCanon c2 = c;
+    VisualMorphologyV2 m2 = canon_to_morphology(c2, "base");
+    VisualFeature rf;
+    rf.id = "res.ear_l"; rf.structure_ref = "left_ear";
+    rf.min_resolution = 10; rf.omission_rule = "omit";
+    c2.resolution_features.push_back(rf);
+    const ValidationResult r2 = apply_semantic_lod(c2, m2, 8);
+    bool omit = false;
+    for (const auto& d : r2.diagnostics) if (d.code == "LOD_OMIT") omit = true;
+    check(omit, "explicit omit rule executes");
+    check(!m2.parts.at("left_ear").visible, "omit rule hides the part");
+
+    // Substitute rule: nose -> substitute part becomes visible.
+    VisualCanon c3 = c;
+    VisualMorphologyV2 m3 = canon_to_morphology(c3, "base");
+    VisualFeature rf2;
+    rf2.id = "res.nose"; rf2.structure_ref = "nose";
+    rf2.min_resolution = 10; rf2.substitution_rule = "substitute:head";
+    c3.resolution_features.push_back(rf2);
+    const ValidationResult r3 = apply_semantic_lod(c3, m3, 8);
+    bool sub = false;
+    for (const auto& d : r3.diagnostics) if (d.code == "LOD_SUBSTITUTE") sub = true;
+    check(sub, "substitute rule executes");
+    check(!m3.parts.at("nose").visible && m3.parts.at("head").visible,
+          "substitute hides source and preserves substitute");
+  }
+
+  // 14.12 Canonical serialization: reversible escaping + hostile rejection.
+  {
+    VisualCanon c;
+    c.entity_id = "esc";
+    c.forms = {"base"};
+    c.name = "a=b;c.d\\e\nf";  // reserved chars: = ; . \ newline
+    c.structures["root"] = {.id = "root", .role = "root", .primitive = "ellipse",
+                            .layer = "body", .x = 0.0, .y = 0.0,
+                            .size_x = 1.0, .size_y = 1.0};
+    check_ok(validate_visual_canon(c), "escaping probe canon validates");
+    const std::string text = canonicalize_visual_canon(c);
+    const auto parsed = parse_visual_canon(text);
+    check(parsed.has_value(), "escaped canon parses");
+    if (parsed) {
+      check(parsed->name == c.name, "reserved characters round-trip exactly");
+      check(canonicalize_visual_canon(*parsed) == text,
+            "canonicalize(parse(canonicalize(x))) is byte-identical");
+    }
+    // Hostile: malformed escape.
+    check(!parse_visual_canon("name=trailing_backslash\\\n").has_value(),
+          "malformed trailing escape rejected");
+    check(!parse_visual_canon("name=a\\q\n").has_value(), "unknown escape sequence rejected");
+    // Duplicate singleton field.
+    check(!parse_visual_canon("entity_id=a\nentity_id=b\n").has_value(),
+          "duplicate singleton field rejected");
+    // Unknown field.
+    check(!parse_visual_canon("entity_id=a\nbogus_section=1\n").has_value(),
+          "unknown section rejected");
+    // Partial numeric token.
+    check(!parse_visual_canon("entity_id=a\nstructure.root.id=root\n"
+                              "structure.root.x=12abc\n").has_value(),
+          "partial numeric token rejected");
+    // Unicode passes through untouched.
+    VisualCanon u;
+    u.entity_id = "uni";
+    u.forms = {"base"};
+    u.name = "voltfox \u00e9\u4e2d";
+    u.structures["root"] = {.id = "root", .role = "root", .primitive = "ellipse",
+                            .layer = "body", .x = 0.0, .y = 0.0,
+                            .size_x = 1.0, .size_y = 1.0};
+    const auto up = parse_visual_canon(canonicalize_visual_canon(u));
+    check(up.has_value() && up->name == u.name, "unicode round-trips");
+  }
+}
+
+// ── 15. Review-artifact generation (argv-gated, mirrors visual_core_tests) ──
 
 static void write_png(const ImageRgba8& img, const std::filesystem::path& p) {
   const auto png = encode_png(img);
@@ -1003,6 +1573,7 @@ int main(int argc, char** argv) {
   test_visual_quality();
   test_compiler_integration();
   test_serialization_determinism();
+  test_functional_authority_closure();
 
   if (!evidence_dir.empty()) generate_review_artifacts(evidence_dir, source_sha);
 

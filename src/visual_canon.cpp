@@ -119,6 +119,7 @@ struct WorldTransform {
     if (pit == morph.parts.end()) return false;
     if (parts->args[1] == "size_x") { out = pit->second.size_x; return true; }
     if (parts->args[1] == "size_y") { out = pit->second.size_y; return true; }
+    if (parts->args[1] == "size_z") { out = pit->second.size_z; return true; }
     return false;
   }
   if (parts->kind == "landmark_dist" && parts->args.size() == 2) {
@@ -136,7 +137,7 @@ struct WorldTransform {
   if (!parts) return false;
   if (parts->kind == "size" && parts->args.size() == 2) {
     return canon.structures.count(parts->args[0]) != 0 &&
-           (parts->args[1] == "size_x" || parts->args[1] == "size_y");
+           (parts->args[1] == "size_x" || parts->args[1] == "size_y" || parts->args[1] == "size_z");
   }
   if (parts->kind == "landmark_dist" && parts->args.size() == 2) {
     return canon.landmarks.count(parts->args[0]) != 0 && canon.landmarks.count(parts->args[1]) != 0;
@@ -153,6 +154,68 @@ struct WorldTransform {
     if (!part.empty()) out.push_back(part);
     if (sc == std::string::npos) break;
     start = sc + 1;
+  }
+  return out;
+}
+
+// ── Reversible canonical value escaping ──
+// The line grammar splits keys on the first '=', lines on '\n', and joined
+// lists on unescaped ';'. Values that legitimately contain those characters
+// (or the escape character itself) are escaped on emit and unescaped on
+// parse, so parse(canonicalize(x)) == x and
+// canonicalize(parse(canonicalize(x))) is byte-identical. Malformed escape
+// sequences fail closed. Unicode passes through untouched (only the reserved
+// ASCII set is escaped).
+[[nodiscard]] std::string escape_canon_value(std::string_view s) {
+  std::string out;
+  out.reserve(s.size());
+  for (const char c : s) {
+    switch (c) {
+      case '\\': out += "\\\\"; break;
+      case '\n': out += "\\n"; break;
+      case '\r': out += "\\r"; break;
+      case ';':  out += "\\;"; break;
+      case '=':  out += "\\="; break;
+      case '\t': out += "\\t"; break;
+      default:   out += c; break;
+    }
+  }
+  return out;
+}
+
+// Unescape a canonical value. Returns nullopt on malformed escape.
+[[nodiscard]] std::optional<std::string> unescape_canon_value(std::string_view s) {
+  std::string out;
+  out.reserve(s.size());
+  for (std::size_t i = 0; i < s.size(); ++i) {
+    const char c = s[i];
+    if (c != '\\') { out += c; continue; }
+    if (i + 1 >= s.size()) return std::nullopt;  // trailing backslash
+    const char e = s[++i];
+    switch (e) {
+      case '\\': out += '\\'; break;
+      case 'n': out += '\n'; break;
+      case 'r': out += '\r'; break;
+      case ';': out += ';'; break;
+      case '=': out += '='; break;
+      case 't': out += '\t'; break;
+      default: return std::nullopt;  // malformed escape
+    }
+  }
+  return out;
+}
+
+// Split a joined value on UNESCAPED ';' only, then unescape each item.
+[[nodiscard]] std::optional<std::vector<std::string>> split_escaped_join(std::string_view s) {
+  std::vector<std::string> out;
+  std::size_t start = 0;
+  for (std::size_t i = 0; i <= s.size(); ++i) {
+    if (i == s.size() || (s[i] == ';' && (i == 0 || s[i - 1] != '\\'))) {
+      const auto item = unescape_canon_value(s.substr(start, i - start));
+      if (!item) return std::nullopt;
+      if (!item->empty()) out.push_back(*item);
+      start = i + 1;
+    }
   }
   return out;
 }
@@ -343,6 +406,26 @@ std::optional<InvariantSeverity> invariant_severity_from_name(std::string_view n
   return std::nullopt;
 }
 
+std::string_view support_policy_name(SupportPolicy policy) noexcept {
+  switch (policy) {
+    case SupportPolicy::auto_: return "auto";
+    case SupportPolicy::grounded: return "grounded";
+    case SupportPolicy::flight: return "flight";
+    case SupportPolicy::buoyant: return "buoyant";
+    case SupportPolicy::free: return "free";
+  }
+  return "auto";
+}
+
+std::optional<SupportPolicy> support_policy_from_name(std::string_view name) noexcept {
+  if (name == "auto") return SupportPolicy::auto_;
+  if (name == "grounded") return SupportPolicy::grounded;
+  if (name == "flight") return SupportPolicy::flight;
+  if (name == "buoyant") return SupportPolicy::buoyant;
+  if (name == "free") return SupportPolicy::free;
+  return std::nullopt;
+}
+
 /* ── measure helpers ── */
 
 std::string make_landmark_dist_measure(std::string_view a, std::string_view b) {
@@ -433,6 +516,8 @@ ValidationResult validate_visual_canon(const VisualCanon& canon, const CanonLimi
       add_diag(r, "CANON_CONSTRUCTION_NONFINITE", "nonfinite bound on constraint '" + c.id + "'");
     if (c.kind == ConstructionConstraintKind::size_ratio && c.factor <= 0.0)
       add_diag(r, "CANON_CONSTRUCTION_BAD_FACTOR", "size_ratio factor must be positive on '" + c.id + "'");
+    if (c.reference_axis && !construction_axis_from_name(construction_axis_name(*c.reference_axis)))
+      add_diag(r, "CANON_CONSTRUCTION_BAD_REF_AXIS", "bad reference_axis on '" + c.id + "'");
     if (!c.scope.empty() && c.scope.rfind("form:", 0) != 0)
       add_diag(r, "CANON_CONSTRUCTION_BAD_SCOPE", "construction scope must be 'form:<id>' on '" + c.id + "'");
   }
@@ -621,6 +706,44 @@ ValidationResult validate_visual_canon(const VisualCanon& canon, const CanonLimi
       if (!parse_hex_color(hex))
         add_diag(r, "CANON_PALETTE_BAD_HEX", "form palette " + form + "/" + role + " bad hex");
 
+  // Support policy: typed closed vocabulary — unknown enum values fail.
+  // (Direct range check: name round-trip would mask invalid values.)
+  const int sp = static_cast<int>(canon.support_policy);
+  if (sp < static_cast<int>(SupportPolicy::auto_) || sp > static_cast<int>(SupportPolicy::free))
+    add_diag(r, "CANON_SUPPORT_POLICY_INVALID", "unsupported support policy");
+
+  // Gaze/attention drivers: referenced structure ids must exist.
+  if (!canon.gaze_driver.empty() && !canon.structures.count(canon.gaze_driver))
+    add_diag(r, "CANON_GAZE_DRIVER_DANGLING", "gaze_driver '" + canon.gaze_driver + "' is not a structure");
+  if (!canon.attention_driver.empty() && !canon.structures.count(canon.attention_driver))
+    add_diag(r, "CANON_ATTENTION_DRIVER_DANGLING", "attention_driver '" + canon.attention_driver + "' is not a structure");
+
+  // Emotion responses: every feature id must resolve within the canon's
+  // expressive regions (data-driven mapping, fail closed on dangling refs).
+  for (const auto& [emotion, responses] : canon.emotion_responses) {
+    if (emotion.empty())
+      add_diag(r, "CANON_EMOTION_EMPTY", "emotion response with empty emotion name");
+    // Emotion names are key path segments in the canonical grammar; dots
+    // would make the key ambiguous, so they fail closed.
+    if (emotion.find('.') != std::string::npos)
+      add_diag(r, "CANON_EMOTION_DOT", "emotion name must not contain '.': '" + emotion + "'");
+    if (emotion.find(';') != std::string::npos || emotion.find('\n') != std::string::npos ||
+        emotion.find('=') != std::string::npos)
+      add_diag(r, "CANON_EMOTION_RESERVED", "emotion name contains reserved grammar char: '" + emotion + "'");
+    for (const auto& resp : responses) {
+      bool found = false;
+      for (const auto& reg : canon.facial_regions)
+        for (const auto& f : reg.features)
+          if (f.id == resp.feature_id) found = true;
+      if (!found)
+        add_diag(r, "CANON_EMOTION_DANGLING_FEATURE",
+                 "emotion '" + emotion + "' references unknown feature '" + resp.feature_id + "'");
+      if (is_nan_or_inf(resp.gaze) || is_nan_or_inf(resp.aperture) ||
+          is_nan_or_inf(resp.intensity) || is_nan_or_inf(resp.rotation) || is_nan_or_inf(resp.squash))
+        add_diag(r, "CANON_EMOTION_NONFINITE", "emotion '" + emotion + "' response nonfinite");
+    }
+  }
+
   return r;
 }
 
@@ -693,23 +816,48 @@ struct SolvedGeom {
   struct HardSet { bool set{}; double value{}; };
   std::map<std::pair<std::string, std::string>, HardSet, std::less<>> hard_state;
 
-  const auto try_hard = [&](const std::string& id, const std::string& dim, double value,
+  // Typed property domains: position and size are DIFFERENT properties even
+  // on the same axis. A hard size constraint and a hard position constraint
+  // on axis x are not contradictory; two hard constraints on the SAME
+  // (structure, property) that disagree ARE contradictory and fail closed.
+  enum class Property { PositionX, PositionY, PositionZ, SizeX, SizeY, SizeZ, Rotation };
+  const auto pos_prop = [](ConstructionAxis a) -> Property {
+    return a == ConstructionAxis::x ? Property::PositionX
+         : a == ConstructionAxis::y ? Property::PositionY
+         :                          Property::PositionZ;
+  };
+  const auto size_prop = [](ConstructionAxis a) -> Property {
+    return a == ConstructionAxis::x ? Property::SizeX
+         : a == ConstructionAxis::y ? Property::SizeY
+         :                          Property::SizeZ;
+  };
+  const auto prop_name = [](Property p) -> const char* {
+    switch (p) {
+      case Property::PositionX: return "position.x";
+      case Property::PositionY: return "position.y";
+      case Property::PositionZ: return "position.z";
+      case Property::SizeX: return "size.x";
+      case Property::SizeY: return "size.y";
+      case Property::SizeZ: return "size.z";
+      case Property::Rotation: return "rotation";
+    }
+    return "?";
+  };
+
+  const auto try_hard = [&](const std::string& id, Property prop, double value,
                             const std::string& cid) -> bool {
-    auto key = std::make_pair(id, dim);
+    auto key = std::make_pair(id, std::string(prop_name(prop)));
     auto it = hard_state.find(key);
     if (it != hard_state.end() && it->second.set) {
       if (std::abs(it->second.value - value) > 1e-9) {
         add_diag(r, "CONSTRUCTION_HARD_CONTRADICTION",
-                 "hard constraint '" + cid + "' conflicts on " + id + " axis " + dim);
+                 "hard constraint '" + cid + "' conflicts on " + id + " property " + prop_name(prop));
         return false;
       }
       return true;
     }
     hard_state[key] = {true, value};
     return true;
-  };
-  const auto dim_of = [](ConstructionAxis a) -> std::string {
-    return std::string(1, a == ConstructionAxis::x ? 'x' : (a == ConstructionAxis::y ? 'y' : 'z'));
   };
 
   // size_ratio pass: explicit construction constraints first.
@@ -719,13 +867,26 @@ struct SolvedGeom {
       const ConstructionConstraint& c = *cp;
       if (c.kind != ConstructionConstraintKind::size_ratio) continue;
       double* out = axis_size(g, c.axis, c.structure);
-      const double base = *axis_size(g, c.axis, c.reference);
+      const ConstructionAxis ref_axis = c.reference_axis.value_or(c.axis);
+      const double base = *axis_size(g, ref_axis, c.reference);
       const double value = base * c.factor + c.offset;
       if (std::abs(*out - value) > 1e-12) { *out = value; changed = true; }
-      if (c.hard && !try_hard(c.structure, dim_of(c.axis), value, c.id)) return false;
+      if (c.hard && !try_hard(c.structure, size_prop(c.axis), value, c.id)) return false;
     }
     if (!changed) break;
   }
+
+  // Single strict parser for generative size axes: accepts the canonical
+  // measure spellings ("size_x"/"size_y"/"size_z"); unknown axes return
+  // nullopt and are NEVER silently mapped to Z. Validation rejects invalid
+  // derived axes before construction, so a nullopt here means the rule is
+  // skipped (the validate gate already flagged it).
+  const auto size_axis_of = [](std::string_view axis) -> std::optional<ConstructionAxis> {
+    if (axis == "size_x") return ConstructionAxis::x;
+    if (axis == "size_y") return ConstructionAxis::y;
+    if (axis == "size_z") return ConstructionAxis::z;
+    return std::nullopt;
+  };
 
   // Generative proportion pass: rules with `derived` (size:<part>:<axis>)
   // construct the target as denominator * preferred. This makes proportions
@@ -739,27 +900,19 @@ struct SolvedGeom {
       const auto parts = split_measure(p.derived);
       if (!parts || parts->kind != "size" || parts->args.size() != 2) continue;
       const std::string& target = parts->args[0];
-      const std::string& targ_axis = parts->args[1];
-      const ConstructionAxis ax = targ_axis == "x"   ? ConstructionAxis::x
-                                 : targ_axis == "y"   ? ConstructionAxis::y
-                                 : targ_axis == "size_x" ? ConstructionAxis::x
-                                 : targ_axis == "size_y" ? ConstructionAxis::y
-                                 :                       ConstructionAxis::z;
+      const auto ax = size_axis_of(parts->args[1]);
+      if (!ax) continue;  // invalid axis (validation already failed it)
       const auto den = split_measure(p.denominator);
       if (!den || den->kind != "size" || den->args.size() != 2) continue;
       // Denominator has its own axis — derive from that axis, not the target.
-      const std::string& den_axis = den->args[1];
-      const ConstructionAxis dax = den_axis == "x"   ? ConstructionAxis::x
-                                  : den_axis == "y"   ? ConstructionAxis::y
-                                  : den_axis == "size_x" ? ConstructionAxis::x
-                                  : den_axis == "size_y" ? ConstructionAxis::y
-                                  :                       ConstructionAxis::z;
-      const double base = *axis_size(g, dax, den->args[0]);
+      const auto dax = size_axis_of(den->args[1]);
+      if (!dax) continue;
+      const double base = *axis_size(g, *dax, den->args[0]);
       if (base <= 0.0) continue;  // denominator unresolved yet; next pass
       const double value = base * p.preferred;
-      double* out = axis_size(g, ax, target);
+      double* out = axis_size(g, *ax, target);
       if (std::abs(*out - value) > 1e-12) { *out = value; changed = true; }
-      if (p.derived_hard && !try_hard(target, dim_of(ax), value, "proportion:" + p.id)) return false;
+      if (p.derived_hard && !try_hard(target, size_prop(*ax), value, "proportion:" + p.id)) return false;
     }
     if (!changed) break;
   }
@@ -776,7 +929,7 @@ struct SolvedGeom {
           if (std::abs(*axis_pos(g, c.axis, c.structure) - value) > 1e-12) {
             *axis_pos(g, c.axis, c.structure) = value; changed = true;
           }
-          if (c.hard && !try_hard(c.structure, dim_of(c.axis), value, c.id)) return false;
+          if (c.hard && !try_hard(c.structure, pos_prop(c.axis), value, c.id)) return false;
           break;
         }
         case ConstructionConstraintKind::symmetry: {
@@ -785,7 +938,7 @@ struct SolvedGeom {
           if (std::abs(*axis_pos(g, c.axis, c.structure) - value) > 1e-12) {
             *axis_pos(g, c.axis, c.structure) = value; changed = true;
           }
-          if (c.hard && !try_hard(c.structure, dim_of(c.axis), value, c.id)) return false;
+          if (c.hard && !try_hard(c.structure, pos_prop(c.axis), value, c.id)) return false;
           break;
         }
         case ConstructionConstraintKind::chain: {
@@ -795,13 +948,13 @@ struct SolvedGeom {
           if (std::abs(*axis_pos(g, c.axis, c.structure) - value) > 1e-12) {
             *axis_pos(g, c.axis, c.structure) = value; changed = true;
           }
-          if (c.hard && !try_hard(c.structure, dim_of(c.axis), value, c.id)) return false;
+          if (c.hard && !try_hard(c.structure, pos_prop(c.axis), value, c.id)) return false;
           break;
         }
         case ConstructionConstraintKind::orientation: {
           const double value = g.rot[c.reference] * c.factor + c.offset;
           if (std::abs(g.rot[c.structure] - value) > 1e-12) { g.rot[c.structure] = value; changed = true; }
-          if (c.hard && !try_hard(c.structure, "r", value, c.id)) return false;
+          if (c.hard && !try_hard(c.structure, Property::Rotation, value, c.id)) return false;
           break;
         }
       }
@@ -829,7 +982,7 @@ ValidationResult solve_construction_constraints(const VisualCanon& canon, std::s
 static void emit_kv(std::string& out, const std::string& key, std::string_view value) {
   out += key;
   out += '=';
-  out.append(value);
+  out += escape_canon_value(value);
   out += '\n';
 }
 
@@ -841,7 +994,7 @@ static void emit_join(std::string& out, const std::string& key, const std::vecto
   std::string joined;
   for (std::size_t i = 0; i < items.size(); ++i) {
     if (i) joined += ';';
-    joined += items[i];
+    joined += escape_canon_value(items[i]);
   }
   emit_kv(out, key, joined);
 }
@@ -853,6 +1006,9 @@ std::string canonicalize_visual_canon(const VisualCanon& canon) {
   emit_kv(out, "name", canon.name);
   emit_kv(out, "rights_class", canon.rights_class);
   emit_kv(out, "provenance", canon.provenance);
+  emit_kv(out, "gaze_driver", canon.gaze_driver);
+  emit_kv(out, "attention_driver", canon.attention_driver);
+  emit_kv(out, "support_policy", support_policy_name(canon.support_policy));
   for (const auto& f : canon.forms) emit_kv(out, "form", f);
   for (const auto& [role, hex] : canon.base_palette) emit_kv(out, "base_palette." + role, hex);
   for (const auto& [form, pal] : canon.form_palettes)
@@ -877,6 +1033,7 @@ std::string canonicalize_visual_canon(const VisualCanon& canon) {
     emit_kv(out, p + "z_order", std::to_string(s.z_order));
     emit_bool(out, p + "emissive", s.emissive);
     emit_bool(out, p + "silhouette_contribution", s.silhouette_contribution);
+    emit_bool(out, p + "support_capable", s.support_capable);
     emit_kv(out, p + "bone_id", s.bone_id);
     emit_kv(out, p + "socket_id", s.socket_id);
     emit_kv(out, p + "projection_behavior", s.projection_behavior);
@@ -891,6 +1048,8 @@ std::string canonicalize_visual_canon(const VisualCanon& canon) {
     emit_kv(out, k + "structure", c.structure);
     emit_kv(out, k + "reference", c.reference);
     emit_kv(out, k + "axis", construction_axis_name(c.axis));
+    if (c.reference_axis)
+      emit_kv(out, k + "reference_axis", construction_axis_name(*c.reference_axis));
     emit_kv(out, k + "factor", d2s(c.factor));
     emit_kv(out, k + "offset", d2s(c.offset));
     emit_bool(out, k + "hard", c.hard);
@@ -971,6 +1130,21 @@ std::string canonicalize_visual_canon(const VisualCanon& canon) {
       emit_kv(out, fk + "intensity", d2s(f.intensity));
       emit_kv(out, fk + "rotation", d2s(f.rotation));
       emit_kv(out, fk + "squash", d2s(f.squash));
+    }
+  }
+
+  // Emotion responses: emotion.<emotion>.<idx>.<field>. The idx is the
+  // deterministic position of the response within the emotion's vector, so
+  // keys stay unambiguous even when feature ids contain dots.
+  for (const auto& [emotion, responses] : canon.emotion_responses) {
+    for (std::size_t i = 0; i < responses.size(); ++i) {
+      const std::string ek = "emotion." + emotion + "." + std::to_string(i) + ".";
+      emit_kv(out, ek + "feature", responses[i].feature_id);
+      emit_kv(out, ek + "gaze", d2s(responses[i].gaze));
+      emit_kv(out, ek + "aperture", d2s(responses[i].aperture));
+      emit_kv(out, ek + "intensity", d2s(responses[i].intensity));
+      emit_kv(out, ek + "rotation", d2s(responses[i].rotation));
+      emit_kv(out, ek + "squash", d2s(responses[i].squash));
     }
   }
 
@@ -1063,7 +1237,9 @@ struct KeyValue {
         if (dot == std::string_view::npos) break;
         ks = dot + 1;
       }
-      kv.value = std::string(line.substr(eq + 1));
+      const auto val = unescape_canon_value(line.substr(eq + 1));
+      if (!val) { error = "malformed escape in value"; return false; }
+      kv.value = *val;
       out.push_back(std::move(kv));
     }
     if (nl == std::string_view::npos) break;
@@ -1082,6 +1258,7 @@ std::optional<VisualCanon> parse_visual_canon(std::string_view text, const Canon
   VisualCanon canon;
   bool ok = true;
   const auto fail = [&]() { ok = false; };
+  std::set<std::string> seen_singletons;  // reject duplicate singleton fields
 
   for (const auto& kv : kvs) {
     if (kv.path.empty()) { fail(); break; }
@@ -1122,17 +1299,27 @@ std::optional<VisualCanon> parse_visual_canon(std::string_view text, const Canon
       else if (field == "structure") it->structure = kv.value;
       else if (field == "reference") it->reference = kv.value;
       else if (field == "axis") { const auto v = construction_axis_from_name(kv.value); if (!v) fail(); else it->axis = *v; }
+      else if (field == "reference_axis") { const auto v = construction_axis_from_name(kv.value); if (!v) fail(); else it->reference_axis = *v; }
       else if (field == "factor" && parse_double(kv.value, dv)) it->factor = dv;
       else if (field == "offset" && parse_double(kv.value, dv)) it->offset = dv;
       else if (field == "hard") { const auto b = parse_bool_strict(kv.value); if (!b) fail(); else it->hard = *b; }
       else if (field == "scope") it->scope = kv.value;
       else fail();
     }
-    else if (sec == "schema") canon.schema = kv.value;
-    else if (sec == "entity_id") canon.entity_id = kv.value;
-    else if (sec == "name") canon.name = kv.value;
-    else if (sec == "rights_class") canon.rights_class = kv.value;
-    else if (sec == "provenance") canon.provenance = kv.value;
+    else if (sec == "schema") { if (!seen_singletons.insert("schema").second) fail(); else canon.schema = kv.value; }
+    else if (sec == "entity_id") { if (!seen_singletons.insert("entity_id").second) fail(); else canon.entity_id = kv.value; }
+    else if (sec == "name") { if (!seen_singletons.insert("name").second) fail(); else canon.name = kv.value; }
+    else if (sec == "rights_class") { if (!seen_singletons.insert("rights_class").second) fail(); else canon.rights_class = kv.value; }
+    else if (sec == "provenance") { if (!seen_singletons.insert("provenance").second) fail(); else canon.provenance = kv.value; }
+    else if (sec == "gaze_driver") { if (!seen_singletons.insert("gaze_driver").second) fail(); else canon.gaze_driver = kv.value; }
+    else if (sec == "attention_driver") { if (!seen_singletons.insert("attention_driver").second) fail(); else canon.attention_driver = kv.value; }
+    else if (sec == "support_policy") {
+      if (!seen_singletons.insert("support_policy").second) { fail(); }
+      else {
+        const auto v = support_policy_from_name(kv.value);
+        if (!v) fail(); else canon.support_policy = *v;
+      }
+    }
     else if (sec == "form") canon.forms.push_back(kv.value);
     else if (sec == "base_palette" && kv.path.size() == 2) canon.base_palette[id] = kv.value;
     else if (sec == "form_palette" && kv.path.size() >= 3) canon.form_palettes[id][kv.path[2]] = kv.value;
@@ -1158,6 +1345,7 @@ std::optional<VisualCanon> parse_visual_canon(std::string_view text, const Canon
       else if (field == "z_order") { std::int32_t iv{}; const auto res = std::from_chars(kv.value.data(), kv.value.data() + kv.value.size(), iv, 10); if (res.ec != std::errc{} || res.ptr != kv.value.data() + kv.value.size()) fail(); else s.z_order = iv; }
       else if (field == "emissive") { const auto b = parse_bool_strict(kv.value); if (!b) fail(); else s.emissive = *b; }
       else if (field == "silhouette_contribution") { const auto b = parse_bool_strict(kv.value); if (!b) fail(); else s.silhouette_contribution = *b; }
+      else if (field == "support_capable") { const auto b = parse_bool_strict(kv.value); if (!b) fail(); else s.support_capable = *b; }
       else if (field == "bone_id") s.bone_id = kv.value;
       else if (field == "socket_id") s.socket_id = kv.value;
       else if (field == "projection_behavior") s.projection_behavior = kv.value;
@@ -1200,7 +1388,7 @@ std::optional<VisualCanon> parse_visual_canon(std::string_view text, const Canon
       else if (field == "silhouette_anchor") { const auto b = parse_bool_strict(kv.value); if (!b) fail(); else lm.silhouette_anchor = *b; }
       else if (field == "required") { const auto b = parse_bool_strict(kv.value); if (!b) fail(); else lm.required = *b; }
       else if (field == "deformability" && parse_double(kv.value, dv)) lm.deformability = dv;
-      else if (field == "ordering_after") lm.ordering_after = split_semicolon(kv.value);
+      else if (field == "ordering_after") { const auto v = split_escaped_join(kv.value); if (!v) fail(); else lm.ordering_after = *v; }
       else fail();
     }
     else if (sec == "silhouette") {
@@ -1252,7 +1440,9 @@ std::optional<VisualCanon> parse_visual_canon(std::string_view text, const Canon
       if (it == canon.facial_regions.end()) { canon.facial_regions.push_back({}); it = canon.facial_regions.end() - 1; it->id = id; }
       if (field == "structure") it->structure_ref = kv.value;
       else if (field == "features") {
-        for (auto& f : split_semicolon(kv.value))
+        const auto ids = split_escaped_join(kv.value);
+        if (!ids) { fail(); }
+        else for (auto& f : *ids)
           it->features.push_back({f, ExpressiveFeatureKind::custom, f, 0.0, 1.0, 0.0, 0.0, 1.0});
       }
       else fail();
@@ -1271,6 +1461,35 @@ std::optional<VisualCanon> parse_visual_canon(std::string_view text, const Canon
       else if (field == "intensity" && parse_double(kv.value, dv)) feat->intensity = dv;
       else if (field == "rotation" && parse_double(kv.value, dv)) feat->rotation = dv;
       else if (field == "squash" && parse_double(kv.value, dv)) feat->squash = dv;
+      else fail();
+    }
+    else if (sec == "emotion") {
+      // emotion.<emotion>.<idx>.<field> — emotion names may NOT contain '.'
+      // (validated); the idx positions the response deterministically within
+      // the emotion's vector. feature ids (which may contain dots) ride as a
+      // field VALUE, never in the key.
+      if (kv.path.size() < 4) { fail(); break; }
+      const std::string& emotion = kv.path[1];
+      const std::string& idx_s = kv.path[2];
+      const std::string& efield = kv.path[3];
+      std::uint32_t idx{};
+      if (!parse_uint_strict(idx_s, idx)) { fail(); break; }
+      auto& vec = canon.emotion_responses[emotion];
+      while (vec.size() <= idx) {
+        EmotionResponse fresh;
+        fresh.feature_id = "";
+        fresh.gaze = 0.0; fresh.aperture = 1.0; fresh.intensity = 0.0;
+        fresh.rotation = 0.0; fresh.squash = 1.0;
+        vec.push_back(std::move(fresh));
+      }
+      auto& resp = vec[idx];
+      double dv{};
+      if (efield == "feature") resp.feature_id = kv.value;
+      else if (efield == "gaze" && parse_double(kv.value, dv)) resp.gaze = dv;
+      else if (efield == "aperture" && parse_double(kv.value, dv)) resp.aperture = dv;
+      else if (efield == "intensity" && parse_double(kv.value, dv)) resp.intensity = dv;
+      else if (efield == "rotation" && parse_double(kv.value, dv)) resp.rotation = dv;
+      else if (efield == "squash" && parse_double(kv.value, dv)) resp.squash = dv;
       else fail();
     }
     else if (sec == "marking") {
@@ -1340,7 +1559,7 @@ std::optional<VisualCanon> parse_visual_canon(std::string_view text, const Canon
       if (it == canon.identity_invariants.end()) { canon.identity_invariants.push_back({}); it = canon.identity_invariants.end() - 1; it->id = id; }
       double dv{};
       if (field == "kind") { const auto v = identity_invariant_kind_from_name(kv.value); if (!v) fail(); else it->kind = *v; }
-      else if (field == "refs") it->refs = split_semicolon(kv.value);
+      else if (field == "refs") { const auto v = split_escaped_join(kv.value); if (!v) fail(); else it->refs = *v; }
       else if (field == "tolerance" && parse_double(kv.value, dv)) it->tolerance = dv;
       else if (field == "hard") { const auto b = parse_bool_strict(kv.value); if (!b) fail(); else it->severity = *b ? InvariantSeverity::hard : InvariantSeverity::soft; }
       else if (field == "severity") { const auto v = invariant_severity_from_name(kv.value); if (!v) fail(); else it->severity = *v; }
@@ -1614,6 +1833,50 @@ ValidationResult enforce_deformation_envelopes(const VisualCanon& canon, Perform
                                                std::string_view action_phase, double expression,
                                                double style_factor, double transformation_factor) {
   ValidationResult r;
+
+  // ── Deterministic per-part composition BEFORE enforcement ──
+  // Two individually-legal requests may combine into an illegal aggregate
+  // (e.g. +3 and +3 translation on a part whose allowed bound is 5). Every
+  // source — derived acting motion, KeyPose authority, impact, expression,
+  // direct PerformanceState input — flows through this single composition
+  // stage, and enforcement evaluates the AGGREGATE effective deviation.
+  // Semantics per channel: translation/rotation sum; scale multiplies;
+  // opacity: last non-zero wins. KeyPose override semantics are resolved
+  // earlier in solve_pose (replace same-part derived motions), so duplicate
+  // entries here are distinct sources that compose, never insertion-ordered
+  // ambiguity.
+  {
+    struct Eff {
+      bool has{};
+      double dx{}, dy{}, rot{};
+      double sx{1.0}, sy{1.0};
+      double opacity{0.0};
+    };
+    std::map<std::string, Eff, std::less<>> composed;
+    for (const auto& m : perf.motions) {
+      Eff& e = composed[m.part_id];
+      e.has = true;
+      e.dx += m.dx;
+      e.dy += m.dy;
+      e.rot += m.rotation_degrees;
+      e.sx *= m.scale_x;
+      e.sy *= m.scale_y;
+      if (m.opacity > 0.0) e.opacity = m.opacity;
+    }
+    std::vector<PartMotion> merged;
+    merged.reserve(composed.size());
+    for (auto& [part_id, eff] : composed) {
+      PartMotion m;
+      m.part_id = part_id;
+      m.dx = eff.dx; m.dy = eff.dy;
+      m.rotation_degrees = eff.rot;
+      m.scale_x = eff.sx; m.scale_y = eff.sy;
+      m.opacity = eff.opacity;
+      merged.push_back(std::move(m));
+    }
+    perf.motions = std::move(merged);
+  }
+
   for (auto& m : perf.motions) {
     const auto eit = canon.deformation_envelopes.find(m.part_id);
     if (eit == canon.deformation_envelopes.end()) continue;
@@ -1836,7 +2099,18 @@ std::vector<PartMotion> expression_motions(const VisualCanon& canon,
                                            std::string_view emotion,
                                            double gaze_x, double gaze_y) {
   std::vector<PartMotion> out;
-  (void)emotion;  // reserved for future emotion-to-feature-mapping table
+  // Data-driven emotion mapping: canon.emotion_responses maps a semantic
+  // emotion to typed ExpressiveFeature channel overrides (gaze, aperture,
+  // intensity, rotation, squash). An unknown/empty emotion yields no
+  // overrides and feature defaults apply. The SAME generic machinery drives
+  // organisms (eyes/ears/mouth) and mechanical entities (visor/antenna).
+  std::map<std::string, const EmotionResponse*, std::less<>> emotion_by_feature;
+  if (!emotion.empty()) {
+    const auto it = canon.emotion_responses.find(std::string(emotion));
+    if (it != canon.emotion_responses.end())
+      for (const auto& resp : it->second)
+        emotion_by_feature.emplace(resp.feature_id, &resp);
+  }
   auto find_by_role = [&](const std::string& role) -> std::string {
     for (const auto& [id, s] : canon.structures)
       if (s.role == role || (role == "ear" && id.find("ear") != std::string::npos))
@@ -1846,41 +2120,78 @@ std::vector<PartMotion> expression_motions(const VisualCanon& canon,
 
   for (const auto& region : canon.facial_regions) {
     for (const auto& f : region.features) {
-      // Resolve feature-to-part binding: by explicit id in the canon, then by
-      // role-based search. Feature IDs (like "feature.eye_left") are metadata;
-      // the actual motion must target a canon structure ID.
+      // Effective feature parameters: canon defaults, overridden by the
+      // emotion response when this feature participates in it.
+      double f_gaze = f.gaze;
+      double f_aperture = f.aperture;
+      double f_intensity = f.intensity;
+      double f_rotation = f.rotation;
+      double f_squash = f.squash;
+      if (const auto eit = emotion_by_feature.find(f.id); eit != emotion_by_feature.end()) {
+        f_gaze = eit->second->gaze;
+        f_aperture = eit->second->aperture;
+        f_intensity = eit->second->intensity;
+        f_rotation = eit->second->rotation;
+        f_squash = eit->second->squash;
+      }
+      // Resolve feature-to-part binding: by explicit id in the canon, then
+      // the expressive region's structure_ref (semantic ownership), then
+      // role-based search, then a semantic id-token match (e.g. "visor" /
+      // "antenna") derived from the feature kind. Feature IDs (like
+      // "feature.eye_left") are metadata; the actual motion must target a
+      // canon structure ID. No geometric-size heuristics.
       std::string target_id;
       if (!f.id.empty() && canon.structures.find(f.id) != canon.structures.end()) {
         target_id = f.id;
       } else {
-        switch (f.kind) {
-          case ExpressiveFeatureKind::eye: target_id = find_by_role("eye"); break;
-          case ExpressiveFeatureKind::mouth: target_id = find_by_role("mouth"); break;
-          case ExpressiveFeatureKind::visor: target_id = find_by_role("visor"); break;
-          case ExpressiveFeatureKind::ear: target_id = find_by_role("ear"); break;
-          case ExpressiveFeatureKind::brow: target_id = find_by_role(f.id.empty() ? std::string{} : f.id); break;
-          case ExpressiveFeatureKind::antenna: target_id = find_by_role(f.id.empty() ? std::string{} : f.id); break;
-          default: break;
+        // Mechanical/expressive channels resolve by kind token first
+        // ("visor", "antenna", "brow") so per-feature targeting stays
+        // specific (antenna feature -> antenna structure, not the region
+        // mass); then role-based search for organism features (eyes/mouth/
+        // ears bind to their dedicated structures, NEVER the whole head);
+        // the region's structure_ref is the last-resort semantic owner
+        // (e.g. a visor-only region). No geometric-size heuristics.
+        if (f.kind == ExpressiveFeatureKind::visor || f.kind == ExpressiveFeatureKind::antenna ||
+            f.kind == ExpressiveFeatureKind::brow) {
+          const std::string token =
+              f.kind == ExpressiveFeatureKind::visor ? "visor"
+              : f.kind == ExpressiveFeatureKind::antenna ? "antenna" : "brow";
+          for (const auto& [id, s] : canon.structures)
+            if (id.find(token) != std::string::npos) { target_id = id; break; }
         }
+        if (target_id.empty()) {
+          switch (f.kind) {
+            case ExpressiveFeatureKind::eye: target_id = find_by_role("eye"); break;
+            case ExpressiveFeatureKind::mouth: target_id = find_by_role("mouth"); break;
+            case ExpressiveFeatureKind::visor: target_id = find_by_role("visor"); break;
+            case ExpressiveFeatureKind::ear: target_id = find_by_role("ear"); break;
+            case ExpressiveFeatureKind::brow: target_id = find_by_role("brow"); break;
+            case ExpressiveFeatureKind::antenna: target_id = find_by_role("antenna"); break;
+            default: break;
+          }
+        }
+        // A feature that still cannot resolve is skipped: features bind to
+        // their OWN dedicated structures, never the region's mass. An eye
+        // feature must not deform the whole head.
       }
       if (target_id.empty()) continue;
       PartMotion m;
       m.part_id = target_id;
       switch (f.kind) {
         case ExpressiveFeatureKind::eye: {
-          const double aperture = std::clamp(f.aperture, 0.0, 1.0);
+          const double aperture = std::clamp(f_aperture, 0.0, 1.0);
           m.scale_x = 0.3 + 0.7 * aperture;
           m.scale_y = std::max(0.3, aperture * 0.9);
-          m.dx = std::clamp(gaze_x + f.gaze, -1.0, 1.0) * 0.4;
+          m.dx = std::clamp(gaze_x + f_gaze, -1.0, 1.0) * 0.4;
           break;
         }
         case ExpressiveFeatureKind::mouth:
         case ExpressiveFeatureKind::visor: {
-          m.scale_y = std::clamp(f.aperture, 0.05, 1.0);
+          m.scale_y = std::clamp(f_aperture, 0.05, 1.0);
           break;
         }
         case ExpressiveFeatureKind::ear: {
-          m.rotation_degrees = f.rotation;
+          m.rotation_degrees = f_rotation;
           break;
         }
         case ExpressiveFeatureKind::brow: {
@@ -1888,7 +2199,7 @@ std::vector<PartMotion> expression_motions(const VisualCanon& canon,
           break;
         }
         case ExpressiveFeatureKind::antenna: {
-          m.rotation_degrees = f.rotation * 0.5;
+          m.rotation_degrees = f_rotation * 0.5;
           break;
         }
         default: break;
@@ -1899,105 +2210,83 @@ std::vector<PartMotion> expression_motions(const VisualCanon& canon,
   return out;
 }
 
-ValidationResult apply_expression(const VisualCanon& canon, VisualMorphologyV2& morph,
-                                  std::string_view emotion, double gaze_x, double gaze_y) {
+/* ── Semantic LOD (authored-rule execution) ──
+ * Executes VisualFeature resolution rules for a target resolution:
+ *   - identity-critical features (recognition_importance >= 1.0 or
+ *     semantic_priority == 0) are PRESERVED even when min_resolution is
+ *     crossed (identity must not disappear merely because it got small);
+ *   - omission_rule "omit" / substitution_rule "omit" -> part omitted;
+ *   - merge_rule "merge" / substitution_rule "merge:<parent>" -> part
+ *     omitted and its size merged into the named parent (deterministic);
+ *   - substitution_rule "substitute:<id>" -> part omitted, substitute part
+ *     (if present) is forced visible;
+ *   - otherwise a crossed low-priority feature is omitted as basic
+ *     visibility filtering (documented; NOT cluster-semantic pixel art).
+ * All actions are reported as deterministic diagnostics. */
+ValidationResult apply_semantic_lod(const VisualCanon& canon, VisualMorphologyV2& morph,
+                                    std::uint32_t target_resolution) {
   ValidationResult r;
-  (void)emotion;  // reserved for future emotion-to-feature-mapping table
-  for (const auto& region : canon.facial_regions) {
-    const auto pit = morph.parts.find(region.structure_ref);
-    if (pit == morph.parts.end()) {
-      add_diag(r, "EXPRESSION_REGION_MISSING", "expressive region '" + region.id + "' structure missing");
+  if (target_resolution == 0) return r;
+  for (const auto& f : canon.resolution_features) {
+    if (f.min_resolution == 0 || f.min_resolution <= target_resolution) continue;
+    const bool identity_critical = f.recognition_importance >= 1.0 || f.semantic_priority == 0;
+    // Authored rules take precedence over the identity-critical default:
+    // an explicit "omit" rule may drop a low-priority feature even when
+    // importance is high, but identity-critical landmarks are still guarded
+    // by identity invariants downstream.
+    if (!f.substitution_rule.empty() && f.substitution_rule.rfind("substitute:", 0) == 0) {
+      const std::string sub = f.substitution_rule.substr(std::string("substitute:").size());
+      auto pit = morph.parts.find(f.structure_ref);
+      if (pit != morph.parts.end()) {
+        pit->second.visible = false;
+        add_diag(r, "LOD_SUBSTITUTE",
+                 "feature '" + f.id + "' substituted by '" + sub + "' at resolution " +
+                 std::to_string(target_resolution), DiagnosticSeverity::info);
+      }
+      auto sit = morph.parts.find(sub);
+      if (sit != morph.parts.end()) sit->second.visible = true;
       continue;
     }
-    for (const auto& f : region.features) {
-      switch (f.kind) {
-        case ExpressiveFeatureKind::eye: {
-          auto eit = morph.parts.find(f.id.empty() ? std::string{} : f.id);
-          // Feature may target the structure by id or by eye-role search.
-          if (eit == morph.parts.end()) {
-            for (auto& [id, p] : morph.parts)
-              if (p.semantic_role == "eye") { eit = morph.parts.find(id); break; }
-          }
-          if (eit == morph.parts.end()) break;
-          const double aperture = std::clamp(f.aperture, 0.0, 1.0);
-          const double squash = 0.3 + 0.7 * aperture;
-          eit->second.size_x *= squash;
-          eit->second.size_y *= std::max(0.3, aperture * 0.9);
-          // Gaze shifts the eye laterally within its parent.
-          const double gaze_shift = std::clamp(gaze_x + f.gaze, -1.0, 1.0) * 0.4;
-          eit->second.x += gaze_shift;
-          break;
-        }
-        case ExpressiveFeatureKind::mouth:
-        case ExpressiveFeatureKind::visor: {
-          auto mit = morph.parts.find(f.id);
-          if (mit == morph.parts.end()) {
-            for (auto& [id, p] : morph.parts)
-              if (p.semantic_role == "mouth" || p.semantic_role == "visor" || p.semantic_role == "eye") {
-                if (f.kind == ExpressiveFeatureKind::visor && p.semantic_role != "visor") continue;
-                if (f.kind == ExpressiveFeatureKind::mouth && p.semantic_role != "mouth") continue;
-                mit = morph.parts.find(id); break;
-              }
-          }
-          if (mit == morph.parts.end()) break;
-          const double aperture = std::clamp(f.aperture, 0.05, 1.0);
-          mit->second.size_y *= aperture;
-          break;
-        }
-        case ExpressiveFeatureKind::ear: {
-          auto eit = morph.parts.find(f.id);
-          if (eit == morph.parts.end()) {
-            for (auto& [id, p] : morph.parts)
-              if (p.semantic_role == "appendage" && id.find("ear") != std::string::npos) {
-                eit = morph.parts.find(id); break;
-              }
-          }
-          if (eit == morph.parts.end()) break;
-          eit->second.rotation_degrees += f.rotation;
-          break;
-        }
-        case ExpressiveFeatureKind::light:
-        case ExpressiveFeatureKind::panel: {
-          auto eit = morph.parts.find(f.id);
-          if (eit == morph.parts.end()) {
-            for (auto& [id, p] : morph.parts)
-              if (p.emissive) { eit = morph.parts.find(id); break; }
-          }
-          if (eit == morph.parts.end()) break;
-          eit->second.emissive = true;
-          break;
-        }
-        case ExpressiveFeatureKind::antenna: {
-          auto eit = morph.parts.find(f.id);
-          if (eit == morph.parts.end()) {
-            for (auto& [id, p] : morph.parts)
-              if (id.find("antenna") != std::string::npos) { eit = morph.parts.find(id); break; }
-          }
-          if (eit == morph.parts.end()) break;
-          eit->second.rotation_degrees += f.rotation * 0.5;
-          break;
-        }
-        case ExpressiveFeatureKind::brow: {
-          auto eit = morph.parts.find(f.id);
-          if (eit == morph.parts.end()) break;
-          eit->second.y += (std::abs(gaze_y) * 0.5 + 0.25) * (f.id.find("left") != std::string::npos ? -1.0 : 1.0);
-          break;
-        }
-        case ExpressiveFeatureKind::tail: {
-          auto eit = morph.parts.find(f.id);
-          if (eit == morph.parts.end()) {
-            for (auto& [id, p] : morph.parts)
-              if (id.find("tail") != std::string::npos) { eit = morph.parts.find(id); break; }
-          }
-          if (eit == morph.parts.end()) break;
-          eit->second.rotation_degrees += f.rotation * 0.5;
-          break;
-        }
-        case ExpressiveFeatureKind::custom: break;
+    if (f.omission_rule == "omit" || f.substitution_rule == "omit") {
+      auto pit = morph.parts.find(f.structure_ref);
+      if (pit != morph.parts.end()) {
+        pit->second.visible = false;
+        add_diag(r, "LOD_OMIT",
+                 "feature '" + f.id + "' omitted at resolution " + std::to_string(target_resolution),
+                 DiagnosticSeverity::info);
       }
+      continue;
+    }
+    if (f.merge_rule == "merge" || f.substitution_rule.rfind("merge:", 0) == 0) {
+      std::string parent = f.substitution_rule.rfind("merge:", 0) == 0
+          ? f.substitution_rule.substr(std::string("merge:").size()) : f.structure_ref;
+      const auto sit = canon.structures.find(f.structure_ref);
+      if (sit != canon.structures.end() && !sit->second.parent.empty())
+        parent = sit->second.parent;  // merge into the actual parent
+      auto pit = morph.parts.find(f.structure_ref);
+      auto par = morph.parts.find(parent);
+      if (pit != morph.parts.end() && par != morph.parts.end() && par != pit) {
+        // Deterministic merge: parent absorbs the child's axis sizes.
+        par->second.size_x = std::max(par->second.size_x, pit->second.size_x);
+        par->second.size_y = std::max(par->second.size_y, pit->second.size_y);
+        pit->second.visible = false;
+        add_diag(r, "LOD_MERGE",
+                 "feature '" + f.id + "' merged into '" + parent + "' at resolution " +
+                 std::to_string(target_resolution), DiagnosticSeverity::info);
+      }
+      continue;
+    }
+    if (identity_critical) continue;  // preserved
+    auto pit = morph.parts.find(f.structure_ref);
+    if (pit != morph.parts.end()) {
+      pit->second.visible = false;
+      add_diag(r, "LOD_VISIBILITY_FILTER",
+               "feature '" + f.id + "' visibility-filtered at resolution " +
+               std::to_string(target_resolution), DiagnosticSeverity::info);
     }
   }
   return r;
 }
+
 
 } // namespace gspl::sprites::visual

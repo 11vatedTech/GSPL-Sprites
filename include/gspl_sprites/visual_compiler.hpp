@@ -39,8 +39,12 @@ struct VisualCompileOptions {
   const StyleProgram* style_program{nullptr};// factorized style program
   std::string projection_kind{"2d"};
   std::span<const ChannelRequest> channel_requests{};
-  // Semantic LOD: when non-zero, features with min_resolution above
-  // this are discarded (see VisualFeature::min_resolution).
+  // Typed FX requests: explicit phenomenon+energy+source semantics. The
+  // compiler validates each request against the resolved morphology and
+  // resolves them into FxState. No magnitude heuristic invents a phenomenon.
+  std::span<const FxRequest> fx_requests{};
+  // Semantic LOD: authored resolution rules are executed for this target
+  // resolution (see VisualFeature rules; identity-critical features survive).
   std::uint32_t target_resolution{0};
 };
 

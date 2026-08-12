@@ -110,6 +110,18 @@ ValidationResult validate_style(const StyleSemantics& style) {
   range("STYLE_DETAIL", style.detail_density, 0.0, 2.0);
   range("STYLE_EDGE_SOFT", style.edge_softness, 0.0, 4.0);
   range("STYLE_QUANTIZATION", style.pixel_quantization, 0.0, 1024.0);
+  // Renderer-affecting fields must be validated AND canonicalized so they
+  // participate in style_identity and therefore visual_ir_identity.
+  if (style.band_count < 1)
+    result.diagnostics.push_back({"STYLE_BAND_COUNT", "band_count must be >= 1 (got " +
+                                  std::to_string(style.band_count) + ")"});
+  if (style.band_count > 256)
+    result.diagnostics.push_back({"STYLE_BAND_COUNT_LIMIT", "band_count exceeds resource bound 256"});
+  if (style.max_colors != 0 && style.max_colors < 2)
+    result.diagnostics.push_back({"STYLE_MAX_COLORS", "max_colors must be 0 (unlimited) or >= 2 (got " +
+                                  std::to_string(style.max_colors) + ")"});
+  if (style.max_colors > 4096)
+    result.diagnostics.push_back({"STYLE_MAX_COLORS_LIMIT", "max_colors exceeds resource bound 4096"});
   return result;
 }
 
@@ -135,6 +147,8 @@ std::string canonicalize_style(const StyleSemantics& s) {
       << ",\"aa\":" << static_cast<int>(s.aa_policy)
       << ",\"quant\":" << s.pixel_quantization
       << ",\"composite\":" << static_cast<int>(s.layer_compositing)
+      << ",\"bands\":" << s.band_count
+      << ",\"max_colors\":" << s.max_colors
       << "}";
   return out.str();
 }

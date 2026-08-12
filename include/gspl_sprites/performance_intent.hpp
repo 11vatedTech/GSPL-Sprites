@@ -89,10 +89,16 @@ struct PoseSolution {
 
 /* Balance/support reasoning: projected center of mass vs support contacts.
  * Returns diagnostics when a supposedly planted pose has no plausible
- * support. Support policy is data-driven (support roles from canon). */
+ * support. Support is DATA-DRIVEN: canon support_policy (grounded/flight/
+ * buoyant/free/auto) plus declared support_capable structures; ears, tails,
+ * antennae and generic appendages are never inferred as support. KeyPose
+ * support contacts and center_of_mass are consumed when authored. Balance
+ * findings are quality diagnostics (warning severity, never fail the
+ * compile). */
 [[nodiscard]] ValidationResult analyze_balance(const VisualCanon& canon,
                                                const PoseSolution& solution,
-                                               const PerformanceIntent& intent);
+                                               const PerformanceIntent& intent,
+                                               const KeyPose* key_pose = nullptr);
 
 /* Deterministic lowering: intent + key pose → PerformanceState (the
  * existing compiler input). facing derives from force/gaze; phase and

@@ -94,6 +94,11 @@ ValidationResult validate_visual_ir(const VisualIr& ir, const VisualLimits& limi
     const auto fx_result = validate_fx_state(ir.fx_state, limits.fx_limits);
     for (auto& d : fx_result.diagnostics) result.diagnostics.push_back(std::move(d));
   }
+
+  // Temporal labels: keys must be non-empty (informational; empty values are
+  // tolerated as "no label" rather than failing the frame).
+  for (const auto& [k, v] : ir.temporal_part_labels)
+    if (k.empty()) add("VISUAL_IR_TEMPORAL_EMPTY_KEY", "temporal label with empty key");
   return result;
 }
 
@@ -145,15 +150,26 @@ std::string canonicalize_visual_ir(const VisualIr& ir) {
         << ",\"id\":\"" << ir.channel_requests[i].id << "\"}";
   }
   out << "]";  // close channels array
-  // Temporal part labels (per-part identity for frame correspondence)
-  out << ",\"temporal_labels\":[";
-  bool first_tl = true;
-  for (const auto& [part_id, label] : ir.temporal_part_labels) {
-    if (!first_tl) out << ",";
-    first_tl = false;
-    out << "{\"p\":\"" << part_id << "\",\"l\":\"" << label << "\"}";
-  }
-  out << "]";
+  // Temporal identity: all semantic classes (parts, landmarks, markings,
+  // material regions, expressive features, FX emitters) participate in the
+  // canonical VisualIr representation and therefore in visual_ir_identity.
+  const auto emit_temporal_map = [&](const char* name,
+                                     const std::map<std::string, std::string, std::less<>>& m) {
+    out << ",\"" << name << "\":[";
+    bool first = true;
+    for (const auto& [key, label] : m) {
+      if (!first) out << ",";
+      first = false;
+      out << "{\"k\":\"" << key << "\",\"l\":\"" << label << "\"}";
+    }
+    out << "]";
+  };
+  emit_temporal_map("temporal_parts", ir.temporal_part_labels);
+  emit_temporal_map("temporal_landmarks", ir.temporal_landmark_labels);
+  emit_temporal_map("temporal_markings", ir.temporal_marking_labels);
+  emit_temporal_map("temporal_materials", ir.temporal_material_labels);
+  emit_temporal_map("temporal_features", ir.temporal_feature_labels);
+  emit_temporal_map("temporal_fx", ir.temporal_fx_labels);
   // FX state (if populated) is canonical manifestation state
   out << ",\"fx\":" << canonicalize_fx_state(ir.fx_state);
   out << "}";  // close root JSON object

@@ -62,6 +62,7 @@ struct CanonStructure {
   std::int32_t z_order{};
   bool emissive{};
   bool silhouette_contribution{true};
+  bool support_capable{};             // declared ground/flight support contact (data-driven)
   std::string bone_id;
   std::string socket_id;
   std::string projection_behavior{"default"};
@@ -103,6 +104,9 @@ struct ConstructionConstraint {
   std::string structure;   // constrained structure id
   std::string reference;   // reference structure id
   ConstructionAxis axis{ConstructionAxis::x};  // x/y/z (symmetry: mirror plane normal)
+  // Optional distinct axis for the reference measure (cross-axis ratios such
+  // as "target size_x derived from reference size_y"). Empty = same axis.
+  std::optional<ConstructionAxis> reference_axis;
   double factor{1.0};
   double offset{0.0};
   bool hard{true};         // contradiction fails closed; soft resolves via deterministic precedence
@@ -205,6 +209,21 @@ struct ExpressiveFeature {
   double squash{1.0};    // facial mass squash factor
 };
 
+/* ── Emotion response (data-driven expressive mapping) ──
+ * A canon may map a semantic emotion/expression name to concrete
+ * ExpressiveFeature parameter overrides. Organisms move eyes/ears/mouth;
+ * mechanical entities move visor/antenna/panel channels — through the SAME
+ * generic machinery (feature ids resolve via the canonical feature graph).
+ * Unknown emotions simply produce no overrides (feature defaults apply). */
+struct EmotionResponse {
+  std::string feature_id;   // ExpressiveFeature id within the canon
+  double gaze{};            // -1..1 lateral gaze override
+  double aperture{1.0};     // 0..1 openness override
+  double intensity{0.0};    // 0..1 channel intensity override
+  double rotation{};        // degrees override
+  double squash{1.0};       // mass squash override
+};
+
 struct ExpressiveRegion {
   std::string id;
   std::string structure_ref;
@@ -286,6 +305,18 @@ struct IdentityInvariant {
   std::string scope;               // optional "form:<id>" restriction
 };
 
+/* ── Support policy (data-driven balance/support reasoning) ──
+ * Declares how an entity relates to its environment for support analysis:
+ *   grounded          — ground contact via declared support_capable structures
+ *   flight            — airborne; no ground-support analysis
+ *   buoyant           — fluid medium; no ground-support analysis
+ *   free              — zero-gravity/abstract; no support analysis
+ *   auto              — infer from declared support_capable structures
+ * Never derived from appendage roles (ears/tails/antennae are not support). */
+enum class SupportPolicy { auto_, grounded, flight, buoyant, free };
+[[nodiscard]] std::string_view support_policy_name(SupportPolicy policy) noexcept;
+[[nodiscard]] std::optional<SupportPolicy> support_policy_from_name(std::string_view name) noexcept;
+
 struct VisualCanon {
   std::string schema{"gspl.visual-canon/0.1"};
   std::string entity_id;
@@ -309,7 +340,10 @@ struct VisualCanon {
   std::vector<IdentityInvariant> identity_invariants;
   std::string gaze_driver;              // structure id that orients toward gaze ("" = auto-detect)
   std::string attention_driver;          // structure id for attention/awareness ("" = gaze_driver)
-  std::string support_policy{"auto"};    // "auto"|"grounded"|"flight"|"buoyant"|"free" (data-driven)
+  SupportPolicy support_policy{SupportPolicy::auto_};  // typed (validated closed set)
+  // Emotion name -> typed expressive channel overrides (data-driven; generic
+  // across organisms and mechanical entities).
+  std::map<std::string, std::vector<EmotionResponse>, std::less<>> emotion_responses;
   // Role-name -> concrete color palettes (deterministic; roles never vanish).
   std::map<std::string, std::string, std::less<>> base_palette;   // role -> "#rrggbb"
   std::map<std::string, std::map<std::string, std::string, std::less<>>, std::less<>> form_palettes; // form -> role -> hex
@@ -377,27 +411,29 @@ struct CanonLimits {
 /* ── Identity invariant checks ──
  * Validates proportion/landmark/silhouette/material/color invariants
  * against the constructed morphology. Hard invariants fail closed;
- * diagnostic codes carry a ":<severity>" suffix (advisory/soft/hard). */
+ * severity is typed (DiagnosticSeverity) — never encoded in the code string. */
 [[nodiscard]] ValidationResult check_identity_invariants(const VisualCanon& canon,
                                                          const VisualMorphologyV2& morph);
 
 /* ── Facial/expressive canon application ──
- * Makes ExpressiveRegion/ExpressiveFeature operational: aperture, gaze,
- * intensity and rotation translate into concrete part transforms on the
- * resolved morphology (eye squash from aperture, emissive from intensity,
- * ear/visor rotation, mouth aperture). Deterministic, entity-agnostic. */
-[[nodiscard]] ValidationResult apply_expression(const VisualCanon& canon,
-                                                 VisualMorphologyV2& morph,
-                                                 std::string_view emotion = {},
-                                                 double gaze_x = 0.0,
-                                                 double gaze_y = 0.0);
-
-/* expression_motions: collect expression-driven PartMotions for the facial
+ * expression_motions: collect expression-driven PartMotions for the facial
  * canon BEFORE the deformation enforcement gate. Returns aperture, gaze,
  * rotation, etc. as motions; does NOT mutate morph. Consumed by the compiler
- * to close the post-gate expression bypass. */
+ * to close the post-gate expression bypass. Emotion (if provided) resolves
+ * through canon.emotion_responses (data-driven) before feature defaults. */
 [[nodiscard]] std::vector<PartMotion> expression_motions(const VisualCanon& canon,
                                                          std::string_view emotion,
                                                          double gaze_x, double gaze_y);
+
+/* ── Semantic LOD ──
+ * Executes authored resolution rules (semantic_priority, recognition_importance,
+ * min_resolution, substitution_rule, merge_rule, omission_rule) on the
+ * constructed morphology for a target resolution. Identity-critical features
+ * (high recognition_importance or priority 0) are preserved even when their
+ * min_resolution is crossed; authored rules decide omit/merge/substitute for
+ * the rest. Deterministic; diagnostics report every action. */
+[[nodiscard]] ValidationResult apply_semantic_lod(const VisualCanon& canon,
+                                                  VisualMorphologyV2& morph,
+                                                  std::uint32_t target_resolution);
 
 } // namespace gspl::sprites::visual

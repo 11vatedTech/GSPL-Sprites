@@ -74,12 +74,19 @@ struct VisualIr {
   PerformanceState performance;
   std::vector<std::string> layer_order;
   std::vector<ChannelRequest> channel_requests;
-  // Temporal identity: part_id -> deterministic temporal label (stable
-  // hash of the canon structure/parent/role). Persists across frames for
-  // contour/landmark/marking correspondence.
+  // Temporal identity: semantic-id -> deterministic temporal label (stable
+  // hash of canon identity, NOT pose geometry). Persists across frames so
+  // the SAME semantic marking/landmark/material-region/expressive-feature/
+  // FX-emitter keeps its identity while its transform changes.
   std::map<std::string, std::string, std::less<>> temporal_part_labels;
-  // FX state: resolved from performance events (impact, emission, aura).
-  // The renderer consults fx_state for active effect draw params.
+  std::map<std::string, std::string, std::less<>> temporal_landmark_labels;
+  std::map<std::string, std::string, std::less<>> temporal_marking_labels;
+  std::map<std::string, std::string, std::less<>> temporal_material_labels;
+  std::map<std::string, std::string, std::less<>> temporal_feature_labels;
+  std::map<std::string, std::string, std::less<>> temporal_fx_labels;
+  // FX state: resolved from TYPED fx requests only (explicit phenomenon +
+  // energy + semantic source). The renderer consults fx_state for draw
+  // params; no heuristic phenomenon generation.
   FxState fx_state;
 };
 

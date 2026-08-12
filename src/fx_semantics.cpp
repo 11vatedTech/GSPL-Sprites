@@ -85,6 +85,27 @@ std::optional<FxPhenomenon> fx_phenomenon_from_name(std::string_view name) noexc
   return std::nullopt;
 }
 
+ValidationResult validate_fx_request(const FxRequest& request) {
+  ValidationResult result;
+  auto add = [&](std::string code, const std::string& msg) {
+    result.diagnostics.push_back({std::move(code), msg});
+  };
+  if (request.id.empty()) add("FXREQ_EMPTY_ID", "fx request has an empty id");
+  if (request.source_part.empty()) add("FXREQ_NO_SOURCE", "fx request '" + request.id + "' has no source part");
+  if (!finite(request.velocity)) add("FXREQ_NONFINITE", "fx request '" + request.id + "' velocity is non-finite");
+  const auto in01 = [&](double v, const char* name) {
+    if (!(v >= 0.0 && v <= 1.0)) add("FXREQ_RANGE", "fx request '" + request.id + "' " + name + " outside [0,1]");
+  };
+  in01(request.intensity, "intensity");
+  in01(request.charge, "charge");
+  in01(request.branching, "branching");
+  in01(request.persistence, "persistence");
+  in01(request.emission, "emission");
+  if (!(request.temperature >= -1.0 && request.temperature <= 1.0))
+    add("FXREQ_TEMPERATURE", "fx request '" + request.id + "' temperature outside [-1,1]");
+  return result;
+}
+
 ValidationResult validate_fx_state(const FxState& state, const FxLimits& limits) {
   ValidationResult result;
   auto add = [&](std::string code, const std::string& msg) {

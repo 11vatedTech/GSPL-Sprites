@@ -80,13 +80,32 @@ void add_diag(ValidationResult& r, std::string code, std::string msg,
   return v.length_sq() > 0.0 ? v.normalized() : fallback;
 }
 
-/* Structural role helpers over canon roles (extensible, data-driven). */
-[[nodiscard]] bool is_support_role(std::string_view role) {
-  return role == "limb" || role == "leg" || role == "foot" || role == "paw" ||
-         role == "tread" || role == "wheel" || role == "appendage";
-}
+/* Structural role helpers over canon roles (extensible, data-driven). An
+ * appendage (ear/tail/antenna/tentacle) is NEVER inferred as support: only
+ * structures explicitly declared support_capable (or a non-auto support
+ * policy) participate. */
 [[nodiscard]] bool is_root_mass_role(std::string_view role) {
   return role == "body-mass" || role == "torso" || role == "chassis" || role == "body";
+}
+
+/* Support policy resolution: decides whether ground-support analysis runs.
+ *   grounded          -> analyze
+ *   flight/buoyant/free -> never analyze (non-ground mediums)
+ *   auto              -> analyze iff any structure declares support_capable
+ */
+[[nodiscard]] bool support_analysis_active(const VisualCanon& canon) {
+  switch (canon.support_policy) {
+    case SupportPolicy::grounded: return true;
+    case SupportPolicy::flight:
+    case SupportPolicy::buoyant:
+    case SupportPolicy::free: return false;
+    case SupportPolicy::auto_: {
+      for (const auto& [id, s] : canon.structures)
+        if (s.support_capable) return true;
+      return false;
+    }
+  }
+  return false;
 }
 
 } // namespace
@@ -135,33 +154,47 @@ PoseSolution solve_pose(const VisualCanon& canon, const PerformanceIntent& inten
 
   // 2. Line of action + force phase on the dominant root mass: anticipation
   //    compresses along the force axis, extension/contact/impact extend.
-  if (!root_masses.empty()) {
-    const std::string& root = root_masses.front();
-    const double phase_scale =
-        (intent.phase == PerformancePhase::anticipation || intent.phase == PerformancePhase::recovery ||
-         intent.phase == PerformancePhase::settle) ? -0.5
-        : (intent.phase == PerformancePhase::extension || intent.phase == PerformancePhase::contact ||
-           intent.phase == PerformancePhase::impact) ? 0.5 : 0.0;
-    const double lean = phase_scale * force * commitment * 8.0;
-    if (std::abs(lean) > 1e-9) {
-      PartMotion m;
-      m.part_id = root;
-      m.dx = force_dir.x * lean * 0.3;
-      m.dy = force_dir.y * lean * 0.3;
-      // Rotation about the line of action (into the page) — lean.
-      m.rotation_degrees = -force_dir.y * lean * 0.4;
-      out.motions.push_back(std::move(m));
-      out.applied_chains.push_back(root);
+  //    The line-of-action AXIS comes from the KeyPose when authored, else the
+  //    intent force direction (causally consumed semantic acting input).
+  {
+    Vec2 loa = force_dir;
+    if (key_pose && key_pose->line_of_action_direction.length_sq() > 0.0)
+      loa = normalized_or(key_pose->line_of_action_direction, force_dir);
+    const double curvature = key_pose ? key_pose->line_of_action_curvature : 0.0;
+    if (!root_masses.empty()) {
+      const std::string& root = root_masses.front();
+      const double phase_scale =
+          (intent.phase == PerformancePhase::anticipation || intent.phase == PerformancePhase::recovery ||
+           intent.phase == PerformancePhase::settle) ? -0.5
+          : (intent.phase == PerformancePhase::extension || intent.phase == PerformancePhase::contact ||
+             intent.phase == PerformancePhase::impact) ? 0.5 : 0.0;
+      const double lean = phase_scale * force * commitment * 8.0;
+      if (std::abs(lean) > 1e-9) {
+        PartMotion m;
+        m.part_id = root;
+        m.dx = loa.x * lean * 0.3;
+        m.dy = loa.y * lean * 0.3 + curvature * lean * 0.2;
+        // Rotation about the line of action (into the page) — lean.
+        m.rotation_degrees = -loa.y * lean * 0.4;
+        out.motions.push_back(std::move(m));
+        out.applied_chains.push_back(root);
+      }
     }
   }
 
-  // 3. Gaze: the canon's explicit gaze_driver structure (or first "head"-role
-  //    structure if unset) rotates toward gaze direction. No heuristic.
+  // 3. Gaze: the canon's declared gaze driver structure (gaze_driver, else
+  //    attention_driver, else first "head"-role structure) rotates toward the
+  //    resolved gaze direction. No geometric-size heuristics. The attention
+  //    vector is consumed as the gaze direction when gaze_direction is zero.
   {
-    const Vec2 g = normalized_or(out.gaze_direction, Vec2{1.0, 0.0});
+    Vec2 gaze_dir = out.gaze_direction;
+    if (gaze_dir.length_sq() == 0.0 && intent.attention.length_sq() > 0.0)
+      gaze_dir = normalized_or(intent.attention, Vec2{1.0, 0.0});
+    out.gaze_direction = gaze_dir;
+    const Vec2 g = normalized_or(gaze_dir, Vec2{1.0, 0.0});
     out.head_rotation_degrees = clamp_abs(g.y * 18.0 * commitment, 24.0);
-    // Determine gaze driver: explicit canon field > role "head" > empty.
     std::string head_id = canon.gaze_driver;
+    if (head_id.empty()) head_id = canon.attention_driver;
     if (head_id.empty()) {
       for (const auto& [id, s] : canon.structures)
         if (s.role == "head") { head_id = id; break; }
@@ -195,42 +228,60 @@ PoseSolution solve_pose(const VisualCanon& canon, const PerformanceIntent& inten
 }
 
 ValidationResult analyze_balance(const VisualCanon& canon, const PoseSolution& solution,
-                                 const PerformanceIntent& intent) {
+                                 const PerformanceIntent& intent, const KeyPose* key_pose) {
   ValidationResult r;
-  // Support policy: only entities with support roles are ground-checked.
-  bool has_support = false;
-  for (const auto& [id, s] : canon.structures)
-    if (is_support_role(s.role)) { has_support = true; break; }
-  if (!has_support) return r;  // flyers/zero-gravity: policy says no check
+  const auto warn = [&](std::string code, std::string msg) {
+    add_diag(r, std::move(code), std::move(msg), DiagnosticSeverity::warning);
+  };
 
-  // Compute approximate CoM: root mass center + solved balance offset.
+  // Data-driven support policy: grounded entities analyze; flight/buoyant/
+  // free entities (and auto with no declared support) are skipped entirely.
+  // A flyer legitimately skipping ground analysis produces NO diagnostic.
+  if (!support_analysis_active(canon)) return r;
+
+  // Center of mass: authored KeyPose CoM wins; otherwise computed from
+  // root masses + solved balance offset.
   double cx = 0.0, cy = 0.0, wsum = 0.0;
-  for (const auto& [id, s] : canon.structures) {
-    if (!is_root_mass_role(s.role) && s.role != "facial-feature") continue;
-    const double w = std::max(0.5, s.size_x * s.size_y);
-    cx += s.x * w; cy += s.y * w; wsum += w;
+  if (key_pose && (key_pose->center_of_mass.x != 0.0 || key_pose->center_of_mass.y != 0.0)) {
+    cx = key_pose->center_of_mass.x;
+    cy = key_pose->center_of_mass.y;
+  } else {
+    for (const auto& [id, s] : canon.structures) {
+      if (!is_root_mass_role(s.role)) continue;
+      const double w = std::max(0.5, s.size_x * s.size_y);
+      cx += s.x * w; cy += s.y * w; wsum += w;
+    }
+    if (wsum <= 0.0) return r;
+    cx /= wsum; cy /= wsum;
+    cx += solution.balance_offset_x;
+    cy += solution.balance_offset_y;
   }
-  if (wsum <= 0.0) return r;
-  cx /= wsum; cy /= wsum;
-  cx += solution.balance_offset_x;
-  cy += solution.balance_offset_y;
 
-  // Support polygon: min/max x of support structures (planted ground).
+  // Support polygon: authored KeyPose support contacts win; otherwise the
+  // declared support_capable structure positions (paws/feet/treads/wheels —
+  // never ears/tails/antennae).
   double min_x = std::numeric_limits<double>::max(), max_x = -std::numeric_limits<double>::max();
-  for (const auto& [id, s] : canon.structures) {
-    if (!is_support_role(s.role)) continue;
-    min_x = std::min(min_x, s.x); max_x = std::max(max_x, s.x);
+  bool any_contact = false;
+  if (key_pose && !key_pose->support_contacts.empty()) {
+    for (const auto& c : key_pose->support_contacts) {
+      min_x = std::min(min_x, c.x); max_x = std::max(max_x, c.x); any_contact = true;
+    }
+  } else {
+    for (const auto& [id, s] : canon.structures) {
+      if (!s.support_capable) continue;
+      min_x = std::min(min_x, s.x); max_x = std::max(max_x, s.x); any_contact = true;
+    }
   }
-  const double planted = (intent.balance == BalanceIntent::planted ||
-                          intent.balance == BalanceIntent::shifted);
-  if (planted && max_x <= min_x) {
-    add_diag(r, "BALANCE_NO_SUPPORT", "planted pose has no plausible support polygon");
+  const bool planted = (intent.balance == BalanceIntent::planted ||
+                        intent.balance == BalanceIntent::shifted);
+  if (planted && !any_contact) {
+    warn("BALANCE_NO_SUPPORT", "planted pose has no plausible support polygon");
     return r;
   }
-  if (planted && (cx < min_x || cx > max_x)) {
-    add_diag(r, "BALANCE_OUTSIDE_SUPPORT",
-             "center of mass x=" + d2s(cx) + " outside support polygon [" +
-             d2s(min_x) + ", " + d2s(max_x) + "]");
+  if (planted && any_contact && (cx < min_x || cx > max_x)) {
+    warn("BALANCE_OUTSIDE_SUPPORT",
+         "center of mass x=" + d2s(cx) + " outside support polygon [" +
+         d2s(min_x) + ", " + d2s(max_x) + "]");
   }
   return r;
 }

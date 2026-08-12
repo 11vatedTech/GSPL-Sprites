@@ -129,6 +129,10 @@ VisualCanon make_voltfox_canon() {
   VisualCanon c;
   set_canon(c, "voltfox", "Voltfox", "original_user_creation");
   c.forms = {"base", "storm"};
+  // Data-driven support/gaze/expression semantics (never role-inferred).
+  c.support_policy = SupportPolicy::grounded;
+  c.gaze_driver = "head";
+  c.attention_driver = "head";
 
   c.structures["torso"] = st("torso", "", "body-mass", "ellipse", "body", "fur", "primary",
                              0, 0, 0, 18, 11, 9, 0, 0);
@@ -168,6 +172,11 @@ VisualCanon make_voltfox_canon() {
                                       "fur", "shadow", 0, -4.5, 1, 2.4, 1.9, 1.4);
   c.structures["right_hind_foot"] = st("right_hind_foot", "right_hind", "appendage", "capsule",
                                        "body", "fur", "shadow", 0, -4.5, 1, 2.4, 1.9, 1.4);
+  // Declared support contacts: paws, NOT ears/tail/appendages.
+  c.structures["left_foot"].support_capable = true;
+  c.structures["right_foot"].support_capable = true;
+  c.structures["left_hind_foot"].support_capable = true;
+  c.structures["right_hind_foot"].support_capable = true;
   c.structures["tail_base"] = st("tail_base", "torso", "appendage", "capsule", "rear_appendages",
                                  "fur", "primary", -8, -0.5, 0, 3, 4, 2.8, -15);
   c.structures["tail_mid"] = st("tail_mid", "tail_base", "appendage", "capsule", "rear_appendages",
@@ -339,6 +348,18 @@ VisualCanon make_voltfox_canon() {
   face.features = {fe1, fe2, fe3, fe4, fe5};
   c.facial_regions.push_back(face);
 
+  // Emotion -> typed expressive channels (data-driven; organism channels).
+  EmotionResponse er1; er1.feature_id = "feature.eye_left";
+  er1.aperture = 0.7; er1.intensity = 0.8;
+  EmotionResponse er2; er2.feature_id = "feature.eye_right";
+  er2.aperture = 0.7; er2.intensity = 0.8;
+  c.emotion_responses["focused_aggression"] = {er1, er2};
+  EmotionResponse er3; er3.feature_id = "feature.eye_left";
+  er3.aperture = 1.0; er3.intensity = 0.2;
+  EmotionResponse er4; er4.feature_id = "feature.eye_right";
+  er4.aperture = 1.0; er4.intensity = 0.2;
+  c.emotion_responses["calm"] = {er3, er4};
+
   AttachmentPoint at1; at1.id = "attach.tail_root"; at1.structure_ref = "tail_base";
   at1.socket_id = "tail_root"; at1.role = "tail";
   AttachmentPoint at2; at2.id = "attach.ear_left"; at2.structure_ref = "left_ear";
@@ -408,6 +429,8 @@ VisualCanon make_humanoid_canon() {
   VisualCanon c;
   set_canon(c, "test_humanoid", "Test Humanoid", "original_user_creation");
   c.forms = {"base"};
+  c.support_policy = SupportPolicy::grounded;
+  c.gaze_driver = "head";
 
   c.structures["pelvis"] = st("pelvis", "", "body-mass", "rounded_rect", "body", "cloth", "primary",
                               0, -5, 0, 12, 7, 8);
@@ -435,6 +458,8 @@ VisualCanon make_humanoid_canon() {
                                  "shadow", 0, -4.5, 2, 3, 2, 2);
   c.structures["right_foot"] = st("right_foot", "right_leg", "appendage", "capsule", "body", "cloth",
                                   "shadow", 0, -4.5, 2, 3, 2, 2);
+  c.structures["left_foot"].support_capable = true;
+  c.structures["right_foot"].support_capable = true;
   c.structures["left_eye"] = st("left_eye", "head", "eye", "ellipse", "facial", "glass", "eye",
                                 -2, 15.5, 5, 1.5, 1.5, 1);
   c.structures["right_eye"] = st("right_eye", "head", "eye", "ellipse", "facial", "glass", "eye",
@@ -499,6 +524,14 @@ VisualCanon make_humanoid_canon() {
   face.features = {fe1, fe2, fe3};
   c.facial_regions.push_back(face);
 
+  EmotionResponse er1; er1.feature_id = "feature.eye_left";
+  er1.aperture = 0.6; er1.intensity = 0.5;
+  EmotionResponse er2; er2.feature_id = "feature.eye_right";
+  er2.aperture = 0.6; er2.intensity = 0.5;
+  EmotionResponse er3; er3.feature_id = "feature.mouth";
+  er3.aperture = 0.7;
+  c.emotion_responses["surprised"] = {er1, er2, er3};
+
   add_envelope(c, "head", 1.6, 3.6, false, 1.5);
   add_envelope(c, "left_arm", 3.2, 7.0, false, 1.6);
   add_envelope(c, "right_arm", 3.2, 7.0, false, 1.6);
@@ -537,6 +570,9 @@ VisualCanon make_mech_canon() {
   VisualCanon c;
   set_canon(c, "test_mech", "Test Mech", "original_user_creation");
   c.forms = {"base"};
+  c.support_policy = SupportPolicy::grounded;
+  c.gaze_driver = "turret";
+  c.attention_driver = "visor";
 
   c.structures["chassis"] = st("chassis", "", "body-mass", "rounded_rect", "body", "metal", "primary",
                                0, 0, 0, 17, 11, 10);
@@ -548,6 +584,8 @@ VisualCanon make_mech_canon() {
                                   "shadow", -8, -7.5, 1, 5.5, 4.5, 5);
   c.structures["right_tread"] = st("right_tread", "chassis", "limb", "capsule", "rear_appendages", "metal",
                                    "shadow", 8, -7.5, 1, 5.5, 4.5, 5);
+  c.structures["left_tread"].support_capable = true;
+  c.structures["right_tread"].support_capable = true;
   c.structures["core_light"] = st("core_light", "chassis", "energy", "ellipse", "emission", "energy",
                                   "warning", 0, -1, 9, 3.2, 3.2, 1.2, 0, 10);
   c.structures["visor"] = st("visor", "turret", "eye", "capsule", "facial", "glass", "emission",
@@ -624,6 +662,15 @@ VisualCanon make_mech_canon() {
   face.features = {fe1, fe2, fe3};
   c.facial_regions.push_back(face);
 
+  // Mechanical expression through the SAME generic machinery (visor/antenna).
+  EmotionResponse er1; er1.feature_id = "feature.visor";
+  er1.aperture = 0.5; er1.intensity = 1.0;
+  EmotionResponse er2; er2.feature_id = "feature.antenna_l";
+  er2.rotation = -20.0;
+  EmotionResponse er3; er3.feature_id = "feature.antenna_r";
+  er3.rotation = 20.0;
+  c.emotion_responses["alert"] = {er1, er2, er3};
+
   add_envelope(c, "chassis", 1.0, 2.6, true, 1.0);
   add_envelope(c, "turret", 1.6, 3.6, false, 1.2);
   add_envelope(c, "barrel", 1.6, 4.0, false, 1.3);
@@ -663,6 +710,9 @@ VisualCanon make_flyer_canon() {
   VisualCanon c;
   set_canon(c, "test_flyer", "Test Flyer", "original_user_creation");
   c.forms = {"base"};
+  // Non-ground support: flight policy skips ground-support analysis.
+  c.support_policy = SupportPolicy::flight;
+  c.gaze_driver = "head";
 
   c.structures["body"] = st("body", "", "body-mass", "ellipse", "body", "skin", "primary",
                             0, 0, 0, 10, 7, 7);
