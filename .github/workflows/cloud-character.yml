@@ -1,0 +1,113 @@
+name: Cloud Character Production Test
+on:
+  push:
+    branches: [experiment/cloud-character-production]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: cloud-character-production-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build-and-verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout GSPL Sprites experiment
+        uses: actions/checkout@v4
+      - name: Checkout pinned Ara 3D Gen generator
+        uses: actions/checkout@v4
+        with:
+          repository: olatunde85/3d-gen
+          ref: 0f9f9c22973374dc67706344e1e9ddacb03bec87
+          path: .cloud/ara3dgen
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: .cloud/ara3dgen/package-lock.json
+      - name: Install character generator dependencies
+        working-directory: .cloud/ara3dgen
+        run: npm ci
+      - name: Download CC0 character data and build asset catalog
+        working-directory: .cloud/ara3dgen
+        run: npm run setup-assets
+      - name: Generate high-detail Mosslight Warden
+        working-directory: .cloud/ara3dgen
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          npm run export -- --params "$GITHUB_WORKSPACE/experiments/cloud-character/character.params.json" --formats glb --detail high --out "$GITHUB_WORKSPACE/dist"
+          MODEL="$(find "$GITHUB_WORKSPACE/dist" -maxdepth 1 -type f -name '*.glb' -print -quit)"
+          test -n "$MODEL"
+          cp "$MODEL" "$GITHUB_WORKSPACE/dist/MosslightWarden.glb"
+          test -s "$GITHUB_WORKSPACE/dist/MosslightWarden.glb"
+          sha256sum "$GITHUB_WORKSPACE/dist/MosslightWarden.glb" > "$GITHUB_WORKSPACE/dist/MosslightWarden.glb.sha256"
+      - name: Assemble viewer and provenance before validation
+        run: |
+          cp experiments/cloud-character/viewer/index.html dist/index.html
+          cat > dist/ACKNOWLEDGEMENTS.md <<'EOF'
+          # Asset and data acknowledgements
+          Character generator: Ara 3D Gen, MIT License, https://github.com/olatunde85/3d-gen
+          Character geometry, morph targets, skeleton, skins, hair and clothing: MakeHuman-derived CC0 1.0 assets, as documented upstream.
+          Motion capture acknowledgement: "The data used in this project was obtained from mocap.cs.cmu.edu. The database was created with funding from NSF EIA-0196217."
+          The character recipe and browser viewer are authored for this 11vatedTech experiment. Upstream meshes and motion performances are not claimed as original 11vatedTech assets.
+          EOF
+          cat > dist/BUILD-MANIFEST.json <<'EOF'
+          {"character":"Mosslight Warden","generator":"Ara 3D Gen","generator_commit":"0f9f9c22973374dc67706344e1e9ddacb03bec87","detail":"high","format":"GLB","recipe":"experiments/cloud-character/character.params.json"}
+          EOF
+      - name: Install headless Chromium and Playwright
+        working-directory: .cloud/ara3dgen
+        run: |
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+          ln -s "$GITHUB_WORKSPACE/.cloud/ara3dgen/node_modules" "$GITHUB_WORKSPACE/node_modules"
+      - name: Start static viewer
+        run: |
+          python3 -m http.server 4173 --directory dist > /tmp/cloud-character-http.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl --silent --fail http://127.0.0.1:4173/ > /dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/cloud-character-http.log
+          exit 1
+      - name: Verify generated character in Chromium
+        run: node experiments/cloud-character/scripts/verify-viewer.mjs
+      - name: Upload complete model and evidence artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mosslight-warden-cloud-build
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
+  deploy-pages:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+    needs: build-and-verify
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Download verified site artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: mosslight-warden-cloud-build
+          path: dist
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - name: Upload static character lab
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+      - name: Deploy static character lab
+        id: deployment
+        uses: actions/deploy-pages@v4
