@@ -31,7 +31,7 @@ const scene=new THREE.Scene(); scene.background=new THREE.Color('#17232e'); scen
 const camera=new THREE.PerspectiveCamera(34,1,.1,100); camera.position.set(3.8,2.4,5.7);
 const renderer=new THREE.WebGLRenderer({antialias:true,powerPreference:'high-performance'});
 renderer.setPixelRatio(Math.min(devicePixelRatio||1,2)); renderer.outputColorSpace=THREE.SRGBColorSpace; renderer.toneMapping=THREE.ACESFilmicToneMapping; renderer.toneMappingExposure=1.15; renderer.shadowMap.enabled=true;
-mount.appendChild(renderer.domElement);
+mount.appendChild(renderer.domElement);renderer.domElement.tabIndex=0;renderer.domElement.setAttribute('aria-label','3D character viewport. Use WASD to move, Shift to run, Space to jump, and F to attack.');renderer.domElement.style.outline='none';renderer.domElement.addEventListener('pointerdown',()=>renderer.domElement.focus());
 const orbit=new OrbitControls(camera,renderer.domElement); orbit.target.set(0,1,0); orbit.enableDamping=true; orbit.minDistance=2.3; orbit.maxDistance=9; orbit.maxPolarAngle=Math.PI*.49;
 scene.add(new THREE.HemisphereLight(0xc8d9e8,0x25301f,2));
 const key=new THREE.DirectionalLight(0xffe3b3,3); key.position.set(3.5,7,4); key.castShadow=true; key.shadow.mapSize.set(2048,2048); scene.add(key);
@@ -94,7 +94,7 @@ function animate(){
  if(moving){root.rotation.y=Math.atan2(movement.x,movement.z);if(!held.has(' ')&&!held.has('f'))setRole(run?'run':'walk')}
  else if(lastLocomotion!=='idle'&&!held.has(' ')&&!held.has('f')&&selectedRole!=='manual')setRole('idle');
  lastLocomotion=moving?(run?'run':'walk'):'idle';
- window.__movementProbe={x:root.position.x,z:root.position.z};
+ window.__movementProbe={x:root.position.x,z:root.position.z};window.__inputProbe={keys:[...held],moving,x:root.position.x,z:root.position.z};
  orbit.update(); renderer.render(scene,camera);
 }
 animate();
