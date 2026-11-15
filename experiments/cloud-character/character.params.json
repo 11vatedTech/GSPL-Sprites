@@ -1,0 +1,17 @@
+{
+  "name":"Mosslight Warden","seed":11142026,"gender":0,"age":0.52,
+  "muscle":0.82,"weight":0.40,"height":0.58,"proportions":0.88,
+  "african":1,"asian":0,"caucasian":0,
+  "hair":"cornrows","hairColor":"#17120f","eyes":"blackbrown",
+  "eyebrows":"eyebrow001","eyelashes":"eyelashes02",
+  "outfit":"none","top":"tunic","bottom":"wrapper_knee","shoes":"sandals",
+  "accessories":["waist_sash","amulet_bandolier","arm_guards","amulets"],
+  "garmentStyles":{
+    "tunic":{"pattern":"asooke","color":"#1f2f5c","color2":"#c9a24a"},
+    "wrapper_knee":{"pattern":"kente","color":"#1d6b3a","color2":"#a61b1b"},
+    "waist_sash":{"pattern":"solid","color":"#9b1c1c"}
+  },
+  "weapon":"sword","carry":"none","detail":"high","rig":"game",
+  "faceBones":true,"restPose":"T","animations":true,
+  "expression":"determined","faceShapes":true,"speechShapes":true
+}
