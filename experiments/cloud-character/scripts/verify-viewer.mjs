@@ -18,11 +18,16 @@ try {
  const poseBefore=await page.evaluate(()=>window.__poseProbe()); await page.waitForTimeout(850);
  const poseAfter=await page.evaluate(()=>window.__poseProbe());
  assert.ok(poseBefore.some((v,i)=>Math.abs(v-poseAfter[i])>0.0001),'Selected animation did not deform the skeleton');
+ await page.locator('#view canvas').click({position:{x:50,y:50}});
  const before=await page.evaluate(()=>window.__movementProbe);
- await page.keyboard.down('w'); await page.waitForTimeout(900); await page.keyboard.up('w');
+ await page.keyboard.down('w'); await page.waitForTimeout(1100);
+ const inputState=await page.evaluate(()=>({probe:window.__inputProbe,activeElement:document.activeElement?.tagName}));
+ await page.keyboard.up('w');
  const after=await page.evaluate(()=>window.__movementProbe);
  const movementDistance=Math.hypot(after.x-before.x,after.z-before.z);
- assert.ok(movementDistance>.2,'W input did not move character root');
+ console.log('W input diagnostic:',JSON.stringify(inputState),'movementDistance:',movementDistance);
+ assert.ok(inputState.probe?.keys.includes('w'),'W key did not reach the viewport input handler: '+JSON.stringify(inputState));
+ assert.ok(movementDistance>.2,'W input reached viewer but did not move character root: '+movementDistance);
  assert.equal(errors.length,0,errors.join('\n'));
  await page.screenshot({path:'dist/cloud-character-preview.png',fullPage:true});
  const report={passed:true,...r,movementDistance:Number(movementDistance.toFixed(3)),consoleErrors:errors,screenshot:'cloud-character-preview.png',visualApproval:'not performed'};
