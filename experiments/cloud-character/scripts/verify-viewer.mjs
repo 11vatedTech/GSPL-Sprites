@@ -13,7 +13,7 @@ try{
  assert.ok(r.skinnedMeshes>=1,'No skinned mesh');
  assert.ok(r.clips>=10,'Animation threshold failed: '+r.clips);
  assert.ok(r.hasIdle&&r.hasWalk&&r.hasRun&&r.hasAttack,'Idle/locomotion/combat clips missing');
- const before=await page.evaluate(()=>window.__movementProbe);await page.keyboard.down('w');await page.waitForTimeout(900);await page.keyboard.up('w');
+ const walkName=r.clipNames.find(n=>/walk/i.test(n));assert.ok(walkName,'Walk animation name missing');await page.locator('#clips').selectOption(walkName);const poseBefore=await page.evaluate(()=>window.__poseProbe());await page.waitForTimeout(850);const poseAfter=await page.evaluate(()=>window.__poseProbe());assert.ok(poseBefore.some((v,i)=>Math.abs(v-poseAfter[i])>0.0001),'Animation playback did not deform the skeleton');const before=await page.evaluate(()=>window.__movementProbe);await page.keyboard.down('w');await page.waitForTimeout(900);await page.keyboard.up('w');
  const after=await page.evaluate(()=>window.__movementProbe);
  assert.ok(Math.hypot(after.x-before.x,after.z-before.z)>.2,'W input did not move character root');
  await page.screenshot({path:'cloud-character-preview.png',fullPage:true});
