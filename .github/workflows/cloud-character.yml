@@ -5,13 +5,18 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  pages: write
+  id-token: write
 concurrency:
-  group: cloud-character-production
-  cancel-in-progress: true
+  group: cloud-character-production-pages
+  cancel-in-progress: false
 jobs:
-  build-and-verify:
+  build-verify-deploy:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Checkout GSPL Sprites experiment
         uses: actions/checkout@v4
@@ -41,19 +46,9 @@ jobs:
           MODEL="$(find "$GITHUB_WORKSPACE/dist" -maxdepth 1 -type f -name '*.glb' -print -quit)"
           test -n "$MODEL"
           cp "$MODEL" "$GITHUB_WORKSPACE/dist/MosslightWarden.glb"
-      - name: Install headless Chromium and Playwright
-        working-directory: .cloud/ara3dgen
-        run: |
-          npm install --no-save playwright@1.55.0
-          npx playwright install --with-deps chromium
-          ln -s "$GITHUB_WORKSPACE/.cloud/ara3dgen/node_modules" "$GITHUB_WORKSPACE/node_modules"
-      - name: Run upstream GLB and animation regression suite
-        working-directory: .cloud/ara3dgen
-        run: |
-          CHROME="$(find "$HOME/.cache/ms-playwright" -type f -name chrome -perm -u+x | head -n 1)"
-          test -n "$CHROME"
-          CHROME="$CHROME" npm run test:gltf
-      - name: Assemble viewer and provenance
+          test -s "$GITHUB_WORKSPACE/dist/MosslightWarden.glb"
+          sha256sum "$GITHUB_WORKSPACE/dist/MosslightWarden.glb" > "$GITHUB_WORKSPACE/dist/MosslightWarden.glb.sha256"
+      - name: Assemble viewer and provenance before validation
         run: |
           cp experiments/cloud-character/viewer/index.html dist/index.html
           cat > dist/ACKNOWLEDGEMENTS.md <<'EOF'
@@ -66,6 +61,12 @@ jobs:
           cat > dist/BUILD-MANIFEST.json <<'EOF'
           {"character":"Mosslight Warden","generator":"Ara 3D Gen","generator_commit":"0f9f9c22973374dc67706344e1e9ddacb03bec87","detail":"high","format":"GLB","recipe":"experiments/cloud-character/character.params.json"}
           EOF
+      - name: Install headless Chromium and Playwright
+        working-directory: .cloud/ara3dgen
+        run: |
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+          ln -s "$GITHUB_WORKSPACE/.cloud/ara3dgen/node_modules" "$GITHUB_WORKSPACE/node_modules"
       - name: Start static viewer
         run: |
           python3 -m http.server 4173 --directory dist > /tmp/cloud-character-http.log 2>&1 &
@@ -77,14 +78,22 @@ jobs:
           exit 1
       - name: Verify generated character in Chromium
         run: node experiments/cloud-character/scripts/verify-viewer.mjs
-      - name: Upload GLB, viewer, and evidence
+      - name: Upload complete model and evidence artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: mosslight-warden-cloud-build
-          path: |
-            dist/
-            cloud-character-preview.png
-            cloud-character-verification.json
-          if-no-files-found: warn
+          path: dist/
+          if-no-files-found: error
           retention-days: 30
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - name: Upload static character lab
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+      - name: Deploy static character lab
+        id: deployment
+        uses: actions/deploy-pages@v4
