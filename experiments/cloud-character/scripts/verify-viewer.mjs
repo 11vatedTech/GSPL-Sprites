@@ -18,7 +18,10 @@ try {
  const poseBefore=await page.evaluate(()=>window.__poseProbe()); await page.waitForTimeout(850);
  const poseAfter=await page.evaluate(()=>window.__poseProbe());
  assert.ok(poseBefore.some((v,i)=>Math.abs(v-poseAfter[i])>0.0001),'Selected animation did not deform the skeleton');
- await page.locator('#view canvas').click({position:{x:50,y:50}});
+ await page.screenshot({path:'dist/cloud-character-preview.png',fullPage:true});
+ await page.locator('#view canvas').focus();
+ const focusTag=await page.evaluate(()=>document.activeElement?.tagName);
+ assert.equal(focusTag,'CANVAS','The 3D canvas did not receive keyboard focus: '+focusTag);
  const before=await page.evaluate(()=>window.__movementProbe);
  await page.keyboard.down('w'); await page.waitForTimeout(1100);
  const inputState=await page.evaluate(()=>({probe:window.__inputProbe,activeElement:document.activeElement?.tagName}));
@@ -29,7 +32,6 @@ try {
  assert.ok(inputState.probe?.keys.includes('w'),'W key did not reach the viewport input handler: '+JSON.stringify(inputState));
  assert.ok(movementDistance>.2,'W input reached viewer but did not move character root: '+movementDistance);
  assert.equal(errors.length,0,errors.join('\n'));
- await page.screenshot({path:'dist/cloud-character-preview.png',fullPage:true});
  const report={passed:true,...r,movementDistance:Number(movementDistance.toFixed(3)),consoleErrors:errors,screenshot:'cloud-character-preview.png',visualApproval:'not performed'};
  await writeFile('dist/cloud-character-verification.json',JSON.stringify(report,null,2)+'\n');
  console.log(JSON.stringify(report,null,2));
