@@ -25,27 +25,34 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm
-          cache-dependency-path: .cloud/ara3dgen/pnpm-lock.yaml
-      - name: Enable pnpm
-        run: corepack enable
+          cache: npm
+          cache-dependency-path: .cloud/ara3dgen/package-lock.json
       - name: Install character generator dependencies
         working-directory: .cloud/ara3dgen
-        run: pnpm install --frozen-lockfile
+        run: npm ci
       - name: Download CC0 character data and build asset catalog
         working-directory: .cloud/ara3dgen
-        run: pnpm run setup-assets
+        run: npm run setup-assets
       - name: Generate high-detail Mosslight Warden
         working-directory: .cloud/ara3dgen
         run: |
           mkdir -p "$GITHUB_WORKSPACE/dist"
-          pnpm run export -- --params "$GITHUB_WORKSPACE/experiments/cloud-character/character.params.json" --formats glb --detail high --out "$GITHUB_WORKSPACE/dist"
+          npm run export -- --params "$GITHUB_WORKSPACE/experiments/cloud-character/character.params.json" --formats glb --detail high --out "$GITHUB_WORKSPACE/dist"
           MODEL="$(find "$GITHUB_WORKSPACE/dist" -maxdepth 1 -type f -name '*.glb' -print -quit)"
           test -n "$MODEL"
           cp "$MODEL" "$GITHUB_WORKSPACE/dist/MosslightWarden.glb"
+      - name: Install headless Chromium and Playwright
+        working-directory: .cloud/ara3dgen
+        run: |
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+          ln -s "$GITHUB_WORKSPACE/.cloud/ara3dgen/node_modules" "$GITHUB_WORKSPACE/node_modules"
       - name: Run upstream GLB and animation regression suite
         working-directory: .cloud/ara3dgen
-        run: pnpm run test:gltf
+        run: |
+          CHROME="$(find "$HOME/.cache/ms-playwright" -type f -name chrome -perm -u+x | head -n 1)"
+          test -n "$CHROME"
+          CHROME="$CHROME" npm run test:gltf
       - name: Assemble viewer and provenance
         run: |
           cp experiments/cloud-character/viewer/index.html dist/index.html
@@ -59,10 +66,6 @@ jobs:
           cat > dist/BUILD-MANIFEST.json <<'EOF'
           {"character":"Mosslight Warden","generator":"Ara 3D Gen","generator_commit":"0f9f9c22973374dc67706344e1e9ddacb03bec87","detail":"high","format":"GLB","recipe":"experiments/cloud-character/character.params.json"}
           EOF
-      - name: Install browser test runner
-        run: |
-          npm install --no-save playwright@1.55.0
-          npx playwright install --with-deps chromium
       - name: Start static viewer
         run: |
           python3 -m http.server 4173 --directory dist > /tmp/cloud-character-http.log 2>&1 &
